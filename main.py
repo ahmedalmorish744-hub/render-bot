@@ -1,4 +1,4 @@
-Enterimport asyncio
+import asyncio
 import re
 import os
 import json
@@ -288,7 +288,7 @@ async def load_existing_sessions():
             except:
                 pass
 
-# --- تشغيل البوت الرئيسي (معدل بالكامل) ---
+# --- تشغيل البوت الرئيسي ---
 def main():
     """تشغيل البوت مع event loop صحيح"""
     load_data()
