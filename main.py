@@ -3,6 +3,20 @@ import re
 import os
 import json
 import random
+import sys
+import nest_asyncio
+
+# تطبيق nest_asyncio قبل أي شيء
+nest_asyncio.apply()
+
+# إنشاء event loop قبل استيراد pyrogram
+try:
+    loop = asyncio.get_running_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+# الآن استيراد pyrogram
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait, SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired
 from pyrogram.enums import ChatType
@@ -293,10 +307,13 @@ def main():
     """تشغيل البوت مع event loop صحيح"""
     load_data()
     
-    # إنشاء event loop جديد
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # التأكد من وجود event loop
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         
         # تشغيل البوت
         loop.run_until_complete(app.start())
