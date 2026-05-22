@@ -3,8 +3,8 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║     🤖 بوت النشر الخارق - النسخة المطورة 🚀                  ║
-║     مع تشفير متقدم + انضمام 20 رابط + حفظ الحسابات          ║
+║     🤖 بوت النشر الخارق - النسخة النهائية 🚀                  ║
+║     إضافة حسابات برقم الهاتف + كود التفعيل                   ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -21,7 +21,7 @@ from datetime import datetime
 
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, FloodWaitError
+from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from flask import Flask, jsonify
@@ -100,7 +100,7 @@ def set_setting(key, value):
     conn.close()
 
 # ═══════════════════════════════════════════════
-#  خادم الويب Flask (للحفاظ على التطبيق نشطاً)
+#  خادم الويب Flask
 # ═══════════════════════════════════════════════
 app = Flask(__name__)
 
@@ -121,56 +121,35 @@ def run_web():
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ═══════════════════════════════════════════════
-#  نظام التشفير المتقدم جداً (لا يغير النص)
+#  نظام التشفير المتقدم
 # ═══════════════════════════════════════════════
 
 class UltraAdvancedEncryption:
-    """تشفير متقدم جداً - لا يغير نص المنشور، يتجاوز أقوى بوتات الحماية"""
+    """تشفير متقدم جداً - لا يغير نص المنشور"""
     
     def __init__(self):
-        # أحرف غير مرئية بتقنيات متعددة
         self.zero_width_chars = [
-            '\u200B',  # Zero width space
-            '\u200C',  # Zero width non-joiner
-            '\u200D',  # Zero width joiner
-            '\uFEFF',  # Zero width no-break space
-            '\u2060',  # Word joiner
-            '\u2061',  # Function application
-            '\u2062',  # Invisible times
-            '\u2063',  # Invisible separator
-            '\u2064',  # Invisible plus
+            '\u200B', '\u200C', '\u200D', '\uFEFF',
+            '\u2060', '\u2061', '\u2062', '\u2063', '\u2064'
         ]
         
-        # أحرف تبدو متشابهة (Homoglyphs)
         self.homoglyphs = {
-            'a': ['а', 'α', '⍺', 'ａ'],
-            'b': ['Ь', 'β', 'в', 'ｂ'],
-            'c': ['с', 'ϲ', 'ⅽ', 'ｃ'],
-            'e': ['е', 'ε', 'ё', 'ｅ'],
-            'h': ['һ', 'н', 'հ', 'ｈ'],
-            'i': ['і', 'ɪ', 'ι', 'ｉ'],
-            'k': ['κ', 'к', 'ｋ'],
-            'o': ['о', 'ο', 'σ', 'ｏ'],
-            'p': ['р', 'ρ', 'ｐ'],
-            'x': ['х', '×', 'ⅹ', 'ｘ'],
-            'y': ['у', 'γ', 'ｙ'],
-            'A': ['Α', 'А', 'Ａ'],
-            'B': ['В', 'Β', 'Ｂ'],
-            'C': ['С', 'Ｃ'],
-            'E': ['Е', 'Ε', 'Ｅ'],
-            'H': ['Н', 'Ｈ'],
-            'K': ['Κ', 'Ｋ'],
-            'M': ['Μ', 'Ｍ'],
-            'O': ['Ο', 'О', 'Ｏ'],
-            'P': ['Ρ', 'Р', 'Ｐ'],
-            'T': ['Τ', 'Т', 'Ｔ'],
-            'X': ['Χ', 'Х', 'Ｘ'],
+            'a': ['а', 'α', '⍺', 'ａ'], 'b': ['Ь', 'β', 'в', 'ｂ'],
+            'c': ['с', 'ϲ', 'ⅽ', 'ｃ'], 'e': ['е', 'ε', 'ё', 'ｅ'],
+            'h': ['һ', 'н', 'հ', 'ｈ'], 'i': ['і', 'ɪ', 'ι', 'ｉ'],
+            'k': ['κ', 'к', 'ｋ'], 'o': ['о', 'ο', 'σ', 'ｏ'],
+            'p': ['р', 'ρ', 'ｐ'], 'x': ['х', '×', 'ⅹ', 'ｘ'],
+            'y': ['у', 'γ', 'ｙ'], 'A': ['Α', 'А', 'Ａ'],
+            'B': ['В', 'Β', 'Ｂ'], 'C': ['С', 'Ｃ'],
+            'E': ['Е', 'Ε', 'Ｅ'], 'H': ['Н', 'Ｈ'],
+            'K': ['Κ', 'Ｋ'], 'M': ['Μ', 'Ｍ'],
+            'O': ['Ο', 'О', 'Ｏ'], 'P': ['Ρ', 'Р', 'Ｐ'],
+            'T': ['Τ', 'Т', 'Ｔ'], 'X': ['Χ', 'Х', 'Ｘ'],
         }
         
         self.direction_override = '\u202E'
     
     def apply_homoglyphs(self, text, intensity=0.2):
-        """استبدال بعض الأحرف بأحرف متشابهة"""
         result = []
         for char in text:
             if char in self.homoglyphs and random.random() < intensity:
@@ -180,7 +159,6 @@ class UltraAdvancedEncryption:
         return ''.join(result)
     
     def add_zero_width_chars(self, text, intensity=0.05):
-        """إضافة أحرف غير مرئية بشكل عشوائي"""
         if random.random() > 0.7:
             chars = list(text)
             for i in range(len(chars)):
@@ -190,7 +168,6 @@ class UltraAdvancedEncryption:
         return text
     
     def add_invisible_spaces(self, text):
-        """إضافة مسافات غير مرئية بين الكلمات"""
         words = text.split()
         for i in range(len(words) - 1):
             if random.random() > 0.92:
@@ -198,7 +175,6 @@ class UltraAdvancedEncryption:
         return ' '.join(words)
     
     def encrypt(self, text):
-        """تشفير متقدم مع الحفاظ على شكل النص الأصلي"""
         if get_setting('encryption', 'on') != 'on':
             return text
         
@@ -215,22 +191,19 @@ class UltraAdvancedEncryption:
 ultra_encryption = UltraAdvancedEncryption()
 
 def encrypt_text(text):
-    """تشفير النص مع الحفاظ على الشكل الأصلي"""
     return ultra_encryption.encrypt(text)
 
-# ═══════════════════════════════════════════════
-#  نظام مكافحة الكشف المتقدم (اختياري)
-# ═══════════════════════════════════════════════
 def generate_text_variation(text):
-    """إنشاء نسخة مختلفة من النص مع التشفير المتقدم"""
     if get_setting('anti_detect', 'on') != 'on':
         return text
     return encrypt_text(text)
 
 # ═══════════════════════════════════════════════
-#  إدارة الحسابات
+#  إدارة الحسابات (طريقة جديدة برقم الهاتف)
 # ═══════════════════════════════════════════════
 user_clients = {}
+awaiting_phone = {}  # {user_id: {"step": "phone", "client": client}}
+awaiting_code = {}   # {user_id: {"phone": phone, "client": client, "phone_code_hash": hash}}
 
 async def restore_sessions():
     """استعادة جلسات الحسابات المحفوظة"""
@@ -242,10 +215,7 @@ async def restore_sessions():
 
     for acc_id, session_str, phone, status in accounts:
         try:
-            client = TelegramClient(
-                StringSession(session_str),
-                API_ID, API_HASH
-            )
+            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
             await client.connect()
             if await client.is_user_authorized():
                 user_clients[acc_id] = client
@@ -269,7 +239,6 @@ def set_account_status(acc_id, status):
 is_posting_active = False
 
 async def post_to_groups(bot, message_content, msg_type='text', media_path=None):
-    """نشر رسالة في جميع المجموعات باستخدام الحسابات المتاحة"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT group_id FROM groups")
@@ -280,7 +249,6 @@ async def post_to_groups(bot, message_content, msg_type='text', media_path=None)
 
     if not groups:
         return 0, "لا توجد مجموعات مسجلة"
-
     if not accounts:
         return 0, "لا توجد حسابات نشطة"
 
@@ -297,7 +265,6 @@ async def post_to_groups(bot, message_content, msg_type='text', media_path=None)
             continue
 
         try:
-            # تطبيق التشفير المتقدم
             variation = generate_text_variation(message_content)
 
             delay = random.uniform(
@@ -334,10 +301,9 @@ def log_posting(account_id, group_id, message_id, status):
     conn.close()
 
 # ═══════════════════════════════════════════════
-#  نظام الانضمام لـ 20 رابط (سريع)
+#  نظام الانضمام لـ 20 رابط
 # ═══════════════════════════════════════════════
 async def fast_join_groups(links, account_id=None):
-    """الانضمام السريع لـ 20 رابط في رسالة واحدة"""
     if account_id and account_id in user_clients:
         client = user_clients[account_id]
     else:
@@ -355,7 +321,6 @@ async def fast_join_groups(links, account_id=None):
             continue
         
         try:
-            # تأخير قصير بين المحاولات (10-20 ثانية)
             delay = random.randint(10, 20)
             logger.info(f"⏸ انتظار {delay} ثانية قبل الرابط {i}/{len(links)}")
             await asyncio.sleep(delay)
@@ -375,13 +340,11 @@ async def fast_join_groups(links, account_id=None):
                     group_info = (entity.id, getattr(entity, 'title', username))
             
             success_count += 1
-            logger.success(f"✅ [{i}/{len(links)}] تم الانضمام إلى {link[:50]}")
+            logger.info(f"✅ [{i}/{len(links)}] تم الانضمام إلى {link[:50]}")
             
-            # تسجيل في قاعدة البيانات
             if group_info:
                 group_id, group_name = group_info
-                save_join_history(link, group_id, group_name[:50], 'success', client.get_me().phone if hasattr(client, 'get_me') else "unknown")
-                # إضافة المجموعة لقاعدة البيانات
+                save_join_history(link, group_id, group_name[:50], 'success', "bot")
                 add_group_to_db(group_id, group_name)
             
         except FloodWaitError as e:
@@ -389,12 +352,12 @@ async def fast_join_groups(links, account_id=None):
             logger.warning(f"⏳ FloodWait: انتظار {wait_time} ثانية...")
             await asyncio.sleep(wait_time)
             failed_count += 1
-            save_join_history(link, 0, "غير معروف", f'failed: flood wait', "unknown")
+            save_join_history(link, 0, "غير معروف", f'failed: flood wait', "bot")
             
         except Exception as e:
             failed_count += 1
             logger.error(f"❌ [{i}/{len(links)}] فشل الانضمام لـ {link[:50]}: {e}")
-            save_join_history(link, 0, "غير معروف", f'failed: {str(e)[:50]}', "unknown")
+            save_join_history(link, 0, "غير معروف", f'failed: {str(e)[:50]}', "bot")
     
     return success_count, failed_count
 
@@ -437,22 +400,18 @@ def get_join_history(limit=30):
 #  تنظيف قاعدة البيانات مع حفظ الحسابات
 # ═══════════════════════════════════════════════
 def clean_database_keep_accounts():
-    """حذف كل الجداول ماعدا الحسابات"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # حفظ الحسابات مؤقتاً
     c.execute("SELECT session_string, phone, status FROM accounts")
     accounts = c.fetchall()
     
-    # حذف الجداول
     c.execute("DROP TABLE IF EXISTS messages")
     c.execute("DROP TABLE IF EXISTS groups")
     c.execute("DROP TABLE IF EXISTS posting_history")
     c.execute("DROP TABLE IF EXISTS join_history")
     c.execute("DROP TABLE IF EXISTS settings")
     
-    # إعادة إنشاء الجداول
     c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -479,7 +438,6 @@ def clean_database_keep_accounts():
         status TEXT, joined_by TEXT,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     
-    # استعادة الحسابات
     for session_str, phone, status in accounts:
         c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
                   (session_str, phone, status))
@@ -521,7 +479,7 @@ def get_join_reports_menu():
 #  البوت الرئيسي
 # ═══════════════════════════════════════════════
 async def main():
-    # بدء خادم الويب في خيط خلفي
+    # بدء خادم الويب
     Thread(target=run_web, daemon=True).start()
     logger.info("🌐 خادم الويب يعمل")
 
@@ -607,27 +565,27 @@ async def main():
             await event.edit("🗑 أرسل رقم الرسالة لحذفها:\nاستخدم /cancel للإلغاء")
             set_setting('awaiting_del_msg', 'true')
 
-        # ─── إدارة الحسابات ───
+        # ─── إدارة الحسابات (الطريقة الجديدة) ───
         elif data == 'accounts':
             await event.edit("👥 **إدارة الحسابات**", buttons=[
-                [Button.inline("➕ إضافة حساب", b"add_acc")],
+                [Button.inline("➕ إضافة حساب", b"add_acc_phone")],
                 [Button.inline("📋 عرض الحسابات", b"list_acc")],
                 [Button.inline("🗑 حذف حساب", b"del_acc")],
                 [Button.inline("🔙 رجوع", b"back")],
             ])
 
-        elif data == 'add_acc':
+        # زر إضافة حساب جديد - الطريقة الجديدة
+        elif data == 'add_acc_phone':
             await event.edit(
                 "➕ **إضافة حساب جديد**\n\n"
-                "أرسل StringSession للحساب:\n\n"
-                "💡 للحصول على StringSession:\n"
-                "1. اذهب إلى @StringSessionBot\n"
-                "2. أدخل رقم هاتفك\n"
-                "3. أدخل رمز التحقق\n"
-                "4. انسخ الـ StringSession\n\n"
+                "📱 أرسل رقم الهاتف مع رمز البلد\n\n"
+                "مثال:\n"
+                "• `+966512345678` للسعودية\n"
+                "• `+201234567890` لمصر\n"
+                "• `+971501234567` للإمارات\n\n"
                 "استخدم /cancel للإلغاء"
             )
-            set_setting('awaiting_session', 'true')
+            set_setting('awaiting_phone', 'true')
 
         elif data == 'list_acc':
             conn = sqlite3.connect(DB_PATH)
@@ -869,7 +827,7 @@ async def main():
                     [Button.inline("🔙 رجوع", b"back")]
                 ])
 
-    # ─── التعامل مع الرسائل النصية ───
+    # ─── التعامل مع الرسائل النصية (الجزء المعدل) ───
     @bot.on(events.NewMessage)
     async def message_handler(event):
         if event.sender_id != ADMIN_ID:
@@ -879,7 +837,9 @@ async def main():
 
         if text == '/cancel':
             set_setting('awaiting_msg', '')
-            set_setting('awaiting_session', '')
+            set_setting('awaiting_phone', '')
+            set_setting('awaiting_code', '')
+            set_setting('awaiting_password', '')
             set_setting('awaiting_fast_join', '')
             set_setting('awaiting_del_msg', '')
             set_setting('awaiting_del_acc', '')
@@ -906,28 +866,155 @@ async def main():
             await event.respond("✅ تم حفظ الرسالة!", buttons=get_main_menu())
             return
 
-        # إضافة حساب
-        if get_setting('awaiting_session') == 'true':
-            set_setting('awaiting_session', '')
-            session_str = text.strip()
+        # ═══════════════════════════════════════════════
+        # إضافة حساب جديد - الطريقة الجديدة (رقم الهاتف)
+        # ═══════════════════════════════════════════════
+        
+        # الخطوة 1: استقبال رقم الهاتف
+        if get_setting('awaiting_phone') == 'true':
+            set_setting('awaiting_phone', '')
+            phone = text.strip()
+            
+            # التحقق من صحة الرقم
+            if not re.match(r'^\+?\d{8,15}$', phone):
+                await event.respond("❌ رقم هاتف غير صالح!\nأدخل رقم صحيح مع رمز البلد (مثال: +966512345678)")
+                return
+            
+            try:
+                # إنشاء عميل جديد لهذا الحساب
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+                await client.connect()
+                
+                # إرسال طلب الكود
+                result = await client.send_code_request(phone)
+                
+                # تخزين معلومات الجلسة مؤقتاً
+                set_setting('temp_phone', phone)
+                set_setting('temp_client_session', client.session.save())
+                
+                await event.respond(
+                    f"📩 **تم إرسال رمز التحقق** إلى {phone}\n\n"
+                    f"أرسل الرمز المكون من 5 أرقام:\n"
+                    f"(مثال: 12345)\n\n"
+                    f"استخدم /cancel للإلغاء"
+                )
+                set_setting('awaiting_code', 'true')
+                
+            except Exception as e:
+                await event.respond(f"❌ خطأ: {str(e)[:200]}")
+            return
+        
+        # الخطوة 2: استقبال رمز التحقق
+        if get_setting('awaiting_code') == 'true':
+            set_setting('awaiting_code', '')
+            code = text.strip()
+            phone = get_setting('temp_phone')
+            session_str = get_setting('temp_client_session')
+            
+            if not phone or not session_str:
+                await event.respond("❌ انتهت صلاحية الجلسة، حاول مرة أخرى.")
+                return
+            
+            try:
+                # استعادة العميل
+                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+                await client.connect()
+                
+                # محاولة تسجيل الدخول بالرمز
+                await client.sign_in(phone, code)
+                
+                # إذا وصلنا هنا، التسجيل ناجح
+                me = await client.get_me()
+                
+                # حفظ الحساب في قاعدة البيانات
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+                          (client.session.save(), me.phone, 'active'))
+                conn.commit()
+                acc_id = c.lastrowid
+                conn.close()
+                
+                # إضافة العميل إلى القائمة
+                user_clients[acc_id] = client
+                
+                # تنظيف المؤقتات
+                set_setting('temp_phone', '')
+                set_setting('temp_client_session', '')
+                
+                await event.respond(
+                    f"✅ **تم إضافة الحساب بنجاح!**\n\n"
+                    f"📱 الرقم: {me.phone}\n"
+                    f"🆔 المعرف: {me.id}\n"
+                    f"📛 الاسم: {me.first_name or 'بدون اسم'}\n\n"
+                    f"الحساب جاهز للنشر!",
+                    buttons=get_main_menu()
+                )
+                
+            except SessionPasswordNeededError:
+                # الحساب مفعل بخطوة تحقق إضافية (كلمة مرور)
+                set_setting('awaiting_password', 'true')
+                await event.respond(
+                    f"🔐 **يتطلب الحساب كلمة مرور التحقق بخطوتين**\n\n"
+                    f"أرسل كلمة المرور الآن:\n"
+                    f"استخدم /cancel للإلغاء"
+                )
+                
+            except PhoneCodeInvalidError:
+                await event.respond("❌ رمز التحقق غير صحيح!\nأعد المحاولة من البداية.")
+                set_setting('awaiting_phone', '')
+                
+            except Exception as e:
+                await event.respond(f"❌ فشل التحقق: {str(e)[:200]}")
+                set_setting('awaiting_phone', '')
+                
+            return
+        
+        # الخطوة 3: استقبال كلمة المرور (للحسابات المحمية)
+        if get_setting('awaiting_password') == 'true':
+            set_setting('awaiting_password', '')
+            password = text.strip()
+            phone = get_setting('temp_phone')
+            session_str = get_setting('temp_client_session')
+            
+            if not phone or not session_str:
+                await event.respond("❌ انتهت صلاحية الجلسة، حاول مرة أخرى.")
+                return
+            
             try:
                 client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
                 await client.connect()
-                if await client.is_user_authorized():
-                    me = await client.get_me()
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                              (session_str, me.phone, 'active'))
-                    conn.commit()
-                    acc_id = c.lastrowid
-                    conn.close()
-                    user_clients[acc_id] = client
-                    await event.respond(f"✅ تم إضافة حساب: {me.phone}", buttons=get_main_menu())
-                else:
-                    await event.respond("❌ الجلسة غير صالحة!", buttons=get_main_menu())
+                
+                # تسجيل الدخول بكلمة المرور
+                await client.sign_in(password=password)
+                
+                me = await client.get_me()
+                
+                # حفظ الحساب
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+                          (client.session.save(), me.phone, 'active'))
+                conn.commit()
+                acc_id = c.lastrowid
+                conn.close()
+                
+                user_clients[acc_id] = client
+                
+                set_setting('temp_phone', '')
+                set_setting('temp_client_session', '')
+                
+                await event.respond(
+                    f"✅ **تم إضافة الحساب بنجاح!**\n\n"
+                    f"📱 الرقم: {me.phone}\n"
+                    f"🆔 المعرف: {me.id}\n\n"
+                    f"الحساب جاهز للنشر!",
+                    buttons=get_main_menu()
+                )
+                
             except Exception as e:
-                await event.respond(f"❌ خطأ: {e}", buttons=get_main_menu())
+                await event.respond(f"❌ كلمة المرور غير صحيحة: {str(e)[:200]}")
+                
             return
 
         # انضمام سريع لـ 20 رابط
