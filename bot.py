@@ -4,7 +4,7 @@
 """
 ╔═══════════════════════════════════════════════════════════════╗
 ║     🤖 بوت النشر الخارق - النسخة النهائية 🚀                  ║
-║     إضافة حسابات برقم الهاتف + كود التفعيل                   ║
+║     إضافة حسابات برقم الهاتف + كود التفعيل (مع phone_code_hash)║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -21,7 +21,7 @@ from datetime import datetime
 
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError
+from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from flask import Flask, jsonify
@@ -199,11 +199,12 @@ def generate_text_variation(text):
     return encrypt_text(text)
 
 # ═══════════════════════════════════════════════
-#  إدارة الحسابات (طريقة جديدة برقم الهاتف)
+#  إدارة الحسابات
 # ═══════════════════════════════════════════════
 user_clients = {}
-awaiting_phone = {}  # {user_id: {"step": "phone", "client": client}}
-awaiting_code = {}   # {user_id: {"phone": phone, "client": client, "phone_code_hash": hash}}
+
+# قاموس لتخزين بيانات الجلسات المؤقتة
+temp_sessions = {}  # {user_id: {"phone": phone, "client": client, "phone_code_hash": hash}}
 
 async def restore_sessions():
     """استعادة جلسات الحسابات المحفوظة"""
@@ -565,7 +566,7 @@ async def main():
             await event.edit("🗑 أرسل رقم الرسالة لحذفها:\nاستخدم /cancel للإلغاء")
             set_setting('awaiting_del_msg', 'true')
 
-        # ─── إدارة الحسابات (الطريقة الجديدة) ───
+        # ─── إدارة الحسابات ───
         elif data == 'accounts':
             await event.edit("👥 **إدارة الحسابات**", buttons=[
                 [Button.inline("➕ إضافة حساب", b"add_acc_phone")],
@@ -574,7 +575,6 @@ async def main():
                 [Button.inline("🔙 رجوع", b"back")],
             ])
 
-        # زر إضافة حساب جديد - الطريقة الجديدة
         elif data == 'add_acc_phone':
             await event.edit(
                 "➕ **إضافة حساب جديد**\n\n"
@@ -827,7 +827,7 @@ async def main():
                     [Button.inline("🔙 رجوع", b"back")]
                 ])
 
-    # ─── التعامل مع الرسائل النصية (الجزء المعدل) ───
+    # ─── التعامل مع الرسائل النصية (الجزء المعدل لحل مشكلة phone_code_hash) ───
     @bot.on(events.NewMessage)
     async def message_handler(event):
         if event.sender_id != ADMIN_ID:
@@ -844,6 +844,13 @@ async def main():
             set_setting('awaiting_del_msg', '')
             set_setting('awaiting_del_acc', '')
             set_setting('awaiting_del_group', '')
+            # تنظيف الجلسات المؤقتة
+            if event.sender_id in temp_sessions:
+                try:
+                    await temp_sessions[event.sender_id]["client"].disconnect()
+                except:
+                    pass
+                del temp_sessions[event.sender_id]
             await event.respond("تم الإلغاء", buttons=get_main_menu())
             return
 
@@ -867,7 +874,7 @@ async def main():
             return
 
         # ═══════════════════════════════════════════════
-        # إضافة حساب جديد - الطريقة الجديدة (رقم الهاتف)
+        # إضافة حساب جديد - الطريقة الصحيحة مع phone_code_hash
         # ═══════════════════════════════════════════════
         
         # الخطوة 1: استقبال رقم الهاتف
@@ -888,9 +895,12 @@ async def main():
                 # إرسال طلب الكود
                 result = await client.send_code_request(phone)
                 
-                # تخزين معلومات الجلسة مؤقتاً
-                set_setting('temp_phone', phone)
-                set_setting('temp_client_session', client.session.save())
+                # تخزين معلومات الجلسة مؤقتاً مع phone_code_hash
+                temp_sessions[event.sender_id] = {
+                    "phone": phone,
+                    "client": client,
+                    "phone_code_hash": result.phone_code_hash  # هذا هو المطلوب!
+                }
                 
                 await event.respond(
                     f"📩 **تم إرسال رمز التحقق** إلى {phone}\n\n"
@@ -904,24 +914,25 @@ async def main():
                 await event.respond(f"❌ خطأ: {str(e)[:200]}")
             return
         
-        # الخطوة 2: استقبال رمز التحقق
+        # الخطوة 2: استقبال رمز التحقق (مع استخدام phone_code_hash)
         if get_setting('awaiting_code') == 'true':
             set_setting('awaiting_code', '')
             code = text.strip()
-            phone = get_setting('temp_phone')
-            session_str = get_setting('temp_client_session')
             
-            if not phone or not session_str:
-                await event.respond("❌ انتهت صلاحية الجلسة، حاول مرة أخرى.")
+            # الحصول على بيانات الجلسة المؤقتة
+            session_data = temp_sessions.get(event.sender_id)
+            if not session_data:
+                await event.respond("❌ انتهت صلاحية الجلسة، حاول مرة أخرى من البداية.")
+                set_setting('awaiting_phone', '')
                 return
             
+            phone = session_data["phone"]
+            client = session_data["client"]
+            phone_code_hash = session_data["phone_code_hash"]
+            
             try:
-                # استعادة العميل
-                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-                await client.connect()
-                
-                # محاولة تسجيل الدخول بالرمز
-                await client.sign_in(phone, code)
+                # محاولة تسجيل الدخول بالرمز مع phone_code_hash
+                await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
                 
                 # إذا وصلنا هنا، التسجيل ناجح
                 me = await client.get_me()
@@ -938,9 +949,8 @@ async def main():
                 # إضافة العميل إلى القائمة
                 user_clients[acc_id] = client
                 
-                # تنظيف المؤقتات
-                set_setting('temp_phone', '')
-                set_setting('temp_client_session', '')
+                # تنظيف الجلسة المؤقتة
+                del temp_sessions[event.sender_id]
                 
                 await event.respond(
                     f"✅ **تم إضافة الحساب بنجاح!**\n\n"
@@ -962,10 +972,33 @@ async def main():
                 
             except PhoneCodeInvalidError:
                 await event.respond("❌ رمز التحقق غير صحيح!\nأعد المحاولة من البداية.")
+                # تنظيف الجلسة
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                if event.sender_id in temp_sessions:
+                    del temp_sessions[event.sender_id]
+                set_setting('awaiting_phone', '')
+                
+            except PhoneCodeExpiredError:
+                await event.respond("❌ انتهت صلاحية رمز التحقق!\nأعد المحاولة من البداية.")
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                if event.sender_id in temp_sessions:
+                    del temp_sessions[event.sender_id]
                 set_setting('awaiting_phone', '')
                 
             except Exception as e:
                 await event.respond(f"❌ فشل التحقق: {str(e)[:200]}")
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+                if event.sender_id in temp_sessions:
+                    del temp_sessions[event.sender_id]
                 set_setting('awaiting_phone', '')
                 
             return
@@ -974,17 +1007,15 @@ async def main():
         if get_setting('awaiting_password') == 'true':
             set_setting('awaiting_password', '')
             password = text.strip()
-            phone = get_setting('temp_phone')
-            session_str = get_setting('temp_client_session')
             
-            if not phone or not session_str:
+            session_data = temp_sessions.get(event.sender_id)
+            if not session_data:
                 await event.respond("❌ انتهت صلاحية الجلسة، حاول مرة أخرى.")
                 return
             
+            client = session_data["client"]
+            
             try:
-                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-                await client.connect()
-                
                 # تسجيل الدخول بكلمة المرور
                 await client.sign_in(password=password)
                 
@@ -1001,8 +1032,8 @@ async def main():
                 
                 user_clients[acc_id] = client
                 
-                set_setting('temp_phone', '')
-                set_setting('temp_client_session', '')
+                # تنظيف الجلسة المؤقتة
+                del temp_sessions[event.sender_id]
                 
                 await event.respond(
                     f"✅ **تم إضافة الحساب بنجاح!**\n\n"
