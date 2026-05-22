@@ -3,8 +3,8 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║     🤖 بوت النشر الخارق - النسخة النهائية v5.0 🚀            ║
-║     تشفير متقدم + حفظ الحسابات + 20 رابط + Render          ║
+║     🤖 بوت النشر الخارق - النسخة النهائية V5 🚀              ║
+║     حفظ الحسابات + انضمام 20 رابط + تشفير متقدم             ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -16,8 +16,7 @@ import json
 import sqlite3
 import sys
 import logging
-import hashlib
-import string
+import shutil
 import time
 import threading
 from datetime import datetime, timedelta
@@ -32,21 +31,20 @@ from threading import Thread
 
 # ==================== الإعدادات الأساسية ====================
 
-API_ID = int(os.environ.get('API_ID', '0'))
-API_HASH = os.environ.get('API_HASH', '')
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
-ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
-
-if not all([API_ID, API_HASH, BOT_TOKEN, ADMIN_ID]):
-    logging.error("⚠️ يجب تعيين جميع متغيرات البيئة: API_ID, API_HASH, BOT_TOKEN, ADMIN_ID")
-    exit(1)
+API_ID = int(os.environ.get('API_ID', 33957094))
+API_HASH = os.environ.get('API_HASH', "35e04f65846f09700aac0696a59f1a37")
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8568132127:AAG-4Mxkj7WxpQcVwUcX6GdGHRAfEMjQs_8")
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 7853478744))
 
 # ==================== إعدادات التشغيل ====================
 
 DATA_DIR = "data"
+BACKUPS_DIR = "backups"
+LOGS_DIR = "logs"
 DB_PATH = f"{DATA_DIR}/bot_data.db"
 
-os.makedirs(DATA_DIR, exist_ok=True)
+for dir_path in [DATA_DIR, BACKUPS_DIR, LOGS_DIR]:
+    os.makedirs(dir_path, exist_ok=True)
 
 # ==================== قفل قاعدة البيانات ====================
 db_lock = threading.Lock()
@@ -58,7 +56,7 @@ app = Flask(__name__)
 def home():
     return jsonify({
         'status': 'online',
-        'bot': 'Super Poster Bot v5.0',
+        'bot': 'Telegram Poster Bot V5',
         'version': '5.0',
         'time': str(datetime.now()),
         'accounts': len(USER_CLIENTS) if 'USER_CLIENTS' in globals() else 0,
@@ -69,26 +67,19 @@ def home():
 def health():
     return jsonify({'status': 'healthy'}), 200
 
-# علامة أن خادم الويب جاهز
-web_ready = threading.Event()
-
 def run_web():
-    """تشغيل خادم الويب - يربط المنفذ فوراً"""
     port = int(os.environ.get('PORT', 10000))
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.INFO)
-    # استخدام waitress أو gunicorn في الإنتاج، لكن Flask يكفي للبدء
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
-    web_ready.set()
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ==================== نظام التسجيل ====================
 
 class Logger:
     def __init__(self):
+        log_file = f"{LOGS_DIR}/bot_{datetime.now().strftime('%Y%m%d')}.log"
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[logging.StreamHandler()]
+            handlers=[logging.FileHandler(log_file, encoding='utf-8'), logging.StreamHandler()]
         )
         self.logger = logging.getLogger('Bot')
     
@@ -96,327 +87,145 @@ class Logger:
     def warning(self, msg): self.logger.warning(msg); print(f"⚠️ {msg}")
     def error(self, msg): self.logger.error(msg); print(f"❌ {msg}")
     def success(self, msg): self.logger.info(f"✅ {msg}"); print(f"✅ {msg}")
+    def critical(self, msg): self.logger.critical(msg); print(f"💥 {msg}")
 
 logger = Logger()
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  نظام التشفير المتقدم - لا يغيّر النص المرئي أبداً         ║
-# ║  يُشفّر بيانياً بحيث لا يكشفه أقوى بوتات الحماية           ║
-# ╚══════════════════════════════════════════════════════════════╝
+# ==================== نظام التشفير المتقدم جداً ====================
 
-class StealthEncryption:
+class UltraAdvancedEncryption:
     """
-    تشفير متقدم يجعل كل رسالة فريدة على المستوى الثنائي
-    دون أي تغيير مرئي في النص الأصلي.
-    
-    التقنيات المستخدمة:
-    1. Zero-Width Characters Injection - إدخال أحرف مخفية بين كل حرف
-    2. Homoglyph Substitution - استبدال أحرف بأخرى متطابقة بصرياً
-    3. RTL/LTR Markers - علامات اتجاه النص غير المرئية
-    4. Combining Characters - أحرف تجميعية لا تظهر
-    5. Unicode Normalization Variation - تنويعات الترميز الموحد
-    6. Invisible Binary Signature - توقيع ثنائي مخفي فريد لكل رسالة
+    تشفير متقدم جداً - لا يغير نص المنشور
+    يستخدم تقنيات معقدة لتجاوز أقوى بوتات الحماية
     """
     
     def __init__(self):
-        # أحرف عدم العرض (Zero-Width Characters)
-        self.zwc = {
-            '0': '\u200B',   # Zero-Width Space
-            '1': '\u200C',   # Zero-Width Non-Joiner
-            '2': '\u200D',   # Zero-Width Joiner
-            '3': '\u2060',   # Word Joiner
-            '4': '\uFEFF',   # BOM / Zero-Width No-Break Space
-            '5': '\u180E',   # Mongolian Vowel Separator
-            '6': '\u2061',   # Function Application
-            '7': '\u2062',   # Invisible Times
-            '8': '\u2063',   # Invisible Separator
-            '9': '\u2064',   # Invisible Plus
-        }
-        
-        # علامات اتجاه النص غير المرئية
-        self.direction_marks = [
-            '\u200E',  # Left-to-Right Mark
-            '\u200F',  # Right-to-Left Mark
-            '\u061C',  # Arabic Letter Mark
+        # أحرف غير مرئية بتقنيات متعددة
+        self.zero_width_chars = [
+            '\u200B',  # Zero width space
+            '\u200C',  # Zero width non-joiner
+            '\u200D',  # Zero width joiner
+            '\uFEFF',  # Zero width no-break space
+            '\u2060',  # Word joiner
+            '\u2061',  # Function application
+            '\u2062',  # Invisible times
+            '\u2063',  # Invisible separator
+            '\u2064',  # Invisible plus
         ]
         
-        # أحرف تجميعية لا تؤثر على العرض
-        self.combining_chars = [
-            '\u034F',  # Combining Grapheme Joiner
-            '\u0300',  # Combining Grave Accent
-            '\u0301',  # Combining Acute Accent
-            '\u0302',  # Combining Circumflex Accent
-            '\u0303',  # Combining Tilde
-            '\u0304',  # Combining Macron
-            '\u0305',  # Combining Overline
-            '\u0306',  # Combining Breve
-            '\u0307',  # Combining Dot Above
-            '\u0308',  # Combining Diaeresis
-            '\u030A',  # Combining Ring Above
-            '\u030B',  # Combining Double Acute Accent
-            '\u030C',  # Combining Caron
-            '\u030D',  # Combining Candrabindu
-            '\u030E',  # Combining Double Vertical Line Above
-            '\u030F',  # Combining Double Grave Accent
-            '\u0310',  # Combining Candrabindu
-            '\u0311',  # Combining Inverted Breve
-            '\u0312',  # Combining Turned Comma Above
-            '\u0313',  # Combining Comma Above
-            '\u0314',  # Combining Reversed Comma Above
-            '\u0315',  # Combining Comma Above Right
-            '\u0316',  # Combining Grave Accent Below
-            '\u0317',  # Combining Acute Accent Below
-            '\u0318',  # Combining Left Tack Below
-            '\u0319',  # Combining Right Tack Below
-        ]
-        
-        # استبدالات الحروف المتشابهة بصرياً (Homoglyphs)
-        # هذه الأحرف تبدو متطابقة تماماً لكنها مختلفة في الترميز
+        # أحرف تبدو متشابهة (Homoglyphs)
         self.homoglyphs = {
-            # أحرف عربية متشابهة
-            'ا': ['ا', '\u0622', '\u0623', '\u0625'],  # ألف بمواضع مختلفة
-            'و': ['و', '\u0624'],  # واو بهمزة
-            'ي': ['ي', '\u0649', '\u0626'],  # ياء بأشكال مختلفة
-            'ه': ['ه', '\u0629'],  # هاء/تاء مربوطة
-            'ت': ['ت', '\u062B'],  # تاء/ثاء
-            'ل': ['ل', '\uFEFB', '\uFEF7'],  # لام بأشكال مختلفة
-            # أحرف لاتينية متشابهة (للروابط والأرقام)
-            'a': ['a', '\u0430', '\u0251'],  # a بلغات مختلفة
-            'e': ['e', '\u0435', '\u1D07'],
-            'o': ['o', '\u043E', '\u0254'],
-            'c': ['c', '\u0441', '\u0254'],
-            'p': ['p', '\u0440'],
-            'x': ['x', '\u0445', '\u04BB'],
-            'y': ['y', '\u0443'],
-            'i': ['i', '\u0456', '\u0131'],
-            'j': ['j', '\u0458'],
-            's': ['s', '\u0455'],
-            # أرقام متشابهة
-            '0': ['0', '\u041E', '\u0660'],
-            '1': ['1', '\u0661', '\u06F1'],
-            '3': ['3', '\u0417', '\u0663'],
-            '5': ['5', '\u0665', '\u06F5'],
-            '7': ['7', '\u0667', '\u06F7'],
-            '8': ['8', '\u0668', '\u06F8'],
+            'a': ['а', 'α', '⍺', 'ａ'],
+            'b': ['Ь', 'β', 'в', 'ｂ'],
+            'c': ['с', 'ϲ', 'ⅽ', 'ｃ'],
+            'e': ['е', 'ε', 'ё', 'ｅ'],
+            'h': ['һ', 'н', 'հ', 'ｈ'],
+            'i': ['і', 'ɪ', 'ι', 'ｉ'],
+            'k': ['κ', 'к', 'ｋ'],
+            'o': ['о', 'ο', 'σ', 'ｏ'],
+            'p': ['р', 'ρ', 'ｐ'],
+            'x': ['х', '×', 'ⅹ', 'ｘ'],
+            'y': ['у', 'γ', 'ｙ'],
+            'A': ['Α', 'А', 'Ａ'],
+            'B': ['В', 'Β', 'Ｂ'],
+            'C': ['С', 'Ｃ'],
+            'E': ['Е', 'Ε', 'Ｅ'],
+            'H': ['Н', 'Ｈ'],
+            'K': ['Κ', 'Ｋ'],
+            'M': ['Μ', 'Ｍ'],
+            'O': ['Ο', 'О', 'Ｏ'],
+            'P': ['Ρ', 'Р', 'Ｐ'],
+            'T': ['Τ', 'Т', 'Ｔ'],
+            'X': ['Χ', 'Х', 'Ｘ'],
         }
         
-        # أنماط الحشو المخفي
-        self.hidden_patterns = [
-            lambda: ''.join(random.choices(list(self.zwc.values()), k=random.randint(3, 8))),
-            lambda: random.choice(self.direction_marks),
-            lambda: random.choice(self.combining_chars),
-            lambda: random.choice(self.direction_marks) + ''.join(random.choices(list(self.zwc.values()), k=random.randint(2, 5))),
-        ]
-    
-    def _generate_unique_signature(self):
-        """إنشاء توقيع ثنائي فريد مخفي"""
-        timestamp = str(time.time_ns())
-        random_salt = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-        unique_hash = hashlib.md5(f"{timestamp}{random_salt}".encode()).hexdigest()
-        return unique_hash
-    
-    def _encode_signature_in_zwc(self, signature_hex):
-        """ترميز التوقيع كأحرف عدم عرض"""
-        encoded = ''
-        for hex_char in signature_hex:
-            if hex_char in self.zwc:
-                encoded += self.zwc[hex_char]
-            else:
-                digit = int(hex_char, 16)
-                encoded += self.zwc[str(digit)]
-        return encoded
-    
-    def _inject_zwc_between_chars(self, text):
-        """إدخال أحرف عدم عرض بين كل حرفين - لا يؤثر على العرض"""
-        result = []
-        for i, char in enumerate(text):
-            result.append(char)
-            # إدخال 1-3 أحرف مخفية بين كل حرف
-            if i < len(text) - 1 and char != ' ' and text[i+1] != ' ':
-                num_invisible = random.randint(1, 3)
-                for _ in range(num_invisible):
-                    result.append(random.choice(list(self.zwc.values())))
-        return ''.join(result)
-    
-    def _apply_homoglyphs(self, text, ratio=0.15):
-        """استبدال نسبة من الأحرف بنظائرها المتطابقة بصرياً"""
-        result = list(text)
-        for i, char in enumerate(result):
-            if char in self.homoglyphs and random.random() < ratio:
-                result[i] = random.choice(self.homoglyphs[char])
-        return ''.join(result)
-    
-    def _inject_direction_marks(self, text):
-        """إدخال علامات اتجاه النص - غير مرئية تماماً"""
-        result = []
-        words = text.split(' ')
-        for i, word in enumerate(words):
-            result.append(word)
-            if random.random() < 0.4 and i < len(words) - 1:
-                result.append(random.choice(self.direction_marks))
-            result.append(' ')
-        return ''.join(result).rstrip()
-    
-    def _inject_combining_chars(self, text, ratio=0.08):
-        """إدخال أحرف تجميعية غير مرئية"""
-        result = list(text)
-        insertions = 0
-        for i in range(len(result)):
-            if result[i] not in [' ', '\n'] and random.random() < ratio:
-                combining = random.choice(self.combining_chars)
-                # وضع حرف التجميع بعد الحرف مباشرة
-                result.insert(i + 1 + insertions, combining)
-                insertions += 1
-        return ''.join(result)
-    
-    def _add_hidden_signature(self, text):
-        """إضافة توقيع فريد مخفي في بداية ونهاية النص"""
-        signature = self._generate_unique_signature()
-        encoded_sig = self._encode_signature_in_zwc(signature)
+        # تقنيات إضافية
+        self.direction_override = '\u202E'  # Right-to-left override
         
-        # توقيع في البداية
-        prefix = random.choice(self.direction_marks) + encoded_sig[:16] + random.choice(self.direction_marks)
-        # توقيع في النهاية
-        suffix = random.choice(self.direction_marks) + encoded_sig[16:] + random.choice(self.direction_marks)
-        
-        return prefix + text + suffix
-    
-    def _inject_invisible_words(self, text):
-        """إدخال كلمات مخفية بين الكلمات الحقيقية"""
-        result = []
-        words = text.split(' ')
-        for i, word in enumerate(words):
-            result.append(word)
-            # احتمال 25% لإدخال حشو مخفي بين الكلمات
-            if random.random() < 0.25 and i < len(words) - 1:
-                hidden_word = random.choice(self.hidden_patterns)()
-                result.append(hidden_word)
-        return ' '.join(result)
-    
-    def _randomize_whitespace(self, text):
-        """تنويع المسافات البيضاء بأحرف غير مرئية"""
+    def apply_homoglyphs(self, text, intensity=0.25):
+        """استبدال بعض الأحرف بأحرف متشابهة"""
         result = []
         for char in text:
-            if char == ' ':
-                # استبدال المسافة العادية بمسافة + أحرف مخفية
-                if random.random() < 0.3:
-                    hidden = ''.join(random.choices(list(self.zwc.values()), k=random.randint(1, 4)))
-                    result.append(' ' + hidden)
-                else:
-                    result.append(char)
+            if char in self.homoglyphs and random.random() < intensity:
+                result.append(random.choice(self.homoglyphs[char]))
             else:
                 result.append(char)
         return ''.join(result)
     
-    def encrypt(self, text):
+    def add_zero_width_chars(self, text, intensity=0.08):
+        """إضافة أحرف غير مرئية بشكل عشوائي"""
+        if random.random() > 0.7:
+            chars = list(text)
+            for i in range(len(chars)):
+                if random.random() < intensity:
+                    chars.insert(i, random.choice(self.zero_width_chars))
+            return ''.join(chars)
+        return text
+    
+    def add_invisible_spaces(self, text):
+        """إضافة مسافات غير مرئية بين الكلمات"""
+        words = text.split()
+        for i in range(len(words) - 1):
+            if random.random() > 0.92:
+                words[i] += random.choice(self.zero_width_chars)
+        return ' '.join(words)
+    
+    def encrypt_ultra(self, text):
         """
-        التشفير المتقدم - يُنتج نصاً يبدو مطابقاً تماماً للأصل
-        لكنه مختلف ثنائياً بنسبة 100% في كل مرة
-        لا يستطيع أي بوت حماية كشفه لأن:
-        - النص المرئي لم يتغير
-        - كل نسخة لها بصمة ثنائية فريدة
-        - الأحرف المخفية لا تظهر في أي عميل
+        تشفير متقدم جداً مع الحفاظ على شكل النص الأصلي
+        لا يغير المعنى أو القراءة
         """
-        if not text or len(text.strip()) == 0:
-            return text
+        result = text
         
-        # الخطوة 1: إضافة توقيع فريد مخفي
-        result = self._add_hidden_signature(text)
+        # تطبيق تقنيات متعددة بتدرجات مختلفة
+        result = self.apply_homoglyphs(result, intensity=0.2)
+        result = self.add_zero_width_chars(result, intensity=0.05)
+        result = self.add_invisible_spaces(result)
         
-        # الخطوة 2: إدخال أحرف عدم عرض بين الحروف
-        result = self._inject_zwc_between_chars(result)
-        
-        # الخطوة 3: استبدال أحرف بنظائرها المتشابهة بصرياً
-        result = self._apply_homoglyphs(result, ratio=random.uniform(0.08, 0.20))
-        
-        # الخطوة 4: إدخال علامات اتجاه النص
-        result = self._inject_direction_marks(result)
-        
-        # الخطوة 5: إدخال أحرف تجميعية
-        result = self._inject_combining_chars(result, ratio=random.uniform(0.03, 0.10))
-        
-        # الخطوة 6: إدخال كلمات مخفية
-        result = self._inject_invisible_words(result)
-        
-        # الخطوة 7: تنويع المسافات البيضاء
-        result = self._randomize_whitespace(result)
+        # إضافة رمز اتجاه عكسي في نهاية الرسالة (نادراً)
+        if random.random() > 0.97:
+            result = result + self.direction_override
         
         return result
-    
-    def generate_variations(self, text, count=6):
-        """إنشاء عدة نسخ مختلفة ثنائياً من نفس النص المرئي"""
-        variations = []
-        for _ in range(count):
-            variations.append(self.encrypt(text))
-        return variations
 
-stealth = StealthEncryption()
+ultra_encryption = UltraAdvancedEncryption()
 
 def encrypt_text(text):
-    """واجهة التشفير الموحدة"""
+    """تشفير النص مع الحفاظ على الشكل الأصلي"""
     if not SETTINGS.get('encryption', True):
         return text
-    return stealth.encrypt(text)
+    return ultra_encryption.encrypt_ultra(text)
 
-# ==================== كلاس مكافحة الاكتشاف ====================
+# ==================== كلاس النشر الآمن ====================
 
-class AntiDetection:
+class SafePoster:
     def __init__(self):
-        self.posted_messages = {}
         self.last_posts = {}
-        self.warmed_groups = set()
     
     def random_delay(self, base_delay=12):
-        return random.randint(int(base_delay * 0.8), int(base_delay * 1.5))
-    
-    def get_variation(self, text, variation_count=6):
-        """إنشاء تنويعات باستخدام التشفير المتقدم"""
-        return stealth.generate_variations(text, variation_count)
+        return random.randint(int(base_delay * 0.9), int(base_delay * 1.1))
     
     async def send_safe(self, client, chat_id, original_text, group_name=""):
         try:
-            variations = self.get_variation(original_text, 6)
-            final_text = random.choice(variations)
-            await asyncio.sleep(self.random_delay(3))
+            # تطبيق التشفير المتقدم بدون تغيير المعنى
+            final_text = encrypt_text(original_text)
+            
+            # تأخير قصير
+            await asyncio.sleep(self.random_delay(2))
+            
+            # إرسال الرسالة
             await client.send_message(chat_id, final_text)
             self.last_posts[chat_id] = datetime.now()
+            
             return True, "تم النشر بنجاح"
+            
         except FloodWaitError as e:
             await asyncio.sleep(e.seconds)
             return False, f"Flood wait: {e.seconds}s"
         except Exception as e:
             return False, str(e)
 
-anti_detection = AntiDetection()
-
-# ==================== نظام إدارة المجموعات المحظورة ====================
-
-class GroupBlacklistManager:
-    def __init__(self):
-        self.banned_groups = set()
-        self.failed_attempts = {}
-    
-    def record_failure(self, group_id, error):
-        if group_id not in self.failed_attempts:
-            self.failed_attempts[group_id] = 0
-        self.failed_attempts[group_id] += 1
-        if self.failed_attempts[group_id] >= 3:
-            self.banned_groups.add(group_id)
-            logger.warning(f"🚫 تم حظر المجموعة {group_id} مؤقتاً")
-    
-    def is_banned(self, group_id):
-        return group_id in self.banned_groups
-    
-    def clear_banned(self, group_id):
-        if group_id in self.banned_groups:
-            self.banned_groups.remove(group_id)
-        if group_id in self.failed_attempts:
-            del self.failed_attempts[group_id]
-    
-    def get_banned_count(self):
-        return len(self.banned_groups)
-
-group_blacklist = GroupBlacklistManager()
+safe_poster = SafePoster()
 
 # ==================== قاعدة البيانات ====================
 
@@ -432,11 +241,12 @@ class Database:
             c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP)''')
             c.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, content TEXT, created_at TIMESTAMP, is_active INTEGER DEFAULT 0)''')
             c.execute('''CREATE TABLE IF NOT EXISTS accounts (phone TEXT PRIMARY KEY, session_str TEXT, added_at TIMESTAMP, last_active TIMESTAMP, status TEXT, total_posts INTEGER DEFAULT 0, success_posts INTEGER DEFAULT 0, failed_posts INTEGER DEFAULT 0)''')
-            c.execute('''CREATE TABLE IF NOT EXISTS groups (group_id TEXT PRIMARY KEY, group_name TEXT, group_username TEXT, group_type TEXT, members_count INTEGER DEFAULT 0, added_by TEXT, added_at TIMESTAMP, last_post TIMESTAMP, post_count INTEGER DEFAULT 0, is_blacklisted INTEGER DEFAULT 0)''')
-            c.execute('''CREATE TABLE IF NOT EXISTS joined_links (id INTEGER PRIMARY KEY AUTOINCREMENT, link TEXT, group_id TEXT, group_name TEXT, joined_at TIMESTAMP, joined_by TEXT)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS groups (group_id TEXT PRIMARY KEY, group_name TEXT, group_username TEXT, group_type TEXT, members_count INTEGER DEFAULT 0, added_by TEXT, added_at TIMESTAMP, last_post TIMESTAMP, post_count INTEGER DEFAULT 0)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS posting_history (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, group_id TEXT, group_name TEXT, sent_at TIMESTAMP, status TEXT, error TEXT)''')
+            c.execute('''CREATE TABLE IF NOT EXISTS join_history (id INTEGER PRIMARY KEY AUTOINCREMENT, link TEXT, group_id TEXT, group_name TEXT, joined_at TIMESTAMP, joined_by TEXT, status TEXT)''')
             conn.commit()
             conn.close()
-            logger.success("✅ قاعدة البيانات المحلية جاهزة")
+            logger.success("✅ قاعدة البيانات جاهزة")
             if not self.get_all_messages():
                 self.save_message("default", "📢 مرحباً بك!", is_active=True)
     
@@ -541,11 +351,11 @@ class Database:
         finally:
             conn.close()
     
-    def get_account_session(self, phone):
+    def get_accounts_only(self):
+        """جلب الحسابات فقط (للحفظ عند تنظيف قاعدة البيانات)"""
         conn = sqlite3.connect(self.db_path, timeout=15)
         try:
-            result = conn.execute('SELECT session_str FROM accounts WHERE phone = ?', (phone,)).fetchone()
-            return result[0] if result else None
+            return conn.execute('SELECT phone, session_str FROM accounts').fetchall()
         finally:
             conn.close()
     
@@ -588,90 +398,94 @@ class Database:
             finally:
                 conn.close()
     
-    def blacklist_group(self, group_id):
-        with db_lock:
-            conn = sqlite3.connect(self.db_path, timeout=15)
-            try:
-                conn.execute('UPDATE groups SET is_blacklisted = 1 WHERE group_id = ?', (str(group_id),))
-                conn.commit()
-            finally:
-                conn.close()
-    
-    def whitelist_group(self, group_id):
-        with db_lock:
-            conn = sqlite3.connect(self.db_path, timeout=15)
-            try:
-                conn.execute('UPDATE groups SET is_blacklisted = 0 WHERE group_id = ?', (str(group_id),))
-                conn.commit()
-            finally:
-                conn.close()
-    
     def get_all_groups(self):
         conn = sqlite3.connect(self.db_path, timeout=15)
         try:
-            return conn.execute('SELECT group_id, group_name, members_count, post_count, is_blacklisted, last_post FROM groups ORDER BY post_count DESC').fetchall()
+            return conn.execute('SELECT group_id, group_name, members_count, post_count, last_post FROM groups ORDER BY post_count DESC').fetchall()
         finally:
             conn.close()
     
-    def get_blacklisted_groups(self):
-        conn = sqlite3.connect(self.db_path, timeout=15)
-        try:
-            return conn.execute('SELECT group_id, group_name FROM groups WHERE is_blacklisted = 1').fetchall()
-        finally:
-            conn.close()
-    
-    def search_groups(self, query):
-        conn = sqlite3.connect(self.db_path, timeout=15)
-        try:
-            return conn.execute('SELECT group_id, group_name, members_count FROM groups WHERE group_name LIKE ? LIMIT 20', (f'%{query}%',)).fetchall()
-        finally:
-            conn.close()
-    
-    def add_joined_link(self, link, group_id, group_name, joined_by):
+    def log_post(self, phone, group_id, group_name, status='success', error=None):
         with db_lock:
             conn = sqlite3.connect(self.db_path, timeout=15)
             try:
-                conn.execute('INSERT INTO joined_links (link, group_id, group_name, joined_at, joined_by) VALUES (?, ?, ?, ?, ?)', (link, str(group_id), group_name[:50], datetime.now(), joined_by))
+                conn.execute('INSERT INTO posting_history (phone, group_id, group_name, sent_at, status, error) VALUES (?, ?, ?, ?, ?, ?)', (phone, str(group_id), group_name[:50], datetime.now(), status, error))
+                if status == 'success':
+                    self.increment_account_posts(phone, success=True)
+                    self.update_group_post(group_id)
+                else:
+                    self.increment_account_posts(phone, success=False)
                 conn.commit()
             finally:
                 conn.close()
     
-    def get_joined_links(self, limit=100):
-        conn = sqlite3.connect(self.db_path, timeout=15)
-        try:
-            return conn.execute('SELECT link, group_name, joined_at, joined_by FROM joined_links ORDER BY joined_at DESC LIMIT ?', (limit,)).fetchall()
-        finally:
-            conn.close()
-    
-    def get_joined_links_count(self):
-        conn = sqlite3.connect(self.db_path, timeout=15)
-        try:
-            return conn.execute('SELECT COUNT(*) FROM joined_links').fetchone()[0]
-        finally:
-            conn.close()
-    
-    def safe_reset(self):
-        """حذف قاعدة البيانات مع الحفاظ على الحسابات"""
+    def log_join(self, link, group_id, group_name, joined_by, status='success'):
         with db_lock:
             conn = sqlite3.connect(self.db_path, timeout=15)
             try:
-                # حفظ الحسابات أولاً
-                accounts_backup = conn.execute('SELECT phone, session_str, added_at, status FROM accounts').fetchall()
+                conn.execute('INSERT INTO join_history (link, group_id, group_name, joined_at, joined_by, status) VALUES (?, ?, ?, ?, ?, ?)', (link, str(group_id) if group_id else None, group_name[:50] if group_name else "غير معروف", datetime.now(), joined_by, status))
+                conn.commit()
+            finally:
+                conn.close()
+    
+    def get_join_history(self, limit=50):
+        conn = sqlite3.connect(self.db_path, timeout=15)
+        try:
+            return conn.execute('SELECT link, group_name, joined_at, joined_by, status FROM join_history ORDER BY joined_at DESC LIMIT ?', (limit,)).fetchall()
+        finally:
+            conn.close()
+    
+    def get_join_stats(self):
+        conn = sqlite3.connect(self.db_path, timeout=15)
+        try:
+            total = conn.execute('SELECT COUNT(*) FROM join_history').fetchone()[0]
+            success = conn.execute("SELECT COUNT(*) FROM join_history WHERE status = 'success'").fetchone()[0]
+            failed = conn.execute("SELECT COUNT(*) FROM join_history WHERE status = 'failed'").fetchone()[0]
+            return {'total': total, 'success': success, 'failed': failed}
+        finally:
+            conn.close()
+    
+    def create_backup(self):
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"{BACKUPS_DIR}/backup_{timestamp}.db"
+        with db_lock:
+            shutil.copy2(self.db_path, backup_file)
+        backups = sorted(Path(BACKUPS_DIR).glob('backup_*.db'))
+        if len(backups) > 20:
+            for old in backups[:-20]:
+                old.unlink()
+        return backup_file
+    
+    def clean_database_keep_accounts(self):
+        """حذف كل الجداول ماعدا الحسابات"""
+        with db_lock:
+            conn = sqlite3.connect(self.db_path, timeout=15)
+            try:
+                # حفظ الحسابات مؤقتاً
+                accounts = self.get_accounts_only()
                 
                 # حذف جميع الجداول
-                for table in ['settings', 'messages', 'groups', 'joined_links']:
-                    conn.execute(f'DELETE FROM {table}')
+                conn.execute('DROP TABLE IF EXISTS messages')
+                conn.execute('DROP TABLE IF EXISTS groups')
+                conn.execute('DROP TABLE IF EXISTS posting_history')
+                conn.execute('DROP TABLE IF EXISTS join_history')
+                conn.execute('DROP TABLE IF EXISTS settings')
                 
-                # إعادة الحسابات
-                for phone, session_str, added_at, status in accounts_backup:
+                # إعادة إنشاء الجداول
+                conn.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT, updated_at TIMESTAMP)''')
+                conn.execute('''CREATE TABLE IF NOT EXISTS messages (msg_id TEXT PRIMARY KEY, content TEXT, created_at TIMESTAMP, is_active INTEGER DEFAULT 0)''')
+                conn.execute('''CREATE TABLE IF NOT EXISTS groups (group_id TEXT PRIMARY KEY, group_name TEXT, group_username TEXT, group_type TEXT, members_count INTEGER DEFAULT 0, added_by TEXT, added_at TIMESTAMP, last_post TIMESTAMP, post_count INTEGER DEFAULT 0)''')
+                conn.execute('''CREATE TABLE IF NOT EXISTS posting_history (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, group_id TEXT, group_name TEXT, sent_at TIMESTAMP, status TEXT, error TEXT)''')
+                conn.execute('''CREATE TABLE IF NOT EXISTS join_history (id INTEGER PRIMARY KEY AUTOINCREMENT, link TEXT, group_id TEXT, group_name TEXT, joined_at TIMESTAMP, joined_by TEXT, status TEXT)''')
+                
+                # استعادة الحسابات
+                for phone, session_str in accounts:
                     conn.execute('INSERT OR REPLACE INTO accounts (phone, session_str, added_at, last_active, status, total_posts, success_posts, failed_posts) VALUES (?, ?, ?, ?, ?, 0, 0, 0)', 
-                               (phone, session_str, added_at, datetime.now(), status))
-                
-                # إضافة رسالة افتراضية
-                conn.execute('INSERT INTO messages (msg_id, content, created_at, is_active) VALUES (?, ?, ?, ?)', 
-                           ('default', '📢 مرحباً بك!', datetime.now(), 1))
+                               (phone, session_str, datetime.now(), datetime.now(), 'active'))
                 
                 conn.commit()
+                logger.success(f"✅ تم تنظيف قاعدة البيانات مع حفظ {len(accounts)} حساب")
+                return len(accounts)
             finally:
                 conn.close()
 
@@ -683,7 +497,7 @@ USER_CLIENTS = {}
 SETTINGS = {
     'interval': 12,
     'encryption': True,
-    'anti_detection': True,
+    'auto_join_enabled': True,
 }
 SETTINGS.update(db.get_all_settings())
 TEMP = {}
@@ -703,6 +517,7 @@ def format_number(num):
 # ==================== الأزرار ====================
 
 def main_buttons():
+    enc_status = "✅ مفعل" if SETTINGS['encryption'] else "❌ معطل"
     active_msg = db.get_active_message()
     msg_preview = active_msg['content'][:20] + "..." if active_msg and len(active_msg['content']) > 20 else (active_msg['content'][:20] if active_msg else "لا يوجد")
     
@@ -711,10 +526,10 @@ def main_buttons():
         [Button.inline("📝 إدارة الرسائل", b"manage_messages"), Button.inline("⏱ ضبط الوقت", b"time")],
         [Button.inline(f"📨 {msg_preview}", b"show_active")],
         [Button.inline("🚀 بدء النشر", b"start_p"), Button.inline("🛑 إيقاف النشر", b"stop_p")],
-        [Button.inline("📢 المجموعات", b"view_chats"), Button.inline("📊 الحالة", b"status")],
-        [Button.inline("🔗 الانضمام البطيء (20 رابط)", b"slow_join")],
-        [Button.inline("📊 تقارير الانضمام", b"join_reports")],
-        [Button.inline("⚙️ إعدادات متقدمة", b"advanced")],
+        [Button.inline(f"🛡 التشفير: {enc_status}", b"toggle_enc"), Button.inline("📊 الحالة", b"status")],
+        [Button.inline("📢 المجموعات", b"view_chats")],
+        [Button.inline("🔗 تقارير الانضمام", b"join_reports"), Button.inline("⚙️ إعدادات", b"advanced")],
+        [Button.inline("💾 نسخ احتياطي", b"backup"), Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_database")],
     ]
 
 def messages_buttons():
@@ -727,27 +542,18 @@ def messages_buttons():
     ]
 
 def advanced_buttons():
+    auto_join = "✅" if SETTINGS.get('auto_join_enabled', True) else "❌"
+    
     return [
-        [Button.inline("🚫 إدارة المحظورات", b"blacklist_menu")],
-        [Button.inline("🗂 إدارة المجموعات", b"manage_groups")],
-        [Button.inline("🗑️ حذف القاعدة (مع حفظ الحسابات)", b"safe_reset_db")],
+        [Button.inline(f"🤖 انضمام تلقائي {auto_join}", b"toggle_autojoin")],
         [Button.inline("⬅️ عودة", b"back")]
     ]
 
-def blacklist_buttons():
+def join_report_buttons():
     return [
-        [Button.inline("➕ إضافة للمحظورات", b"add_blacklist")],
-        [Button.inline("➖ إزالة من المحظورات", b"remove_blacklist")],
-        [Button.inline("📋 عرض المحظورات", b"view_blacklist")],
-        [Button.inline("⬅️ عودة", b"advanced")]
-    ]
-
-def groups_buttons():
-    return [
-        [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
-        [Button.inline("🔍 بحث في المجموعات", b"search_groups")],
-        [Button.inline("📊 إحصائيات المجموعات", b"group_stats")],
-        [Button.inline("⬅️ عودة", b"advanced")]
+        [Button.inline("📊 إحصائيات الانضمام", b"join_stats")],
+        [Button.inline("📋 سجل الانضمام", b"join_history")],
+        [Button.inline("⬅️ عودة", b"back")]
     ]
 
 # ==================== المعالجات ====================
@@ -757,18 +563,18 @@ async def start_handler(event):
         return
     accounts = db.get_accounts()
     groups = db.get_all_groups()
-    joined_links = db.get_joined_links_count()
     active_msg = db.get_active_message()
+    join_stats = db.get_join_stats()
     
     await event.respond(
-        f"👋 **أهلاً بك في بوت النشر الخارق v5.0!**\n\n"
+        f"👋 **أهلاً بك في بوت النشر الخارق V5!**\n\n"
         f"📊 **الإحصائيات:**\n"
         f"• الحسابات: {len(accounts)}\n"
         f"• المجموعات: {len(groups)}\n"
-        f"• الروابط المنضم لها: {joined_links}\n"
-        f"• الرسائل المحفوظة: {len(db.get_all_messages())}\n\n"
-        f"🛡 **التشفير المتقدم:** {'مفعل' if SETTINGS.get('encryption', True) else 'معطل'}\n"
-        f"🐢 **انضمام بطيء:** حتى 20 رابط بالرسالة\n\n"
+        f"• الرسائل المحفوظة: {len(db.get_all_messages())}\n"
+        f"• عمليات الانضمام: {join_stats['total']} (نجاح: {join_stats['success']})\n\n"
+        f"🛡 **التشفير المتطور:** مفعل\n"
+        f"⚡ **انضمام 20 رابط:** مفعل\n\n"
         f"📨 **الرسالة النشطة:**\n{active_msg['content'][:100] if active_msg else 'لا توجد'}\n\n"
         f"استخدم الأزرار للتحكم:", 
         buttons=main_buttons()
@@ -796,50 +602,89 @@ async def callback_handler(event):
     elif data == "time":
         await event.edit("⏱ أرسل الفاصل الزمني (10-120 ثانية):"); 
         TEMP[ADMIN_ID] = "time"
+    elif data == "toggle_enc":
+        SETTINGS['encryption'] = not SETTINGS['encryption']
+        db.save_setting('encryption', SETTINGS['encryption'])
+        await event.answer(f"✅ التشفير المتطور {'مفعل' if SETTINGS['encryption'] else 'معطل'}")
+        await event.edit("👋 لوحة التحكم:", buttons=main_buttons())
     elif data == "view_chats":
         await show_groups(event)
     elif data == "advanced":
-        await event.edit("⚙️ **الإعدادات المتقدمة**", buttons=advanced_buttons())
+        await event.edit("⚙️ الإعدادات", buttons=advanced_buttons())
     elif data == "back":
         await event.edit("👋 لوحة التحكم الرئيسية", buttons=main_buttons())
+    elif data == "backup":
+        await create_backup_handler(event)
     elif data == "show_active":
         active = db.get_active_message()
         if active:
             await event.answer(f"الرسالة النشطة: {active['content'][:50]}...", alert=True)
         else:
             await event.answer("❌ لا توجد رسالة نشطة", alert=True)
+    elif data == "join_reports":
+        await event.edit("🔗 **تقارير الانضمام**", buttons=join_report_buttons())
+    elif data == "join_stats":
+        await show_join_stats(event)
+    elif data == "join_history":
+        await show_join_history(event)
     
-    # ─── حذف القاعدة مع حفظ الحسابات ───
-    elif data == "safe_reset_db":
+    elif data == "clean_database":
         await event.edit(
-            "⚠️ **تحذير!** ⚠️\n\n"
+            "⚠️ **تنظيف قاعدة البيانات** ⚠️\n\n"
             "سيتم حذف:\n"
-            "• جميع الرسائل\n"
-            "• سجل المجموعات\n"
-            "• سجل الروابط\n\n"
+            "❌ جميع الرسائل المحفوظة\n"
+            "❌ جميع المجموعات\n"
+            "❌ سجل النشر\n"
+            "❌ سجل الانضمام\n"
+            "❌ الإعدادات\n\n"
             "✅ **سيتم الحفاظ على:**\n"
-            "• جميع الحسابات المحفوظة\n\n"
+            "✓ جميع الحسابات المسجلة\n"
+            "✓ جلسات الحسابات\n\n"
             "**هل أنت متأكد؟**",
             buttons=[
-                [Button.inline("✅ نعم، احذف مع حفظ الحسابات", b"confirm_safe_reset")],
-                [Button.inline("❌ إلغاء", b"advanced")]
+                [Button.inline("✅ نعم، نظف مع حفظ الحسابات", b"confirm_clean")],
+                [Button.inline("❌ إلغاء", b"back")]
             ]
         )
     
-    elif data == "confirm_safe_reset":
+    elif data == "confirm_clean":
         try:
-            db.safe_reset()
+            # إنشاء نسخة احتياطية قبل التنظيف
+            backup_file = db.create_backup()
+            logger.info(f"📦 تم إنشاء نسخة احتياطية: {backup_file}")
+            
+            # تنظيف مع حفظ الحسابات
+            saved_accounts = db.clean_database_keep_accounts()
+            
+            # إعادة تعيين الإعدادات
+            SETTINGS.update({
+                'interval': 12,
+                'encryption': True,
+                'auto_join_enabled': True,
+            })
+            
+            # إعادة إنشاء رسالة افتراضية
+            if not db.get_all_messages():
+                db.save_message("default", "📢 مرحباً بك!", is_active=True)
+            
             await event.edit(
-                "✅ **تم حذف القاعدة مع حفظ الحسابات!**\n\n"
-                "• تم حذف الرسائل والمجموعات والروابط\n"
-                "• ✅ جميع الحسابات محفوظة\n\n"
-                "اضغط /start للبدء من جديد",
-                buttons=[[Button.inline("🔄 العودة للقائمة", b"back")]]
+                f"✅ **تم تنظيف قاعدة البيانات بنجاح!**\n\n"
+                f"• ✅ تم الحفاظ على {saved_accounts} حساب\n"
+                f"• 📦 تم إنشاء نسخة احتياطية\n"
+                f"• 🗑 تم حذف: الرسائل، المجموعات، السجلات\n\n"
+                f"**ملاحظة:** حساباتك لا تزال موجودة وجاهزة للاستخدام\n\n"
+                f"اضغط /start للبدء",
+                buttons=[[Button.inline("🔄 العودة", b"back")]]
             )
         except Exception as e:
-            await event.edit(f"❌ فشل: {str(e)[:100]}", buttons=[[Button.inline("⬅️ عودة", b"advanced")]])
+            await event.edit(f"❌ فشل التنظيف: {str(e)[:100]}", buttons=[[Button.inline("⬅️ عودة", b"back")]])
     
-    # ─── إدارة الرسائل ───
+    elif data == "toggle_autojoin":
+        SETTINGS['auto_join_enabled'] = not SETTINGS.get('auto_join_enabled', True)
+        db.save_setting('auto_join_enabled', SETTINGS['auto_join_enabled'])
+        await event.answer(f"✅ الانضمام التلقائي {'مفعل' if SETTINGS['auto_join_enabled'] else 'معطل'}")
+        await event.edit("⚙️ الإعدادات:", buttons=advanced_buttons())
+    
     elif data == "manage_messages":
         await event.edit("📝 **إدارة الرسائل**", buttons=messages_buttons())
     elif data == "list_messages":
@@ -862,51 +707,6 @@ async def callback_handler(event):
         await event.answer("✅ تم حذف الرسالة", alert=True)
         await event.edit("📝 إدارة الرسائل", buttons=messages_buttons())
     
-    # ─── الانضمام البطيء (20 رابط) ───
-    elif data == "slow_join":
-        await event.edit(
-            "🔗 **الانضمام البطيء للمجموعات**\n\n"
-            "أرسل حتى **20 رابط** في رسالة واحدة (رابط في كل سطر):\n\n"
-            "مثال:\n"
-            "https://t.me/group1\n"
-            "https://t.me/group2\n"
-            "https://t.me/+abcdef\n"
-            "...\n\n"
-            "🐢 سرعة بطيئة جداً لحماية الحسابات\n"
-            "⏱ رابط كل 2-4 دقائق\n\n"
-            "استخدم /cancel للإلغاء"
-        )
-        TEMP[ADMIN_ID] = "awaiting_links"
-    
-    # ─── تقارير الانضمام فقط ───
-    elif data == "join_reports":
-        await show_join_report(event)
-    
-    # ─── المحظورات ───
-    elif data == "blacklist_menu":
-        await event.edit("🚫 قائمة المحظورات", buttons=blacklist_buttons())
-    elif data == "view_blacklist":
-        await show_blacklist(event)
-    elif data == "add_blacklist":
-        await event.edit("🚫 أرسل اسم المجموعة أو معرفها لحظرها:")
-        TEMP[ADMIN_ID] = "add_blacklist"
-    elif data == "remove_blacklist":
-        await show_remove_blacklist(event)
-    elif data.startswith("unblack_"):
-        await remove_from_blacklist(event, data.replace("unblack_", ""))
-    
-    # ─── إدارة المجموعات ───
-    elif data == "manage_groups":
-        await event.edit("🗂 إدارة المجموعات", buttons=groups_buttons())
-    elif data == "refresh_groups":
-        await refresh_groups(event)
-    elif data == "search_groups":
-        await event.edit("🔍 أرسل كلمة البحث:")
-        TEMP[ADMIN_ID] = "search_groups"
-    elif data == "group_stats":
-        await show_group_stats(event)
-    
-    # ─── بدء/إيقاف النشر ───
     elif data == "start_p":
         if not USER_CLIENTS:
             return await event.answer("❌ لا توجد حسابات!", alert=True)
@@ -933,9 +733,6 @@ async def list_all_messages(event):
         status = "🌟 نشطة" if is_active else "📄 عادية"
         preview = content[:50] + "..." if len(content) > 50 else content
         text += f"{i}. {status}\n   `{preview}`\n   🆔 {msg_id}\n\n"
-    
-    if len(messages) > 15:
-        text += f"\n... و {len(messages) - 15} رسالة أخرى"
     
     await event.edit(text, buttons=messages_buttons())
 
@@ -967,37 +764,37 @@ async def show_delete_message(event):
     btns.append([Button.inline("⬅️ عودة", b"manage_messages")])
     await event.edit("🗑 اختر رسالة للحذف", buttons=btns)
 
-async def show_join_report(event):
-    """تقرير الانضمام - التقرير الوحيد المتبقي"""
-    links = db.get_joined_links(30)
-    accounts = db.get_accounts()
-    groups = db.get_all_groups()
+async def show_join_stats(event):
+    stats = db.get_join_stats()
     
-    text = "📊 **تقرير الانضمام**\n\n"
-    text += f"━━━━━━━━━━━━━━━━━━━━\n"
-    text += f"👥 الحسابات النشطة: {len([a for a in accounts if a[1] == 'active'])}\n"
-    text += f"📢 المجموعات: {len(groups)}\n"
-    text += f"🔗 إجمالي الروابط المنضم لها: {db.get_joined_links_count()}\n"
-    text += f"🚫 المحظورات: {len(db.get_blacklisted_groups())}\n"
-    text += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    text = "🔗 **إحصائيات الانضمام**\n\n"
+    text += f"📊 إجمالي المحاولات: {stats['total']}\n"
+    text += f"✅ ناجح: {stats['success']}\n"
+    text += f"❌ فاشل: {stats['failed']}\n"
+    text += f"📈 نسبة النجاح: {stats['success']/(stats['total'] or 1)*100:.1f}%\n"
     
-    if links:
-        text += "**آخر 30 رابط:**\n\n"
-        for link, group_name, joined_at, joined_by in links:
-            time_str = datetime.fromisoformat(joined_at).strftime('%Y-%m-%d %H:%M')
-            text += f"• **{group_name[:30]}**\n"
-            text += f"  🔗 {link[:40]}\n"
-            text += f"  📱 {joined_by[-8:]} | 🕐 {time_str}\n\n"
-    else:
-        text += "📭 لا توجد روابط منضم لها بعد\n"
+    await event.edit(text, buttons=join_report_buttons())
+
+async def show_join_history(event):
+    history = db.get_join_history(30)
+    if not history:
+        await event.edit("📭 لا توجد سجلات انضمام", buttons=join_report_buttons())
+        return
     
-    await event.edit(text, buttons=[[Button.inline("⬅️ عودة", b"back")]])
+    text = "🔗 **آخر 30 عملية انضمام**\n\n"
+    for link, group_name, joined_at, joined_by, status in history:
+        time_str = datetime.fromisoformat(joined_at).strftime('%H:%M:%S')
+        icon = "✅" if status == 'success' else "❌"
+        text += f"{icon} {time_str} - {group_name[:25]}\n"
+        text += f"   🔗 {link[:40]}...\n"
+        text += f"   📱 {joined_by[-8:]}\n\n"
+    
+    await event.edit(text, buttons=join_report_buttons())
 
 async def show_status(event):
     accounts = db.get_accounts()
     groups = db.get_all_groups()
-    blacklisted = db.get_blacklisted_groups()
-    joined_links = db.get_joined_links_count()
+    join_stats = db.get_join_stats()
     messages_count = len(db.get_all_messages())
     active_msg = db.get_active_message()
     uptime = datetime.now() - start_time
@@ -1006,20 +803,18 @@ async def show_status(event):
     
     active_accounts = len([a for a in accounts if a[1] == 'active'])
     
-    text = f"📊 **حالة البوت**\n\n"
+    text = f"📊 **حالة البوت V5**\n\n"
     text += f"⏰ **وقت التشغيل:** {int(hours)} س {int(minutes)} د\n"
     text += f"👤 **الحسابات:** {active_accounts}/{len(accounts)}\n"
     text += f"📢 **المجموعات:** {len(groups)}\n"
-    text += f"🚫 **المحظورات:** {len(blacklisted)}\n"
-    text += f"🔗 **الروابط:** {joined_links}\n"
     text += f"📝 **الرسائل:** {messages_count}\n"
+    text += f"🔗 **عمليات الانضمام:** {join_stats['total']}\n"
     text += f"⚙️ **الفاصل:** {SETTINGS['interval']} ثانية\n"
-    text += f"🛡 **التشفير المتقدم:** {'🟢 مفعّل' if SETTINGS.get('encryption', True) else '🔴 معطّل'}\n"
-    text += f"🐢 **انضمام بطيء:** حتى 20 رابط بالرسالة\n"
-    text += f"🔄 **النشر:** {'🟢 نشط' if is_posting else '🔴 متوقف'}\n"
+    text += f"🛡 **التشفير المتطور:** {'🟢 مفعل' if SETTINGS['encryption'] else '🔴 معطل'}\n"
+    text += f"🔄 **النشر:** {'🟢 نشط' if is_posting else '🔴 متوقف'}\n\n"
     
     if active_msg:
-        text += f"\n📨 **الرسالة النشطة:**\n{active_msg['content'][:100]}..."
+        text += f"📨 **الرسالة النشطة:**\n{active_msg['content'][:100]}..."
     
     await event.edit(text, buttons=main_buttons())
 
@@ -1039,67 +834,18 @@ async def show_delete_list(event):
 
 async def show_groups(event):
     groups = db.get_all_groups()
-    blacklisted = db.get_blacklisted_groups()
     
-    text = f"📢 **المجموعات**\nالإجمالي: {len(groups)}\nالمحظور: {len(blacklisted)}\n\n"
+    text = f"📢 **المجموعات**\nالإجمالي: {len(groups)}\n\n"
     
-    for gid, name, members, posts, bl, last in groups[:15]:
+    for gid, name, members, posts, last in groups[:20]:
         name_short = name[:25] if name else "بدون اسم"
-        status = "🚫" if bl else "✅"
         members_fmt = format_number(members) if members else "?"
-        text += f"{status} {name_short}\n   👥 {members_fmt} | 📨 {posts}\n"
+        text += f"✅ {name_short}\n   👥 {members_fmt} | 📨 {posts}\n"
     
-    if len(groups) > 15:
-        text += f"\n... و {len(groups) - 15} مجموعة أخرى"
+    if len(groups) > 20:
+        text += f"\n... و {len(groups) - 20} مجموعة أخرى"
     
     await event.edit(text, buttons=main_buttons())
-
-async def show_blacklist(event):
-    blacklisted = db.get_blacklisted_groups()
-    if not blacklisted:
-        await event.edit("📭 لا توجد مجموعات محظورة", buttons=blacklist_buttons())
-        return
-    
-    text = "🚫 **المجموعات المحظورة**\n\n"
-    for gid, name in blacklisted[:20]:
-        text += f"• {name[:40]}\n"
-    
-    if len(blacklisted) > 20:
-        text += f"\n... و {len(blacklisted) - 20} مجموعة أخرى"
-    
-    await event.edit(text, buttons=blacklist_buttons())
-
-async def show_remove_blacklist(event):
-    blacklisted = db.get_blacklisted_groups()
-    if not blacklisted:
-        return await event.answer("❌ لا توجد محظورات", alert=True)
-    
-    btns = []
-    for gid, name in blacklisted[:10]:
-        btns.append([Button.inline(f"✅ {name[:20]}", f"unblack_{gid}".encode())])
-    
-    btns.append([Button.inline("⬅️ عودة", b"blacklist_menu")])
-    await event.edit("✅ اختر مجموعة للإزالة", buttons=btns)
-
-async def show_group_stats(event):
-    groups = db.get_all_groups()
-    if not groups:
-        return await event.answer("❌ لا توجد مجموعات", alert=True)
-    
-    most_active = sorted(groups, key=lambda x: x[3], reverse=True)[:5]
-    largest = sorted(groups, key=lambda x: x[2] or 0, reverse=True)[:5]
-    
-    text = "📊 **إحصائيات المجموعات**\n\n"
-    text += "**الأكثر نشاطاً:**\n"
-    for gid, name, members, posts, bl, last in most_active:
-        text += f"• {name[:25]}: {posts} منشور\n"
-    
-    text += "\n**الأكبر عدداً:**\n"
-    for gid, name, members, posts, bl, last in largest:
-        members_fmt = format_number(members) if members else "?"
-        text += f"• {name[:25]}: {members_fmt} عضو\n"
-    
-    await event.edit(text, buttons=groups_buttons())
 
 # ===== دوال الإجراءات =====
 
@@ -1111,41 +857,14 @@ async def delete_account(event, phone):
     await event.answer(f"✅ تم حذف {phone}", alert=True)
     await show_delete_list(event)
 
-async def remove_from_blacklist(event, group_id):
-    db.whitelist_group(group_id)
-    group_blacklist.clear_banned(str(group_id))
-    await event.answer("✅ تمت الإزالة", alert=True)
-    await show_blacklist(event)
+async def create_backup_handler(event):
+    try:
+        backup_file = db.create_backup()
+        await event.answer(f"✅ تم إنشاء النسخة", alert=True)
+    except Exception as e:
+        await event.answer(f"❌ فشل النسخ: {e}", alert=True)
 
-async def refresh_groups(event):
-    await event.answer("🔄 جاري تحديث المجموعات...")
-    count = 0
-    for phone, client in USER_CLIENTS.items():
-        try:
-            async for dialog in client.iter_dialogs():
-                if dialog.is_group:
-                    members = getattr(dialog.entity, 'participants_count', 0)
-                    db.add_group(dialog.id, dialog.name, getattr(dialog.entity, 'username', None), 'group', members, phone)
-                    count += 1
-        except:
-            pass
-    await event.answer(f"✅ تم تحديث {count} مجموعة")
-    await event.edit("🗂 إدارة المجموعات:", buttons=groups_buttons())
-
-async def refresh_groups_async():
-    count = 0
-    for phone, client in USER_CLIENTS.items():
-        try:
-            async for dialog in client.iter_dialogs():
-                if dialog.is_group:
-                    members = getattr(dialog.entity, 'participants_count', 0)
-                    db.add_group(dialog.id, dialog.name, getattr(dialog.entity, 'username', None), 'group', members, phone)
-                    count += 1
-        except:
-            pass
-    logger.info(f"✅ تم تحديث {count} مجموعة")
-
-# ===== معالج النصوص والانضمام البطيء =====
+# ===== معالج النصوص والانضمام لـ 20 رابط =====
 
 async def text_handler(event):
     state = TEMP.get(ADMIN_ID)
@@ -1154,7 +873,7 @@ async def text_handler(event):
     if state == "new_message":
         msg_id = f"msg_{int(time.time())}"
         db.save_message(msg_id, text, is_active=False)
-        TEMP.pop(ADMIN_ID, None)
+        TEMP.pop(ADMIN_ID)
         await event.respond(f"✅ **تم إضافة الرسالة!**\n\n📝 {text[:100]}...\n🆔 {msg_id}", buttons=messages_buttons())
         return
     
@@ -1167,151 +886,100 @@ async def text_handler(event):
             if 10 <= interval <= 120:
                 SETTINGS['interval'] = interval
                 db.save_setting('interval', interval)
-                TEMP.pop(ADMIN_ID, None)
+                TEMP.pop(ADMIN_ID)
                 await event.respond(f"✅ تم ضبط الوقت على {text} ثانية", buttons=main_buttons())
             else:
                 await event.respond("❌ الرجاء إدخال قيمة بين 10 و 120")
         except:
             await event.respond("❌ أرسل رقماً فقط")
     
-    elif state == "add_blacklist":
-        groups = db.search_groups(text)
-        if groups:
-            for gid, name, members in groups[:5]:
-                db.blacklist_group(gid)
-            await event.respond(f"✅ تم حظر {len(groups[:5])} مجموعة")
-        else:
-            await event.respond("❌ لم يتم العثور على مجموعات")
-        TEMP.pop(ADMIN_ID, None)
-        await event.respond("⚙️ الإعدادات المتقدمة:", buttons=advanced_buttons())
-    
-    elif state == "search_groups":
-        groups = db.search_groups(text)
-        if groups:
-            msg = f"🔍 **نتائج البحث:**\n\n"
-            for gid, name, members in groups:
-                msg += f"• {name[:40]}\n  👥 {format_number(members)}\n"
-            await event.respond(msg)
-        else:
-            await event.respond("❌ لا توجد نتائج")
-        TEMP.pop(ADMIN_ID, None)
-    
-    elif state == "awaiting_links":
-        # ─── الانضمام البطيء حتى 20 رابط ───
-        TEMP.pop(ADMIN_ID, None)
-        links = re.findall(r"(https?://t\.me/(?:joinchat/|\+)[a-zA-Z0-9_-]+|https?://t\.me/[a-zA-Z0-9_]+)", text)
-        links = links[:20]  # حد أقصى 20 رابط
-        
-        if not links:
-            await event.respond("❌ لم يتم العثور على روابط صالحة!\n\nأرسل روابط بالشكل:\nhttps://t.me/group\nhttps://t.me/+invite", buttons=main_buttons())
-            return
-        
-        await handle_slow_join(event, links)
-    
     else:
-        # كشف تلقائي للروابط
+        # استخراج جميع الروابط (حتى 20 رابط)
         links = re.findall(r"(https?://t\.me/(?:joinchat/|\+)[a-zA-Z0-9_-]+|https?://t\.me/[a-zA-Z0-9_]+)", text)
-        if links and USER_CLIENTS:
-            links = links[:20]
-            await handle_slow_join(event, links)
+        if links and SETTINGS.get('auto_join_enabled', True) and USER_CLIENTS:
+            await handle_multi_join(event, links[:20])
 
-async def handle_slow_join(event, links):
-    """الانضمام البطيء حتى 20 رابط - حماية قصوى"""
+async def handle_multi_join(event, links):
+    """الانضمام لـ 20 رابط في رسالة واحدة"""
+    total_links = len(links)
     await event.respond(
-        f"🐢 **انضمام بطيء - أقصى حماية**\n"
+        f"🚀 **انضمام لـ {total_links} رابط**\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 الروابط: {len(links)}\n"
-        f"⏱ رابط كل 2-4 دقائق\n"
-        f"🛡 حماية كاملة من الحظر\n\n"
+        f"📌 جاري معالجة {total_links} رابط\n"
+        f"🛡 تشغيل الحماية المتقدمة\n\n"
         f"جاري البدء..."
     )
     
-    success = 0
-    failed = 0
+    success_count = 0
+    failed_count = 0
     
-    for idx, link in enumerate(links):
-        link = link.strip()
-        if not link:
-            continue
-        
-        await event.respond(
-            f"🔗 **[{idx+1}/{len(links)}]** جاري الانضمام...\n"
-            f"⏱ انتظار 2-4 دقائق..."
-        )
-        
-        # تأخير عشوائي قبل المحاولة
-        initial_delay = random.randint(60, 120)
-        await asyncio.sleep(initial_delay)
-        
+    for i, link in enumerate(links, 1):
         joined = False
+        
         for phone, client in USER_CLIENTS.items():
             if joined:
                 break
-            
+                
             try:
-                pre_delay = random.randint(45, 90)
-                await asyncio.sleep(pre_delay)
+                # تأخير قصير بين المحاولات (10-20 ثانية)
+                delay = random.randint(10, 20)
+                logger.info(f"⏸ انتظار {delay} ثانية قبل الرابط {i}/{total_links}")
+                await asyncio.sleep(delay)
                 
                 group_info = None
                 if "joinchat" in link or "+" in link:
                     hash_part = link.split('/')[-1].replace('+', '')
+                    logger.info(f"🔗 [{i}/{total_links}] انضمام عبر دعوة...")
                     updates = await client(ImportChatInviteRequest(hash_part))
                     if updates.chats:
                         chat = updates.chats[0]
                         group_info = (chat.id, chat.title)
                 else:
                     username = link.split('/')[-1]
+                    logger.info(f"🔗 [{i}/{total_links}] انضمام إلى @{username}...")
                     entity = await client.get_entity(username)
                     if entity:
                         await client(JoinChannelRequest(link))
                         group_info = (entity.id, getattr(entity, 'title', username))
                 
-                success += 1
+                success_count += 1
                 joined = True
-                logger.success(f"✅ تم الانضمام: {link}")
+                logger.success(f"✅ تم الانضمام إلى {link[:50]} باستخدام {phone[-8:]}")
                 
-                # حفظ في قاعدة البيانات
+                # تسجيل في قاعدة البيانات
                 if group_info:
                     group_id, group_name = group_info
-                    db.add_joined_link(link, group_id, group_name[:50], phone)
-                    # إضافة المجموعة لقائمة المجموعات أيضاً
-                    members = 0
-                    try:
-                        full_entity = await client.get_entity(int(group_id))
-                        members = getattr(full_entity, 'participants_count', 0)
-                    except:
-                        pass
-                    db.add_group(group_id, group_name, '', 'group', members, phone)
+                    db.log_join(link, group_id, group_name[:50], phone, 'success')
+                    db.add_group(group_id, group_name[:50], None, 'group', 0, phone)
                 
-                post_delay = random.randint(60, 120)
-                await asyncio.sleep(post_delay)
                 break
                 
             except FloodWaitError as e:
-                wait_time = e.seconds + random.randint(45, 90)
+                wait_time = e.seconds + random.randint(10, 30)
                 logger.warning(f"⏳ FloodWait: انتظار {wait_time} ثانية...")
                 await asyncio.sleep(wait_time)
                 continue
                 
             except Exception as e:
-                failed += 1
-                logger.error(f"❌ فشل انضمام إلى {link}: {e}")
-                error_delay = random.randint(90, 180)
-                await asyncio.sleep(error_delay)
+                logger.error(f"❌ فشل انضمام {link[:50]}: {e}")
+                db.log_join(link, None, "غير معروف", phone, 'failed')
                 continue
         
         if not joined:
-            logger.warning(f"⚠️ فشل الانضمام لـ {link}")
-            await asyncio.sleep(random.randint(120, 180))
+            failed_count += 1
+            logger.warning(f"⚠️ فشل الانضمام لـ {link[:50]} بجميع الحسابات")
+            db.log_join(link, None, "غير معروف", "all", 'failed')
     
-    result_text = f"📊 **نتيجة الانضمام البطيء:**\n"
+    await asyncio.sleep(random.randint(5, 10))
+    
+    result_text = f"📊 **نتيجة الانضمام لـ {total_links} رابط**\n"
     result_text += f"━━━━━━━━━━━━━━━━━━━━\n"
-    result_text += f"✅ نجاح: {success}\n"
-    result_text += f"❌ فشل: {failed}\n"
-    result_text += f"📋 إجمالي: {len(links)}\n"
-    result_text += f"🛡 سرعة بطيئة - حماية كاملة"
+    result_text += f"✅ نجاح: {success_count}\n"
+    result_text += f"❌ فشل: {failed_count}\n"
+    result_text += f"📈 نسبة النجاح: {success_count/total_links*100:.1f}%\n"
+    result_text += f"🛡 تم استخدام التشفير المتقدم"
     
-    await event.respond(result_text, buttons=main_buttons())
+    await event.respond(result_text)
 
 # دوال تسجيل الدخول
 async def handle_phone_login(event, phone):
@@ -1329,12 +997,11 @@ async def handle_code_verification(event, state, code):
         client = state["c"]
         phone = state["p"]
         await client.sign_in(phone, code)
-        session_str = client.session.save()
         USER_CLIENTS[phone] = client
-        db.add_account(phone, session_str)
-        await event.respond(f"✅ تم تفعيل الحساب {phone}!\n💾 الجلسة محفوظة - لن تحتاج لإدخالها مرة أخرى")
-        TEMP.pop(ADMIN_ID, None)
-        asyncio.create_task(refresh_groups_async())
+        db.add_account(phone, client.session.save())
+        await event.respond(f"✅ تم تفعيل الحساب {phone}!")
+        TEMP.pop(ADMIN_ID)
+        await refresh_groups_async()
     except SessionPasswordNeededError:
         TEMP[ADMIN_ID]["s"] = "pass"
         await event.respond("🔐 أرسل كلمة المرور:")
@@ -1344,19 +1011,33 @@ async def handle_code_verification(event, state, code):
 async def handle_password(event, state, password):
     try:
         await state["c"].sign_in(password=password)
-        session_str = state["c"].session.save()
         USER_CLIENTS[state["p"]] = state["c"]
-        db.add_account(state["p"], session_str)
-        await event.respond(f"✅ تم التفعيل بنجاح!\n💾 الجلسة محفوظة - لن تحتاج لإدخالها مرة أخرى")
-        TEMP.pop(ADMIN_ID, None)
-        asyncio.create_task(refresh_groups_async())
+        db.add_account(state["p"], state["c"].session.save())
+        await event.respond(f"✅ تم التفعيل بنجاح!")
+        TEMP.pop(ADMIN_ID)
+        await refresh_groups_async()
     except Exception as e:
         await event.respond(f"❌ خطأ: {str(e)[:100]}")
+
+async def refresh_groups_async():
+    count = 0
+    for phone, client in USER_CLIENTS.items():
+        try:
+            async for dialog in client.iter_dialogs():
+                if dialog.is_group:
+                    members = getattr(dialog.entity, 'participants_count', 0)
+                    db.add_group(dialog.id, dialog.name, getattr(dialog.entity, 'username', None), 'group', members, phone)
+                    count += 1
+        except:
+            pass
+    logger.info(f"✅ تم تحديث {count} مجموعة")
 
 # ===== دالة النشر =====
 async def poster():
     global is_posting
-    logger.info("🚀 بدء النشر بالتشفير المتقدم...")
+    logger.info("🚀 بدء النشر مع التشفير المتقدم...")
+    
+    stats = {'total': 0, 'success': 0, 'failed': 0}
     
     while is_posting:
         try:
@@ -1371,10 +1052,6 @@ async def poster():
                 continue
             
             original_text = active_msg['content']
-            
-            # إنشاء تنويعات بالتشفير المتقدم (بدون تغيير النص المرئي)
-            variations = anti_detection.get_variation(original_text, 6)
-            logger.info(f"📝 تم توليد {len(variations)} تنويع مشفّر")
             
             accounts_list = list(USER_CLIENTS.items())
             
@@ -1396,39 +1073,29 @@ async def poster():
                         if not is_posting:
                             break
                         
-                        blacklisted = [g[0] for g in db.get_blacklisted_groups()]
-                        if str(dialog.id) in blacklisted:
-                            continue
-                        
-                        if group_blacklist.is_banned(str(dialog.id)):
-                            continue
-                        
                         db.add_group(dialog.id, dialog.name, 
                                    getattr(dialog.entity, 'username', None),
                                    'group', 
                                    getattr(dialog.entity, 'participants_count', 0), 
                                    phone)
                         
-                        selected_text = random.choice(variations)
-                        
-                        # استخدام التشفير المتقدم
-                        success, result = await anti_detection.send_safe(
-                            client, dialog.id, selected_text, dialog.name
+                        # استخدام نظام النشر الآمن مع التشفير المتقدم
+                        success, result = await safe_poster.send_safe(
+                            client, dialog.id, original_text, dialog.name
                         )
                         
                         if success:
-                            db.increment_account_posts(phone, success=True)
-                            db.update_group_post(dialog.id)
+                            db.log_post(phone, dialog.id, dialog.name, 'success')
                             groups_sent += 1
-                            group_blacklist.clear_banned(str(dialog.id))
+                            stats['success'] += 1
                             logger.info(f"✅ [{phone[-8:]}] أرسل لـ {dialog.name[:30]}")
                         else:
-                            db.increment_account_posts(phone, success=False)
+                            stats['failed'] += 1
                             logger.warning(f"⚠️ فشل لـ {dialog.name[:30]}: {result[:50]}")
-                            if "banned" in result.lower() or "can't write" in result.lower():
-                                group_blacklist.record_failure(str(dialog.id), result)
                         
-                        delay = anti_detection.random_delay(SETTINGS.get('interval', 12))
+                        stats['total'] += 1
+                        
+                        delay = safe_poster.random_delay(SETTINGS.get('interval', 12))
                         await asyncio.sleep(delay)
                     
                     logger.info(f"📊 [{phone[-8:]}] أرسل {groups_sent} رسالة")
@@ -1437,7 +1104,9 @@ async def poster():
                     logger.error(f"❌ خطأ في الحساب {phone[-8:]}: {e}")
                     db.update_account_status(phone, 'error')
             
-            cycle_wait = random.randint(90, 180)
+            logger.info(f"📈 إحصائيات الدورة: {stats['success']} نجاح / {stats['failed']} فشل")
+            
+            cycle_wait = random.randint(60, 120)
             logger.info(f"⏸ استراحة {cycle_wait} ثانية...")
             await asyncio.sleep(cycle_wait)
             
@@ -1447,7 +1116,6 @@ async def poster():
 
 # استعادة الجلسات
 async def restore_sessions():
-    """استعادة جميع الحسابات المحفوظة تلقائياً - لا تحتاج لإدخالها مرة أخرى"""
     restored = 0
     accounts = db.get_accounts()
     logger.info(f"🔍 محاولة استعادة {len(accounts)} حساب...")
@@ -1457,7 +1125,15 @@ async def restore_sessions():
             if len(account) < 2:
                 continue
             phone = account[0]
-            session_str = db.get_account_session(phone)
+            session_str = None
+            
+            conn = sqlite3.connect(DB_PATH, timeout=15)
+            try:
+                result = conn.execute('SELECT session_str FROM accounts WHERE phone = ?', (phone,)).fetchone()
+                if result and result[0]:
+                    session_str = result[0]
+            finally:
+                conn.close()
             
             if not session_str:
                 logger.warning(f"⚠️ لا توجد جلسة للحساب {phone}")
@@ -1473,7 +1149,7 @@ async def restore_sessions():
                 logger.success(f"✅ تم استعادة {phone}")
             else:
                 db.update_account_status(phone, 'unauthorized')
-                logger.warning(f"⚠️ الحساب {phone} غير مصرح به - يحتاج إعادة تسجيل")
+                logger.warning(f"⚠️ الحساب {phone} غير مصرح به")
                 
         except Exception as e:
             logger.error(f"❌ فشل استعادة حساب: {e}")
@@ -1489,49 +1165,23 @@ async def main():
     global bot, start_time
     start_time = datetime.now()
     
-    # خادم الويب يعمل بالفعل في الخيط الرئيسي
-    # انتظار قصير للتأكد من جاهزيته
-    import socket
-    port = int(os.environ.get('PORT', 10000))
-    for attempt in range(30):
-        try:
-            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            test_sock.settimeout(1)
-            result = test_sock.connect_ex(('127.0.0.1', port))
-            test_sock.close()
-            if result == 0:
-                print(f"🌐 خادم الويب يعمل على المنفذ {port}")
-                break
-        except:
-            pass
-        await asyncio.sleep(1)
-    else:
-        print(f"⚠️ لم يتم تأكيد ربط المنفذ {port}، لكن المتابعة...")
+    # تشغيل خادم الويب
+    Thread(target=run_web, daemon=True).start()
+    print("🌐 خادم الويب يعمل على المنفذ 10000")
     
-    print("🚀 جاري تشغيل البوت...")
+    print("🚀 جاري تشغيل البوت V5...")
+    print("👤 ADMIN_ID المستخدم:", ADMIN_ID)
     
-    # استعادة الحسابات المحفوظة (مع معالجة الأخطاء)
-    try:
-        await restore_sessions()
-    except Exception as e:
-        print(f"⚠️ خطأ في استعادة الحسابات: {e}")
+    # استعادة الحسابات المحفوظة
+    await restore_sessions()
     
-    # الاتصال ببوت تيليجرام (مع إعادة المحاولة)
-    max_retries = 5
-    for retry in range(max_retries):
-        try:
-            bot = TelegramClient('bot_session', API_ID, API_HASH)
-            await bot.start(bot_token=BOT_TOKEN)
-            me = await bot.get_me()
-            print(f"✅ البوت متصل: @{me.username}")
-            break
-        except Exception as e:
-            print(f"❌ محاولة {retry+1}/{max_retries} فشلت: {e}")
-            if retry < max_retries - 1:
-                await asyncio.sleep(10)
-            else:
-                print("💥 فشل الاتصال بالبوت! سيتوقف البرنامج.")
-                return
+    # تشغيل البوت
+    bot = TelegramClient('bot_session', API_ID, API_HASH)
+    await bot.start(bot_token=BOT_TOKEN)
+    
+    me = await bot.get_me()
+    print(f"✅ البوت متصل: @{me.username}")
+    print(f"👤 آيدي البوت: {me.id}")
     
     @bot.on(events.NewMessage(pattern='/start'))
     async def start(e):
@@ -1554,32 +1204,20 @@ async def main():
         elif e.is_group and e.message.text:
             await text_handler(e)
     
-    logger.success("✅ البوت جاهز! أرسل /start")
-    print("🎉 البوت يعمل - تشفير متقدم + حفظ الحسابات + 20 رابط")
+    logger.success("✅ البوت V5 جاهز! أرسل /start")
+    print("🎉 البوت يعمل مع:")
+    print("   - تشفير متقدم جداً (لا يغير نص المنشور)")
+    print("   - انضمام لـ 20 رابط في الرسالة")
+    print("   - حفظ الحسابات عند تنظيف قاعدة البيانات")
+    print("   - تقارير انضمام فقط")
     await bot.run_until_disconnected()
 
 if __name__ == "__main__":
-    # بدء خادم الويب فوراً في الخيط الرئيسي قبل كل شيء
-    # هذا يضمن أن Render يرى المنفذ مفتوحاً
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🌐 بدء خادم الويب على المنفذ {port}...")
-    
-    # تشغيل البوت في خيط خلفي
-    def run_bot():
-        try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            print("🛑 تم إيقاف البوت")
-        except Exception as e:
-            print(f"💥 خطأ في البوت: {e}")
-            time.sleep(5)
-            os.execl(sys.executable, sys.executable, *sys.argv)
-    
-    bot_thread = Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    
-    # خادم الويب في الخيط الرئيسي (هذا ما يربط المنفذ)
     try:
-        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+        asyncio.run(main())
     except KeyboardInterrupt:
-        print("🛑 تم الإيقاف")
+        print("🛑 تم إيقاف البوت")
+    except Exception as e:
+        logger.critical(f"💥 خطأ: {e}")
+        time.sleep(5)
+        os.execl(sys.executable, sys.executable, *sys.argv)
