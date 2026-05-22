@@ -4,7 +4,7 @@
 """
 ╔═══════════════════════════════════════════════════════════════╗
 ║     🤖 بوت النشر الخارق - النسخة النهائية 🚀                  ║
-║     إضافة حسابات برقم الهاتف + كود التفعيل (مع phone_code_hash)║
+║     إضافة حسابات برقم الهاتف + استيراد المجموعات تلقائياً     ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -70,6 +70,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER, group_name TEXT,
         username TEXT, member_count INTEGER,
+        added_by TEXT,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS posting_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +84,7 @@ def init_db():
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
+    logger.info("✅ قاعدة البيانات جاهزة")
 
 def get_setting(key, default=None):
     conn = sqlite3.connect(DB_PATH)
@@ -199,11 +201,9 @@ def generate_text_variation(text):
     return encrypt_text(text)
 
 # ═══════════════════════════════════════════════
-#  إدارة الحسابات
+#  إدارة الحسابات والمجموعات
 # ═══════════════════════════════════════════════
 user_clients = {}
-
-# قاموس لتخزين بيانات الجلسات المؤقتة
 temp_sessions = {}  # {user_id: {"phone": phone, "client": client, "phone_code_hash": hash}}
 
 async def restore_sessions():
@@ -221,6 +221,8 @@ async def restore_sessions():
             if await client.is_user_authorized():
                 user_clients[acc_id] = client
                 logger.info(f"✅ تم استعادة حساب: {phone}")
+                # استيراد المجموعات تلقائياً عند الاستعادة
+                await fetch_all_groups_for_account(acc_id, client)
             else:
                 logger.warning(f"⚠️ الجلسة منتهية: {phone}")
                 set_account_status(acc_id, 'expired')
@@ -234,15 +236,56 @@ def set_account_status(acc_id, status):
     conn.commit()
     conn.close()
 
+async def fetch_all_groups_for_account(acc_id, client):
+    """جلب جميع المجموعات التي انضم لها الحساب"""
+    count = 0
+    try:
+        async for dialog in client.iter_dialogs():
+            if dialog.is_group or dialog.is_channel:
+                # تجنب إضافة المجموعات المحظورة
+                if getattr(dialog.entity, 'username', None) == "join":
+                    continue
+                
+                group_id = dialog.id
+                group_name = dialog.name or "بدون اسم"
+                member_count = getattr(dialog.entity, 'participants_count', 0)
+                username = getattr(dialog.entity, 'username', None)
+                
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('''
+                    INSERT OR IGNORE INTO groups (group_id, group_name, username, member_count, added_by)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (group_id, group_name[:100], username, member_count, f"account_{acc_id}"))
+                conn.commit()
+                conn.close()
+                count += 1
+                
+        logger.info(f"✅ تم استيراد {count} مجموعة من الحساب {acc_id}")
+    except Exception as e:
+        logger.error(f"❌ فشل استيراد المجموعات: {e}")
+    
+    return count
+
+async def get_all_groups_count():
+    """الحصول على عدد المجموعات في قاعدة البيانات"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM groups")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
 # ═══════════════════════════════════════════════
 #  نظام النشر
 # ═══════════════════════════════════════════════
 is_posting_active = False
 
-async def post_to_groups(bot, message_content, msg_type='text', media_path=None):
+async def post_to_groups(message_content, msg_type='text', media_path=None):
+    """نشر رسالة في جميع المجموعات باستخدام الحسابات المتاحة"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT group_id FROM groups")
+    c.execute("SELECT group_id, group_name FROM groups")
     groups = c.fetchall()
     c.execute("SELECT id FROM accounts WHERE status='active'")
     accounts = c.fetchall()
@@ -258,7 +301,7 @@ async def post_to_groups(bot, message_content, msg_type='text', media_path=None)
     account_list = list(accounts)
     random.shuffle(account_list)
 
-    for idx, (group_id,) in enumerate(groups):
+    for idx, (group_id, group_name) in enumerate(groups):
         acc_id = account_list[idx % len(account_list)][0]
         client = user_clients.get(acc_id)
 
@@ -281,15 +324,17 @@ async def post_to_groups(bot, message_content, msg_type='text', media_path=None)
 
             success_count += 1
             log_posting(acc_id, int(group_id), 0, 'success')
+            logger.info(f"✅ نشر في {group_name[:30]} باستخدام الحساب {acc_id}")
 
         except FloodWaitError as e:
             await asyncio.sleep(e.seconds)
             fail_count += 1
             log_posting(acc_id, int(group_id), 0, f'failed: flood wait {e.seconds}s')
+            logger.warning(f"⚠️ FloodWait في {group_name}: {e.seconds} ثانية")
         except Exception as e:
             fail_count += 1
             log_posting(acc_id, int(group_id), 0, f'failed: {str(e)[:50]}')
-            logger.error(f"فشل النشر في {group_id}: {e}")
+            logger.error(f"❌ فشل النشر في {group_name}: {e}")
 
     return success_count, fail_count
 
@@ -427,6 +472,7 @@ def clean_database_keep_accounts():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER, group_name TEXT,
         username TEXT, member_count INTEGER,
+        added_by TEXT,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS posting_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -467,6 +513,7 @@ def get_main_menu():
         [Button.inline("🔗 انضمام 20 رابط", b"fast_join"),
          Button.inline("📋 تقارير الانضمام", b"join_reports")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
+        [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
 
 def get_join_reports_menu():
@@ -500,12 +547,16 @@ async def main():
     async def start_handler(event):
         if event.sender_id != ADMIN_ID:
             return
+        
+        groups_count = await get_all_groups_count()
+        
         await event.respond(
             "🤖 **بوت النشر الخارق v5.0**\n\n"
             "مرحباً بك في لوحة التحكم الرئيسية!\n"
             "• تشفير متقدم جداً (لا يغير النص)\n"
             "• انضمام لـ 20 رابط دفعة واحدة\n"
-            "• حفظ الحسابات عند تنظيف قاعدة البيانات\n\n"
+            "• حفظ الحسابات عند تنظيف قاعدة البيانات\n"
+            f"• 📢 المجموعات المحفوظة: {groups_count}\n\n"
             "اختر من القائمة أدناه:",
             buttons=get_main_menu()
         )
@@ -519,8 +570,10 @@ async def main():
         data = event.data.decode('utf-8')
 
         if data == 'back':
+            groups_count = await get_all_groups_count()
             await event.edit(
                 "🤖 **بوت النشر الخارق v5.0**\n\n"
+                f"📢 المجموعات المحفوظة: {groups_count}\n\n"
                 "اختر من القائمة أدناه:",
                 buttons=get_main_menu()
             )
@@ -622,17 +675,17 @@ async def main():
         elif data == 'list_groups':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, group_name, member_count FROM groups LIMIT 30")
+            c.execute("SELECT id, group_name, member_count FROM groups LIMIT 50")
             grps = c.fetchall()
             conn.close()
             if not grps:
-                await event.edit("📢 لا توجد مجموعات مسجلة", buttons=[
+                await event.edit("📢 لا توجد مجموعات مسجلة!\n\nقم بإضافة حساب أولاً ثم اضغط 'تحديث المجموعات'", buttons=[
                     [Button.inline("🔙 رجوع", b"groups")]
                 ])
             else:
                 text = "📢 **المجموعات المسجلة:**\n\n"
                 for gid, gname, members in grps:
-                    text += f"#{gid} - {gname or 'غير مسمى'} ({members or 0} عضو)\n"
+                    text += f"📌 #{gid} - {gname or 'غير مسمى'} ({members or 0} عضو)\n"
                 await event.edit(text, buttons=[
                     [Button.inline("🔙 رجوع", b"groups")]
                 ])
@@ -651,29 +704,77 @@ async def main():
                 [Button.inline("🔙 رجوع", b"groups")]
             ])
 
+        # ─── تحديث المجموعات ───
+        elif data == 'refresh_groups':
+            await event.edit("🔄 **جاري تحديث المجموعات من جميع الحسابات...**\n\nقد يستغرق هذا دقيقة...")
+            
+            total_groups = 0
+            for acc_id, client in user_clients.items():
+                count = await fetch_all_groups_for_account(acc_id, client)
+                total_groups += count
+                await event.respond(f"📢 الحساب #{acc_id}: تم استيراد {count} مجموعة")
+            
+            await event.edit(
+                f"✅ **تم تحديث المجموعات بنجاح!**\n\n"
+                f"📊 إجمالي المجموعات المستوردة: {total_groups}\n\n"
+                f"يمكنك الآن بدء النشر.",
+                buttons=[[Button.inline("🔙 رجوع", b"back")]]
+            )
+
         # ─── التحكم في النشر ───
         elif data == 'start_posting':
             global is_posting_active
+            
+            # التحقق من وجود مجموعات
+            groups_count = await get_all_groups_count()
+            if groups_count == 0:
+                await event.edit("⚠️ **لا توجد مجموعات للنشر!**\n\n"
+                               "يرجى:\n"
+                               "1. إضافة حساب أولاً\n"
+                               "2. الضغط على '🔄 تحديث المجموعات'\n"
+                               "3. ثم المحاولة مرة أخرى", buttons=[
+                    [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                    [Button.inline("🔙 رجوع", b"back")]
+                ])
+                return
+            
+            # التحقق من وجود رسائل
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("SELECT content, msg_type FROM messages")
             msgs = c.fetchall()
             conn.close()
+            
             if not msgs:
                 await event.edit("⚠️ لا توجد رسائل للنشر!\nأضف رسائل أولاً.", buttons=[
                     [Button.inline("🔙 رجوع", b"back")]
                 ])
                 return
+            
+            if not user_clients:
+                await event.edit("⚠️ لا توجد حسابات نشطة!\nأضف حساباً أولاً.", buttons=[
+                    [Button.inline("🔙 رجوع", b"back")]
+                ])
+                return
+            
             if is_posting_active:
                 await event.edit("⚠️ النشر قيد التشغيل بالفعل!", buttons=[
                     [Button.inline("🔙 رجوع", b"back")]
                 ])
                 return
+            
             is_posting_active = True
-            await event.edit("🚀 **تم بدء النشر!**\n\nسيتم النشر في المجموعات بالتناوب.", buttons=[
-                [Button.inline("⏹ إيقاف النشر", b"stop_posting")],
-                [Button.inline("🔙 رجوع", b"back")],
-            ])
+            await event.edit(
+                f"🚀 **تم بدء النشر!**\n\n"
+                f"📢 عدد المجموعات: {groups_count}\n"
+                f"👥 عدد الحسابات: {len(user_clients)}\n"
+                f"⏱ الفاصل الزمني: {get_setting('min_delay', '3')}-{get_setting('max_delay', '8')} ثانية\n\n"
+                f"سيتم النشر في المجموعات بالتناوب.",
+                buttons=[
+                    [Button.inline("⏹ إيقاف النشر", b"stop_posting")],
+                    [Button.inline("🔙 رجوع", b"back")],
+                ]
+            )
             asyncio.create_task(auto_posting_loop(bot))
 
         elif data == 'stop_posting':
@@ -818,16 +919,17 @@ async def main():
                     f"✅ **تم تنظيف قاعدة البيانات بنجاح!**\n\n"
                     f"• ✅ تم الحفاظ على {saved} حساب\n"
                     f"• 🗑 تم حذف: الرسائل، المجموعات، السجلات\n\n"
-                    f"**ملاحظة:** حساباتك لا تزال موجودة وجاهزة للاستخدام\n\n"
-                    f"اضغط /start للبدء",
-                    buttons=[[Button.inline("🔄 العودة", b"back")]]
+                    f"**ملاحظة:** حساباتك لا تزال موجودة\n\n"
+                    f"اضغط على '🔄 تحديث المجموعات' لإعادة استيراد المجموعات",
+                    buttons=[[Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                             [Button.inline("🔙 رجوع", b"back")]]
                 )
             except Exception as e:
                 await event.edit(f"❌ فشل التنظيف: {str(e)[:100]}", buttons=[
                     [Button.inline("🔙 رجوع", b"back")]
                 ])
 
-    # ─── التعامل مع الرسائل النصية (الجزء المعدل لحل مشكلة phone_code_hash) ───
+    # ─── التعامل مع الرسائل النصية ───
     @bot.on(events.NewMessage)
     async def message_handler(event):
         if event.sender_id != ADMIN_ID:
@@ -844,7 +946,6 @@ async def main():
             set_setting('awaiting_del_msg', '')
             set_setting('awaiting_del_acc', '')
             set_setting('awaiting_del_group', '')
-            # تنظيف الجلسات المؤقتة
             if event.sender_id in temp_sessions:
                 try:
                     await temp_sessions[event.sender_id]["client"].disconnect()
@@ -874,7 +975,7 @@ async def main():
             return
 
         # ═══════════════════════════════════════════════
-        # إضافة حساب جديد - الطريقة الصحيحة مع phone_code_hash
+        # إضافة حساب جديد
         # ═══════════════════════════════════════════════
         
         # الخطوة 1: استقبال رقم الهاتف
@@ -882,24 +983,20 @@ async def main():
             set_setting('awaiting_phone', '')
             phone = text.strip()
             
-            # التحقق من صحة الرقم
             if not re.match(r'^\+?\d{8,15}$', phone):
                 await event.respond("❌ رقم هاتف غير صالح!\nأدخل رقم صحيح مع رمز البلد (مثال: +966512345678)")
                 return
             
             try:
-                # إنشاء عميل جديد لهذا الحساب
                 client = TelegramClient(StringSession(), API_ID, API_HASH)
                 await client.connect()
                 
-                # إرسال طلب الكود
                 result = await client.send_code_request(phone)
                 
-                # تخزين معلومات الجلسة مؤقتاً مع phone_code_hash
                 temp_sessions[event.sender_id] = {
                     "phone": phone,
                     "client": client,
-                    "phone_code_hash": result.phone_code_hash  # هذا هو المطلوب!
+                    "phone_code_hash": result.phone_code_hash
                 }
                 
                 await event.respond(
@@ -914,12 +1011,11 @@ async def main():
                 await event.respond(f"❌ خطأ: {str(e)[:200]}")
             return
         
-        # الخطوة 2: استقبال رمز التحقق (مع استخدام phone_code_hash)
+        # الخطوة 2: استقبال رمز التحقق
         if get_setting('awaiting_code') == 'true':
             set_setting('awaiting_code', '')
             code = text.strip()
             
-            # الحصول على بيانات الجلسة المؤقتة
             session_data = temp_sessions.get(event.sender_id)
             if not session_data:
                 await event.respond("❌ انتهت صلاحية الجلسة، حاول مرة أخرى من البداية.")
@@ -931,13 +1027,10 @@ async def main():
             phone_code_hash = session_data["phone_code_hash"]
             
             try:
-                # محاولة تسجيل الدخول بالرمز مع phone_code_hash
                 await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
                 
-                # إذا وصلنا هنا، التسجيل ناجح
                 me = await client.get_me()
                 
-                # حفظ الحساب في قاعدة البيانات
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
@@ -946,23 +1039,24 @@ async def main():
                 acc_id = c.lastrowid
                 conn.close()
                 
-                # إضافة العميل إلى القائمة
                 user_clients[acc_id] = client
                 
-                # تنظيف الجلسة المؤقتة
+                # استيراد المجموعات من هذا الحساب
+                group_count = await fetch_all_groups_for_account(acc_id, client)
+                
                 del temp_sessions[event.sender_id]
                 
                 await event.respond(
                     f"✅ **تم إضافة الحساب بنجاح!**\n\n"
                     f"📱 الرقم: {me.phone}\n"
                     f"🆔 المعرف: {me.id}\n"
-                    f"📛 الاسم: {me.first_name or 'بدون اسم'}\n\n"
+                    f"📛 الاسم: {me.first_name or 'بدون اسم'}\n"
+                    f"📢 تم استيراد {group_count} مجموعة\n\n"
                     f"الحساب جاهز للنشر!",
                     buttons=get_main_menu()
                 )
                 
             except SessionPasswordNeededError:
-                # الحساب مفعل بخطوة تحقق إضافية (كلمة مرور)
                 set_setting('awaiting_password', 'true')
                 await event.respond(
                     f"🔐 **يتطلب الحساب كلمة مرور التحقق بخطوتين**\n\n"
@@ -972,7 +1066,6 @@ async def main():
                 
             except PhoneCodeInvalidError:
                 await event.respond("❌ رمز التحقق غير صحيح!\nأعد المحاولة من البداية.")
-                # تنظيف الجلسة
                 try:
                     await client.disconnect()
                 except:
@@ -1003,7 +1096,7 @@ async def main():
                 
             return
         
-        # الخطوة 3: استقبال كلمة المرور (للحسابات المحمية)
+        # الخطوة 3: استقبال كلمة المرور
         if get_setting('awaiting_password') == 'true':
             set_setting('awaiting_password', '')
             password = text.strip()
@@ -1016,12 +1109,10 @@ async def main():
             client = session_data["client"]
             
             try:
-                # تسجيل الدخول بكلمة المرور
                 await client.sign_in(password=password)
                 
                 me = await client.get_me()
                 
-                # حفظ الحساب
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
@@ -1032,13 +1123,16 @@ async def main():
                 
                 user_clients[acc_id] = client
                 
-                # تنظيف الجلسة المؤقتة
+                # استيراد المجموعات من هذا الحساب
+                group_count = await fetch_all_groups_for_account(acc_id, client)
+                
                 del temp_sessions[event.sender_id]
                 
                 await event.respond(
                     f"✅ **تم إضافة الحساب بنجاح!**\n\n"
                     f"📱 الرقم: {me.phone}\n"
-                    f"🆔 المعرف: {me.id}\n\n"
+                    f"🆔 المعرف: {me.id}\n"
+                    f"📢 تم استيراد {group_count} مجموعة\n\n"
                     f"الحساب جاهز للنشر!",
                     buttons=get_main_menu()
                 )
@@ -1142,6 +1236,21 @@ async def main():
         except (IndexError, ValueError):
             await event.respond("❌ الاستخدام: /set_max_delay <رقم>")
 
+    @bot.on(events.NewMessage(pattern='/scan_groups'))
+    async def scan_groups_command(event):
+        if event.sender_id != ADMIN_ID:
+            return
+        
+        await event.respond("🔄 جاري مسح المجموعات من جميع الحسابات...")
+        
+        total_groups = 0
+        for acc_id, client in user_clients.items():
+            count = await fetch_all_groups_for_account(acc_id, client)
+            total_groups += count
+            await event.respond(f"📢 الحساب #{acc_id}: {count} مجموعة")
+        
+        await event.respond(f"✅ تم الانتهاء! إجمالي المجموعات: {total_groups}")
+
     # ─── حلقة النشر التلقائي ───
     async def auto_posting_loop(bot):
         global is_posting_active
@@ -1154,16 +1263,20 @@ async def main():
                 conn.close()
 
                 if not msgs:
+                    logger.warning("⚠️ لا توجد رسائل للنشر، إيقاف النشر")
                     is_posting_active = False
                     break
 
                 for content, msg_type, media_path in msgs:
                     if not is_posting_active:
                         break
-                    success, fails = await post_to_groups(bot, content, msg_type, media_path)
+                    
+                    logger.info("📤 بدء جولة نشر جديدة...")
+                    success, fails = await post_to_groups(content, msg_type, media_path)
                     logger.info(f"📤 نشر: نجاح={success}, فشل={fails}")
 
-                    interval = int(get_setting('post_interval', '300'))
+                    interval = int(get_setting('post_interval', '60'))
+                    logger.info(f"⏱ انتظار {interval} ثانية قبل الجولة التالية...")
                     await asyncio.sleep(interval)
 
             except Exception as e:
