@@ -4,7 +4,7 @@
 """
 ╔═══════════════════════════════════════════════════════════════╗
 ║     🤖 بوت النشر الخارق - النسخة النهائية 🚀                  ║
-║     إضافة حسابات برقم الهاتف + استيراد المجموعات تلقائياً     ║
+║     تحكم كامل بالمدة بين الرسائل + انضمام بطيء كل 100 ثانية  ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -221,7 +221,6 @@ async def restore_sessions():
             if await client.is_user_authorized():
                 user_clients[acc_id] = client
                 logger.info(f"✅ تم استعادة حساب: {phone}")
-                # استيراد المجموعات تلقائياً عند الاستعادة
                 await fetch_all_groups_for_account(acc_id, client)
             else:
                 logger.warning(f"⚠️ الجلسة منتهية: {phone}")
@@ -242,7 +241,6 @@ async def fetch_all_groups_for_account(acc_id, client):
     try:
         async for dialog in client.iter_dialogs():
             if dialog.is_group or dialog.is_channel:
-                # تجنب إضافة المجموعات المحظورة
                 if getattr(dialog.entity, 'username', None) == "join":
                     continue
                 
@@ -268,7 +266,6 @@ async def fetch_all_groups_for_account(acc_id, client):
     return count
 
 async def get_all_groups_count():
-    """الحصول على عدد المجموعات في قاعدة البيانات"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM groups")
@@ -277,12 +274,12 @@ async def get_all_groups_count():
     return count
 
 # ═══════════════════════════════════════════════
-#  نظام النشر
+#  نظام النشر مع تحكم كامل بالمدة
 # ═══════════════════════════════════════════════
 is_posting_active = False
 
 async def post_to_groups(message_content, msg_type='text', media_path=None):
-    """نشر رسالة في جميع المجموعات باستخدام الحسابات المتاحة"""
+    """نشر رسالة في جميع المجموعات مع مدة قابلة للتعديل"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT group_id, group_name FROM groups")
@@ -301,6 +298,9 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
     account_list = list(accounts)
     random.shuffle(account_list)
 
+    # جلب المدة بين الرسائل من الإعدادات (بالثواني)
+    message_interval = int(get_setting('message_interval', '60'))  # الافتراضي 60 ثانية
+
     for idx, (group_id, group_name) in enumerate(groups):
         acc_id = account_list[idx % len(account_list)][0]
         client = user_clients.get(acc_id)
@@ -311,11 +311,8 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
         try:
             variation = generate_text_variation(message_content)
 
-            delay = random.uniform(
-                float(get_setting('min_delay', '3')),
-                float(get_setting('max_delay', '8'))
-            )
-            await asyncio.sleep(delay)
+            # المدة بين كل رسالة وأخرى (قابلة للتعديل)
+            await asyncio.sleep(message_interval)
 
             if msg_type == 'text':
                 await client.send_message(int(group_id), variation)
@@ -324,7 +321,7 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
 
             success_count += 1
             log_posting(acc_id, int(group_id), 0, 'success')
-            logger.info(f"✅ نشر في {group_name[:30]} باستخدام الحساب {acc_id}")
+            logger.info(f"✅ نشر في {group_name[:30]} (انتظار {message_interval} ثانية)")
 
         except FloodWaitError as e:
             await asyncio.sleep(e.seconds)
@@ -347,9 +344,13 @@ def log_posting(account_id, group_id, message_id, status):
     conn.close()
 
 # ═══════════════════════════════════════════════
-#  نظام الانضمام لـ 20 رابط
+#  نظام الانضمام البطيء (كل 100 ثانية)
 # ═══════════════════════════════════════════════
-async def fast_join_groups(links, account_id=None):
+async def slow_join_groups(links, account_id=None):
+    """
+    انضمام بطيء جداً - كل 100 ثانية ينضم لقروب واحد
+    هذا يحمي الحسابات من الحظر
+    """
     if account_id and account_id in user_clients:
         client = user_clients[account_id]
     else:
@@ -361,15 +362,17 @@ async def fast_join_groups(links, account_id=None):
     success_count = 0
     failed_count = 0
     
+    # جلب المدة من الإعدادات (بالثواني) - الافتراضي 100 ثانية
+    join_interval = int(get_setting('join_interval', '100'))
+    
     for i, link in enumerate(links, 1):
         link = link.strip()
         if not link:
             continue
         
         try:
-            delay = random.randint(10, 20)
-            logger.info(f"⏸ انتظار {delay} ثانية قبل الرابط {i}/{len(links)}")
-            await asyncio.sleep(delay)
+            logger.info(f"⏸ انتظار {join_interval} ثانية قبل الرابط {i}/{len(links)} (انضمام بطيء)")
+            await asyncio.sleep(join_interval)
             
             group_info = None
             if "joinchat" in link or "+" in link:
@@ -500,6 +503,9 @@ def get_main_menu():
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     
+    message_interval = get_setting('message_interval', '60')
+    join_interval = get_setting('join_interval', '100')
+    
     return [
         [Button.inline("📝 إدارة الرسائل", b"messages")],
         [Button.inline("👥 إدارة الحسابات", b"accounts")],
@@ -510,8 +516,10 @@ def get_main_menu():
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
-        [Button.inline("🔗 انضمام 20 رابط", b"fast_join"),
+        [Button.inline("🔗 انضمام بطيء (كل 100 ث)", b"slow_join"),
          Button.inline("📋 تقارير الانضمام", b"join_reports")],
+        [Button.inline("⏱ ضبط مدة النشر", b"set_msg_interval"),
+         Button.inline("🐢 ضبط مدة الانضمام", b"set_join_interval")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
         [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
@@ -520,6 +528,13 @@ def get_join_reports_menu():
     return [
         [Button.inline("📊 إحصائيات الانضمام", b"join_stats")],
         [Button.inline("📋 سجل الانضمام", b"join_history")],
+        [Button.inline("🔙 رجوع", b"back")],
+    ]
+
+def get_interval_menu():
+    return [
+        [Button.inline("📨 بين الرسائل", b"set_msg_interval")],
+        [Button.inline("🐢 بين الروابط (انضمام)", b"set_join_interval")],
         [Button.inline("🔙 رجوع", b"back")],
     ]
 
@@ -533,6 +548,12 @@ async def main():
 
     # تهيئة قاعدة البيانات
     init_db()
+
+    # تعيين القيم الافتراضية إذا لم تكن موجودة
+    if get_setting('message_interval') is None:
+        set_setting('message_interval', '60')
+    if get_setting('join_interval') is None:
+        set_setting('join_interval', '100')
 
     # استعادة جلسات الحسابات
     await restore_sessions()
@@ -549,14 +570,18 @@ async def main():
             return
         
         groups_count = await get_all_groups_count()
+        message_interval = get_setting('message_interval', '60')
+        join_interval = get_setting('join_interval', '100')
         
         await event.respond(
             "🤖 **بوت النشر الخارق v5.0**\n\n"
             "مرحباً بك في لوحة التحكم الرئيسية!\n"
             "• تشفير متقدم جداً (لا يغير النص)\n"
-            "• انضمام لـ 20 رابط دفعة واحدة\n"
-            "• حفظ الحسابات عند تنظيف قاعدة البيانات\n"
-            f"• 📢 المجموعات المحفوظة: {groups_count}\n\n"
+            "• انضمام بطيء كل 100 ثانية\n"
+            "• تحكم كامل بالمدة بين الرسائل\n"
+            f"• 📢 المجموعات المحفوظة: {groups_count}\n"
+            f"• ⏱ المدة بين الرسائل: {message_interval} ثانية\n"
+            f"• 🐢 المدة بين الروابط: {join_interval} ثانية\n\n"
             "اختر من القائمة أدناه:",
             buttons=get_main_menu()
         )
@@ -571,12 +596,44 @@ async def main():
 
         if data == 'back':
             groups_count = await get_all_groups_count()
+            message_interval = get_setting('message_interval', '60')
+            join_interval = get_setting('join_interval', '100')
             await event.edit(
                 "🤖 **بوت النشر الخارق v5.0**\n\n"
-                f"📢 المجموعات المحفوظة: {groups_count}\n\n"
+                f"📢 المجموعات: {groups_count}\n"
+                f"⏱ بين الرسائل: {message_interval} ثانية\n"
+                f"🐢 بين الروابط: {join_interval} ثانية\n\n"
                 "اختر من القائمة أدناه:",
                 buttons=get_main_menu()
             )
+
+        # ─── ضبط المدة بين الرسائل ───
+        elif data == 'set_msg_interval':
+            await event.edit(
+                "⏱ **ضبط المدة بين الرسائل**\n\n"
+                "أرسل عدد الثواني بين كل رسالة وأخرى:\n\n"
+                "• 30 ثانية = سريع نسبياً\n"
+                "• 60 ثانية = طبيعي\n"
+                "• 120 ثانية = بطيء (أكثر أماناً)\n"
+                "• 300 ثانية = بطيء جداً\n\n"
+                "القيمة الحالية: {} ثانية\n\n"
+                "أرسل رقماً (10-600):".format(get_setting('message_interval', '60'))
+            )
+            set_setting('awaiting_msg_interval', 'true')
+
+        # ─── ضبط المدة بين الروابط للانضمام ───
+        elif data == 'set_join_interval':
+            await event.edit(
+                "🐢 **ضبط المدة بين الروابط (انضمام بطيء)**\n\n"
+                "أرسل عدد الثواني بين كل رابط وآخر:\n\n"
+                "• 60 ثانية = سريع (خطر)\n"
+                "• 100 ثانية = بطيء (موصى به)\n"
+                "• 150 ثانية = بطيء جداً (آمن)\n"
+                "• 200 ثانية = آمن جداً\n\n"
+                "القيمة الحالية: {} ثانية\n\n"
+                "أرسل رقماً (30-600):".format(get_setting('join_interval', '100'))
+            )
+            set_setting('awaiting_join_interval', 'true')
 
         # ─── إدارة الرسائل ───
         elif data == 'messages':
@@ -725,7 +782,6 @@ async def main():
         elif data == 'start_posting':
             global is_posting_active
             
-            # التحقق من وجود مجموعات
             groups_count = await get_all_groups_count()
             if groups_count == 0:
                 await event.edit("⚠️ **لا توجد مجموعات للنشر!**\n\n"
@@ -738,7 +794,6 @@ async def main():
                 ])
                 return
             
-            # التحقق من وجود رسائل
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("SELECT content, msg_type FROM messages")
@@ -763,12 +818,13 @@ async def main():
                 ])
                 return
             
+            message_interval = get_setting('message_interval', '60')
             is_posting_active = True
             await event.edit(
                 f"🚀 **تم بدء النشر!**\n\n"
                 f"📢 عدد المجموعات: {groups_count}\n"
                 f"👥 عدد الحسابات: {len(user_clients)}\n"
-                f"⏱ الفاصل الزمني: {get_setting('min_delay', '3')}-{get_setting('max_delay', '8')} ثانية\n\n"
+                f"⏱ المدة بين الرسائل: {message_interval} ثانية\n\n"
                 f"سيتم النشر في المجموعات بالتناوب.",
                 buttons=[
                     [Button.inline("⏹ إيقاف النشر", b"stop_posting")],
@@ -787,14 +843,21 @@ async def main():
         elif data == 'settings':
             min_delay = get_setting('min_delay', '3')
             max_delay = get_setting('max_delay', '8')
+            message_interval = get_setting('message_interval', '60')
+            join_interval = get_setting('join_interval', '100')
             await event.edit(
                 "⚙️ **الإعدادات**\n\n"
-                f"⏱ تأخير أدنى: {min_delay} ثانية\n"
-                f"⏱ تأخير أقصى: {max_delay} ثانية\n\n"
+                f"⏱ تأخير أدنى (متنوع): {min_delay} ثانية\n"
+                f"⏱ تأخير أقصى (متنوع): {max_delay} ثانية\n"
+                f"📨 المدة بين الرسائل: {message_interval} ثانية\n"
+                f"🐢 المدة بين الروابط: {join_interval} ثانية\n\n"
                 "للتعديل أرسل الأمر:\n"
                 "• /set_min_delay <رقم>\n"
-                "• /set_max_delay <رقم>",
+                "• /set_max_delay <رقم>\n"
+                "أو استخدم الأزرار المخصصة للضبط",
                 buttons=[
+                    [Button.inline("⏱ ضبط مدة النشر", b"set_msg_interval")],
+                    [Button.inline("🐢 ضبط مدة الانضمام", b"set_join_interval")],
                     [Button.inline("🔙 رجوع", b"back")]
                 ]
             )
@@ -814,6 +877,8 @@ async def main():
             c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%'")
             fail_count = c.fetchone()[0]
             join_stats = get_join_stats()
+            message_interval = get_setting('message_interval', '60')
+            join_interval = get_setting('join_interval', '100')
             conn.close()
             await event.edit(
                 "📊 **الإحصائيات**\n\n"
@@ -823,7 +888,9 @@ async def main():
                 f"✅ عمليات نشر ناجحة: {success_count}\n"
                 f"❌ عمليات نشر فاشلة: {fail_count}\n"
                 f"🔗 عمليات انضمام: {join_stats['total']}\n"
-                f"🔗 انضمام ناجح: {join_stats['success']}",
+                f"🔗 انضمام ناجح: {join_stats['success']}\n"
+                f"⏱ المدة بين الرسائل: {message_interval} ثانية\n"
+                f"🐢 المدة بين الروابط: {join_interval} ثانية",
                 buttons=[
                     [Button.inline("🔙 رجوع", b"back")]
                 ]
@@ -845,19 +912,22 @@ async def main():
             await event.answer(f"✅ مكافحة الكشف: {'مفعلة' if new_val == 'on' else 'معطلة'}")
             await event.edit("👋 لوحة التحكم:", buttons=get_main_menu())
 
-        # ─── انضمام 20 رابط ───
-        elif data == 'fast_join':
+        # ─── انضمام بطيء (كل 100 ثانية) ───
+        elif data == 'slow_join':
+            join_interval = get_setting('join_interval', '100')
             await event.edit(
-                "🔗 **انضمام لـ 20 رابط دفعة واحدة**\n\n"
-                "أرسل روابط المجموعات (رابط في كل سطر):\n\n"
-                "مثال:\n"
-                "https://t.me/group1\n"
-                "https://t.me/group2\n"
-                "https://t.me/joinchat/xxxxx\n\n"
-                "📌 يمكنك إرسال حتى 20 رابط في رسالة واحدة\n"
-                "استخدم /cancel للإلغاء"
+                f"🐢 **انضمام بطيء جداً**\n\n"
+                f"سيتم الانضمام إلى الروابط كل {join_interval} ثانية\n"
+                f"هذا الإعداد يحمي الحسابات من الحظر\n\n"
+                f"أرسل روابط المجموعات (رابط في كل سطر):\n\n"
+                f"مثال:\n"
+                f"https://t.me/group1\n"
+                f"https://t.me/group2\n\n"
+                f"📌 يمكنك إرسال حتى 20 رابط\n"
+                f"🐢 المدة الحالية: {join_interval} ثانية بين كل رابط\n\n"
+                f"استخدم /cancel للإلغاء"
             )
-            set_setting('awaiting_fast_join', 'true')
+            set_setting('awaiting_slow_join', 'true')
 
         # ─── تقارير الانضمام ───
         elif data == 'join_reports':
@@ -914,6 +984,8 @@ async def main():
                 set_setting('max_delay', '8')
                 set_setting('encryption', 'on')
                 set_setting('anti_detect', 'on')
+                set_setting('message_interval', '60')
+                set_setting('join_interval', '100')
                 
                 await event.edit(
                     f"✅ **تم تنظيف قاعدة البيانات بنجاح!**\n\n"
@@ -942,10 +1014,13 @@ async def main():
             set_setting('awaiting_phone', '')
             set_setting('awaiting_code', '')
             set_setting('awaiting_password', '')
+            set_setting('awaiting_slow_join', '')
             set_setting('awaiting_fast_join', '')
             set_setting('awaiting_del_msg', '')
             set_setting('awaiting_del_acc', '')
             set_setting('awaiting_del_group', '')
+            set_setting('awaiting_msg_interval', '')
+            set_setting('awaiting_join_interval', '')
             if event.sender_id in temp_sessions:
                 try:
                     await temp_sessions[event.sender_id]["client"].disconnect()
@@ -953,6 +1028,34 @@ async def main():
                     pass
                 del temp_sessions[event.sender_id]
             await event.respond("تم الإلغاء", buttons=get_main_menu())
+            return
+
+        # ─── ضبط المدة بين الرسائل ───
+        if get_setting('awaiting_msg_interval') == 'true':
+            set_setting('awaiting_msg_interval', '')
+            try:
+                interval = int(text.strip())
+                if 10 <= interval <= 600:
+                    set_setting('message_interval', str(interval))
+                    await event.respond(f"✅ تم ضبط المدة بين الرسائل إلى {interval} ثانية", buttons=get_main_menu())
+                else:
+                    await event.respond("❌ الرجاء إدخال قيمة بين 10 و 600 ثانية", buttons=get_main_menu())
+            except ValueError:
+                await event.respond("❌ الرجاء إدخال رقم صحيح", buttons=get_main_menu())
+            return
+
+        # ─── ضبط المدة بين الروابط ───
+        if get_setting('awaiting_join_interval') == 'true':
+            set_setting('awaiting_join_interval', '')
+            try:
+                interval = int(text.strip())
+                if 30 <= interval <= 600:
+                    set_setting('join_interval', str(interval))
+                    await event.respond(f"✅ تم ضبط المدة بين الروابط إلى {interval} ثانية\n\nسيتم الانضمام كل {interval} ثانية", buttons=get_main_menu())
+                else:
+                    await event.respond("❌ الرجاء إدخال قيمة بين 30 و 600 ثانية", buttons=get_main_menu())
+            except ValueError:
+                await event.respond("❌ الرجاء إدخال رقم صحيح", buttons=get_main_menu())
             return
 
         # إضافة رسالة
@@ -1041,7 +1144,6 @@ async def main():
                 
                 user_clients[acc_id] = client
                 
-                # استيراد المجموعات من هذا الحساب
                 group_count = await fetch_all_groups_for_account(acc_id, client)
                 
                 del temp_sessions[event.sender_id]
@@ -1123,7 +1225,6 @@ async def main():
                 
                 user_clients[acc_id] = client
                 
-                # استيراد المجموعات من هذا الحساب
                 group_count = await fetch_all_groups_for_account(acc_id, client)
                 
                 del temp_sessions[event.sender_id]
@@ -1142,9 +1243,9 @@ async def main():
                 
             return
 
-        # انضمام سريع لـ 20 رابط
-        if get_setting('awaiting_fast_join') == 'true':
-            set_setting('awaiting_fast_join', '')
+        # ─── انضمام بطيء (كل 100 ثانية) ───
+        if get_setting('awaiting_slow_join') == 'true':
+            set_setting('awaiting_slow_join', '')
             links = text.strip().split('\n')
             links = [l.strip() for l in links if l.strip()]
             
@@ -1152,15 +1253,27 @@ async def main():
                 await event.respond(f"⚠️ يمكنك إرسال 20 رابط كحد أقصى. تم استلام {len(links)} رابط، سيتم معالجة أول 20 فقط.")
                 links = links[:20]
             
-            await event.respond(f"🔗 جاري الانضمام لـ {len(links)} مجموعة...\n⏱ سيستغرق حوالي {len(links) * 15} ثانية")
-            
-            success, failed = await fast_join_groups(links)
+            join_interval = get_setting('join_interval', '100')
+            total_time = len(links) * int(join_interval)
+            minutes = total_time // 60
+            seconds = total_time % 60
             
             await event.respond(
-                f"📊 **نتيجة الانضمام لـ {len(links)} رابط**\n\n"
+                f"🐢 **جاري الانضمام البطيء لـ {len(links)} رابط**\n\n"
+                f"⏱ المدة بين كل رابط: {join_interval} ثانية\n"
+                f"📊 الوقت المتوقع: {minutes} دقيقة و {seconds} ثانية\n"
+                f"🛡 هذا الإعداد يحمي الحسابات من الحظر\n\n"
+                f"جاري البدء..."
+            )
+            
+            success, failed = await slow_join_groups(links)
+            
+            await event.respond(
+                f"📊 **نتيجة الانضمام البطيء لـ {len(links)} رابط**\n\n"
                 f"✅ نجاح: {success}\n"
                 f"❌ فشل: {failed}\n"
-                f"📈 نسبة النجاح: {success/len(links)*100:.1f}%",
+                f"📈 نسبة النجاح: {success/len(links)*100:.1f}%\n"
+                f"🐢 تم باستخدام {join_interval} ثانية بين كل رابط",
                 buttons=get_main_menu()
             )
             return
@@ -1236,6 +1349,34 @@ async def main():
         except (IndexError, ValueError):
             await event.respond("❌ الاستخدام: /set_max_delay <رقم>")
 
+    @bot.on(events.NewMessage(pattern='/set_msg_interval'))
+    async def set_msg_interval_cmd(event):
+        if event.sender_id != ADMIN_ID:
+            return
+        try:
+            val = int(event.raw_text.split()[1])
+            if 10 <= val <= 600:
+                set_setting('message_interval', str(val))
+                await event.respond(f"✅ تم تعيين المدة بين الرسائل: {val} ثانية")
+            else:
+                await event.respond("❌ الرجاء إدخال قيمة بين 10 و 600")
+        except (IndexError, ValueError):
+            await event.respond("❌ الاستخدام: /set_msg_interval <رقم>")
+
+    @bot.on(events.NewMessage(pattern='/set_join_interval'))
+    async def set_join_interval_cmd(event):
+        if event.sender_id != ADMIN_ID:
+            return
+        try:
+            val = int(event.raw_text.split()[1])
+            if 30 <= val <= 600:
+                set_setting('join_interval', str(val))
+                await event.respond(f"✅ تم تعيين المدة بين الروابط: {val} ثانية")
+            else:
+                await event.respond("❌ الرجاء إدخال قيمة بين 30 و 600")
+        except (IndexError, ValueError):
+            await event.respond("❌ الاستخدام: /set_join_interval <رقم>")
+
     @bot.on(events.NewMessage(pattern='/scan_groups'))
     async def scan_groups_command(event):
         if event.sender_id != ADMIN_ID:
@@ -1275,9 +1416,12 @@ async def main():
                     success, fails = await post_to_groups(content, msg_type, media_path)
                     logger.info(f"📤 نشر: نجاح={success}, فشل={fails}")
 
-                    interval = int(get_setting('post_interval', '60'))
-                    logger.info(f"⏱ انتظار {interval} ثانية قبل الجولة التالية...")
-                    await asyncio.sleep(interval)
+                    # انتظار دورة كاملة (حسب المدة بين الرسائل مضروبة في عدد المجموعات تقريباً)
+                    message_interval = int(get_setting('message_interval', '60'))
+                    groups_count = await get_all_groups_count()
+                    cycle_wait = max(message_interval * min(groups_count, 10), 60)
+                    logger.info(f"⏱ انتظار {cycle_wait} ثانية قبل الجولة التالية...")
+                    await asyncio.sleep(cycle_wait)
 
             except Exception as e:
                 logger.error(f"خطأ في حلقة النشر: {e}")
