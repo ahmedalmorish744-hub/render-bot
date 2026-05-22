@@ -69,10 +69,17 @@ def home():
 def health():
     return jsonify({'status': 'healthy'}), 200
 
+# علامة أن خادم الويب جاهز
+web_ready = threading.Event()
+
 def run_web():
-    """تشغيل خادم الويب"""
+    """تشغيل خادم الويب - يربط المنفذ فوراً"""
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.INFO)
+    # استخدام waitress أو gunicorn في الإنتاج، لكن Flask يكفي للبدء
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
+    web_ready.set()
 
 # ==================== نظام التسجيل ====================
 
@@ -1482,20 +1489,49 @@ async def main():
     global bot, start_time
     start_time = datetime.now()
     
-    # تشغيل خادم الويب
-    Thread(target=run_web, daemon=True).start()
-    print("🌐 خادم الويب يعمل")
+    # خادم الويب يعمل بالفعل في الخيط الرئيسي
+    # انتظار قصير للتأكد من جاهزيته
+    import socket
+    port = int(os.environ.get('PORT', 10000))
+    for attempt in range(30):
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.settimeout(1)
+            result = test_sock.connect_ex(('127.0.0.1', port))
+            test_sock.close()
+            if result == 0:
+                print(f"🌐 خادم الويب يعمل على المنفذ {port}")
+                break
+        except:
+            pass
+        await asyncio.sleep(1)
+    else:
+        print(f"⚠️ لم يتم تأكيد ربط المنفذ {port}، لكن المتابعة...")
     
     print("🚀 جاري تشغيل البوت...")
     
-    # استعادة الحسابات المحفوظة
-    await restore_sessions()
+    # استعادة الحسابات المحفوظة (مع معالجة الأخطاء)
+    try:
+        await restore_sessions()
+    except Exception as e:
+        print(f"⚠️ خطأ في استعادة الحسابات: {e}")
     
-    bot = TelegramClient('bot_session', API_ID, API_HASH)
-    await bot.start(bot_token=BOT_TOKEN)
-    
-    me = await bot.get_me()
-    print(f"✅ البوت متصل: @{me.username}")
+    # الاتصال ببوت تيليجرام (مع إعادة المحاولة)
+    max_retries = 5
+    for retry in range(max_retries):
+        try:
+            bot = TelegramClient('bot_session', API_ID, API_HASH)
+            await bot.start(bot_token=BOT_TOKEN)
+            me = await bot.get_me()
+            print(f"✅ البوت متصل: @{me.username}")
+            break
+        except Exception as e:
+            print(f"❌ محاولة {retry+1}/{max_retries} فشلت: {e}")
+            if retry < max_retries - 1:
+                await asyncio.sleep(10)
+            else:
+                print("💥 فشل الاتصال بالبوت! سيتوقف البرنامج.")
+                return
     
     @bot.on(events.NewMessage(pattern='/start'))
     async def start(e):
@@ -1523,11 +1559,27 @@ async def main():
     await bot.run_until_disconnected()
 
 if __name__ == "__main__":
+    # بدء خادم الويب فوراً في الخيط الرئيسي قبل كل شيء
+    # هذا يضمن أن Render يرى المنفذ مفتوحاً
+    port = int(os.environ.get('PORT', 10000))
+    print(f"🌐 بدء خادم الويب على المنفذ {port}...")
+    
+    # تشغيل البوت في خيط خلفي
+    def run_bot():
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("🛑 تم إيقاف البوت")
+        except Exception as e:
+            print(f"💥 خطأ في البوت: {e}")
+            time.sleep(5)
+            os.execl(sys.executable, sys.executable, *sys.argv)
+    
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # خادم الويب في الخيط الرئيسي (هذا ما يربط المنفذ)
     try:
-        asyncio.run(main())
+        app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False, threaded=True)
     except KeyboardInterrupt:
-        print("🛑 تم إيقاف البوت")
-    except Exception as e:
-        logger.error(f"💥 خطأ: {e}")
-        time.sleep(5)
-        os.execl(sys.executable, sys.executable, *sys.argv)
+        print("🛑 تم الإيقاف")
