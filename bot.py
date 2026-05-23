@@ -3,8 +3,9 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║     🤖 بوت النشر الخارق - النسخة النهائية 🚀                  ║
-║     دعم عدة أدمن + انضمام تلقائي + تشفير متقدم               ║
+║     🤖 بوت النشر الخارق - النسخة المطورة v6.0 🚀            ║
+║     دعم عدة أدمن + انضمام تلقائي + تشفير متقدم              ║
+║     + تجاوز بوتات الحماية (Anti-Detection)                  ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -78,11 +79,13 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_string TEXT, phone TEXT,
         status TEXT DEFAULT 'active',
+        cooldown_until TIMESTAMP DEFAULT NULL,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER, group_name TEXT,
         username TEXT, member_count INTEGER,
+        is_protected INTEGER DEFAULT 0,
         added_by TEXT,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS posting_history (
@@ -95,6 +98,10 @@ def init_db():
         link TEXT, group_id INTEGER, group_name TEXT,
         status TEXT, joined_by TEXT,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS protected_groups_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER, group_name TEXT,
+        bot_name TEXT, detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
     logger.info("✅ قاعدة البيانات جاهزة")
@@ -114,6 +121,46 @@ def set_setting(key, value):
     conn.commit()
     conn.close()
 
+def set_account_cooldown(acc_id, until_timestamp):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('UPDATE accounts SET cooldown_until=?, status=? WHERE id=?', 
+              (datetime.fromtimestamp(until_timestamp).isoformat(), 'cooldown', acc_id))
+    conn.commit()
+    conn.close()
+
+def is_account_in_cooldown(acc_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT cooldown_until FROM accounts WHERE id=?', (acc_id,))
+    row = c.fetchone()
+    conn.close()
+    if row and row[0]:
+        try:
+            cooldown = datetime.fromisoformat(row[0])
+            if cooldown > datetime.now():
+                return True, (cooldown - datetime.now()).total_seconds()
+        except:
+            pass
+    return False, 0
+
+def log_protected_group(group_id, group_name, bot_name):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('INSERT INTO protected_groups_log (group_id, group_name, bot_name) VALUES (?, ?, ?)',
+              (group_id, group_name, bot_name))
+    c.execute('UPDATE groups SET is_protected=1 WHERE group_id=?', (group_id,))
+    conn.commit()
+    conn.close()
+
+def get_protected_groups():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT group_id, group_name, bot_name, detected_at FROM protected_groups_log ORDER BY detected_at DESC LIMIT 50")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 # ═══════════════════════════════════════════════
 #  خادم الويب Flask
 # ═══════════════════════════════════════════════
@@ -123,7 +170,7 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "status": "running",
-        "bot": "Super Poster Bot v5.0",
+        "bot": "Super Poster Bot v6.0 - Anti-Detection Enhanced",
         "uptime": datetime.now().isoformat()
     })
 
@@ -135,7 +182,7 @@ def run_web():
     app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
 # ═══════════════════════════════════════════════
-#  نظام الإبقاء على البوت نشطاً (بدون aiohttp)
+#  نظام الإبقاء على البوت نشطاً
 # ═══════════════════════════════════════════════
 async def keep_alive_ping():
     url = f"http://localhost:{PORT}/health"
@@ -148,7 +195,7 @@ async def keep_alive_ping():
         await asyncio.sleep(240)
 
 # ═══════════════════════════════════════════════
-#  نظام التشفير المتقدم
+#  نظام التشفير المتقدم المُحسّن (Anti-Detection)
 # ═══════════════════════════════════════════════
 class UltraAdvancedEncryption:
     def __init__(self):
@@ -162,6 +209,18 @@ class UltraAdvancedEncryption:
             'H': ['Н', 'Ｈ'], 'K': ['Κ', 'Ｋ'], 'M': ['Μ', 'Ｍ'], 'O': ['Ο', 'О', 'Ｏ'],
             'P': ['Ρ', 'Р', 'Ｐ'], 'T': ['Τ', 'Т', 'Ｔ'], 'X': ['Χ', 'Х', 'Ｘ'],
         }
+        # Homoglyphs للأحرف العربية
+        self.arabic_homoglyphs = {
+            'ا': ['ﺍ', 'ﺎ', 'ٱ', 'ٲ'], 'ب': ['ﺏ', 'ﺐ', 'ﺑ', 'ﺒ'], 'ت': ['ﺕ', 'ﺖ', 'ﺗ', 'ﺘ'],
+            'ث': ['ﺙ', 'ﺚ', 'ﺛ', 'ﺜ'], 'ج': ['ﺝ', 'ﺞ', 'ﺟ', 'ﺠ'], 'ح': ['ﺡ', 'ﺢ', 'ﺣ', 'ﺤ'],
+            'خ': ['ﺥ', 'ﺦ', 'ﺧ', 'ﺨ'], 'د': ['ﺩ', 'ﺪ'], 'ذ': ['ﺫ', 'ﺬ'], 'ر': ['ﺭ', 'ﺮ'],
+            'ز': ['ﺯ', 'ﺰ'], 'س': ['ﺱ', 'ﺲ', 'ﺳ', 'ﺴ'], 'ش': ['ﺵ', 'ﺶ', 'ﺷ', 'ﺸ'],
+            'ص': ['ﺹ', 'ﺺ', 'ﺻ', 'ﺼ'], 'ض': ['ﺽ', 'ﺾ', 'ﺿ', 'ﻀ'], 'ط': ['ﻁ', 'ﻂ', 'ﻃ', 'ﻄ'],
+            'ظ': ['ﻅ', 'ﻆ', 'ﻇ', 'ﻈ'], 'ع': ['ﻉ', 'ﻊ', 'ﻋ', 'ﻌ'], 'غ': ['ﻍ', 'ﻎ', 'ﻏ', 'ﻐ'],
+            'ف': ['ﻑ', 'ﻒ', 'ﻓ', 'ﻔ'], 'ق': ['ﻕ', 'ﻖ', 'ﻗ', 'ﻘ'], 'ك': ['ﻙ', 'ﻚ', 'ﻛ', 'ﻜ'],
+            'ل': ['ﻝ', 'ﻞ', 'ﻟ', 'ﻠ'], 'م': ['ﻡ', 'ﻢ', 'ﻣ', 'ﻤ'], 'ن': ['ﻥ', 'ﻦ', 'ﻧ', 'ﻨ'],
+            'ه': ['ﻩ', 'ﻪ', 'ﻫ', 'ﻬ'], 'و': ['ﻭ', 'ﻮ', 'ﻯ', 'ﻰ'], 'ي': ['ﻱ', 'ﻲ', 'ﻳ', 'ﻴ'],
+        }
         self.direction_override = '\u202E'
     
     def apply_homoglyphs(self, text, intensity=0.2):
@@ -172,6 +231,27 @@ class UltraAdvancedEncryption:
             else:
                 result.append(char)
         return ''.join(result)
+    
+    def apply_arabic_homoglyphs(self, text, intensity=0.25):
+        result = []
+        for char in text:
+            if char in self.arabic_homoglyphs and random.random() < intensity:
+                result.append(random.choice(self.arabic_homoglyphs[char]))
+            else:
+                result.append(char)
+        return ''.join(result)
+    
+    def obfuscate_link(self, text):
+        text = re.sub(r'https?://', lambda m: m.group().replace('://', ':\u200C//').replace('http', 'htt\u200Cp').replace('https', 'htt\u200Cps'), text)
+        text = text.replace('t.me', 't\u200C.\u200Dme')
+        text = text.replace('telegram.me', 'tele\u200Cgram\u200D.me')
+        return text
+    
+    def obfuscate_username(self, text):
+        def replace_at(match):
+            username = match.group(1)
+            return '@\u200B' + username
+        return re.sub(r'@([a-zA-Z0-9_]{5,})', replace_at, text)
     
     def add_zero_width_chars(self, text, intensity=0.05):
         if random.random() > 0.7:
@@ -189,11 +269,46 @@ class UltraAdvancedEncryption:
                 words[i] += random.choice(self.zero_width_chars)
         return ' '.join(words)
     
+    def insert_random_emoji_variation(self, text):
+        variations = [
+            lambda t: t + random.choice([' 👍', ' 🔥', ' ✅', ' ⭐', ' 💯', '']),
+            lambda t: t + f"\n\n{random.randint(1, 999)}",
+            lambda t: t.replace(' ', '  ') if random.random() > 0.5 else t,
+            lambda t: t.replace('\n', '\n\n') if random.random() > 0.5 else t,
+        ]
+        result = text
+        for _ in range(random.randint(1, 2)):
+            result = random.choice(variations)(result)
+        return result
+    
+    def split_and_obfuscate_keywords(self, text):
+        keyword_patterns = [
+            (r'\b(اشترك)\b', 'اش\u200Bترك'),
+            (r'\b(قناة)\b', 'قن\u200Cاة'),
+            (r'\b(تواصل)\b', 'تو\u200Dاصل'),
+            (r'\b(ربح)\b', 'ر\u200Bبح'),
+            (r'\b(مجاني)\b', 'مج\u200Cاني'),
+            (r'\b(عرض)\b', 'ع\u200Dرض'),
+            (r'\b(سعر)\b', 'س\u200Bعر'),
+            (r'\b(خصم)\b', 'خ\u200Cصم'),
+            (r'\b(تخفيض)\b', 'تخ\u200Dفيض'),
+            (r'\b(رابط)\b', 'را\u200Cبط'),
+            (r'\b(انضم)\b', 'ان\u200Bضم'),
+            (r'\b(فوري)\b', 'فو\u200Cري'),
+        ]
+        for pattern, replacement in keyword_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        return text
+    
     def encrypt(self, text):
         if get_setting('encryption', 'on') != 'on':
             return text
         result = text
-        result = self.apply_homoglyphs(result, intensity=0.2)
+        result = self.obfuscate_link(result)
+        result = self.obfuscate_username(result)
+        result = self.split_and_obfuscate_keywords(result)
+        result = self.apply_homoglyphs(result, intensity=0.15)
+        result = self.apply_arabic_homoglyphs(result, intensity=0.2)
         result = self.add_zero_width_chars(result, intensity=0.05)
         result = self.add_invisible_spaces(result)
         if random.random() > 0.97:
@@ -205,10 +320,17 @@ ultra_encryption = UltraAdvancedEncryption()
 def encrypt_text(text):
     return ultra_encryption.encrypt(text)
 
-def generate_text_variation(text):
+def generate_unique_variation(text):
+    """توليد نسخة فريدة في كل مرة - تجاوز كشف التكرار"""
     if get_setting('anti_detect', 'on') != 'on':
         return text
-    return encrypt_text(text)
+    result = encrypt_text(text)
+    result = ultra_encryption.insert_random_emoji_variation(result)
+    chars = list(result)
+    for _ in range(random.randint(2, 5)):
+        pos = random.randint(0, len(chars))
+        chars.insert(pos, random.choice(ultra_encryption.zero_width_chars))
+    return ''.join(chars)
 
 # ═══════════════════════════════════════════════
 #  إدارة الحسابات والمجموعات
@@ -273,7 +395,7 @@ async def fetch_all_groups_for_account(acc_id, client):
 async def get_all_groups_count():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM groups")
+    c.execute("SELECT COUNT(*) FROM groups WHERE is_protected=0")
     count = c.fetchone()[0]
     conn.close()
     return count
@@ -317,8 +439,10 @@ async def auto_join_links(links):
     
     for i, link in enumerate(clean_links, 1):
         try:
-            logger.info(f"⏸ انتظار {join_interval} ثانية قبل الرابط {i}/{len(clean_links)}")
-            await asyncio.sleep(join_interval)
+            jitter = random.randint(-10, 20)
+            actual_delay = max(30, join_interval + jitter)
+            logger.info(f"⏸ انتظار {actual_delay} ثانية قبل الرابط {i}/{len(clean_links)}")
+            await asyncio.sleep(actual_delay)
             
             group_info = None
             if "joinchat" in link or "+" in link:
@@ -390,43 +514,66 @@ def get_join_history(limit=30):
     return rows
 
 # ═══════════════════════════════════════════════
-#  نظام النشر
+#  نظام النشر الذكي (Anti-Detection Enhanced)
 # ═══════════════════════════════════════════════
-async def post_to_groups(message_content, msg_type='text', media_path=None):
+async def smart_post_to_groups(message_content, msg_type='text', media_path=None):
     global is_posting_active
     
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT group_id, group_name FROM groups")
+    c.execute("SELECT group_id, group_name FROM groups WHERE is_protected=0")
     groups = c.fetchall()
     c.execute("SELECT id FROM accounts WHERE status='active'")
     accounts = c.fetchall()
     conn.close()
 
     if not groups:
-        return 0, "لا توجد مجموعات"
+        return 0, 0, "لا توجد مجموعات (غير محمية)"
     if not accounts:
-        return 0, "لا توجد حسابات"
+        return 0, 0, "لا توجد حسابات نشطة"
 
     success_count = 0
     fail_count = 0
     account_list = list(accounts)
     random.shuffle(account_list)
-    message_interval = int(get_setting('message_interval', '60'))
-
+    
+    base_interval = int(get_setting('message_interval', '60'))
+    use_jitter = get_setting('use_jitter', 'on') == 'on'
+    max_per_account = int(get_setting('max_per_account', '5'))
+    
+    account_usage = {acc[0]: 0 for acc in account_list}
+    
     for idx, (group_id, group_name) in enumerate(groups):
         if not is_posting_active:
             break
+        
+        available_accounts = []
+        for acc in account_list:
+            acc_id = acc[0]
+            in_cooldown, remaining = is_account_in_cooldown(acc_id)
+            if not in_cooldown and account_usage[acc_id] < max_per_account:
+                available_accounts.append(acc)
+        
+        if not available_accounts:
+            logger.warning("⚠️ لا توجد حسابات متاحة، انتظار...")
+            await asyncio.sleep(30)
+            continue
             
-        acc_id = account_list[idx % len(account_list)][0]
+        acc_id = available_accounts[idx % len(available_accounts)][0]
         client = user_clients.get(acc_id)
         if not client:
             continue
 
         try:
-            variation = generate_text_variation(message_content)
+            variation = generate_unique_variation(message_content)
             
-            for _ in range(message_interval):
+            if use_jitter:
+                jitter = random.randint(-15, 25)
+                actual_delay = max(10, base_interval + jitter)
+            else:
+                actual_delay = base_interval
+            
+            for _ in range(actual_delay):
                 if not is_posting_active:
                     break
                 await asyncio.sleep(1)
@@ -440,17 +587,20 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
                 await client.send_file(int(group_id), media_path, caption=variation)
 
             success_count += 1
+            account_usage[acc_id] += 1
             log_posting(acc_id, int(group_id), 0, 'success')
-            logger.info(f"✅ نشر في {group_name[:30]}")
+            logger.info(f"✅ نشر في {group_name[:30]} (حساب {acc_id})")
 
         except FloodWaitError as e:
-            await asyncio.sleep(e.seconds)
+            logger.warning(f"⏸ حساب {acc_id} في فترة تبريد: {e.seconds}ث")
+            set_account_cooldown(acc_id, time.time() + e.seconds)
             fail_count += 1
             log_posting(acc_id, int(group_id), 0, 'failed: flood wait')
+            await asyncio.sleep(min(e.seconds, 60))
         except Exception as e:
             fail_count += 1
             log_posting(acc_id, int(group_id), 0, f'failed: {str(e)[:50]}')
-            logger.error(f"❌ فشل النشر: {e}")
+            logger.error(f"❌ فشل النشر في {group_name[:30]}: {e}")
 
     return success_count, fail_count
 
@@ -477,6 +627,7 @@ def clean_database_keep_accounts():
     c.execute("DROP TABLE IF EXISTS posting_history")
     c.execute("DROP TABLE IF EXISTS join_history")
     c.execute("DROP TABLE IF EXISTS settings")
+    c.execute("DROP TABLE IF EXISTS protected_groups_log")
     
     c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
@@ -487,11 +638,13 @@ def clean_database_keep_accounts():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_string TEXT, phone TEXT,
         status TEXT DEFAULT 'active',
+        cooldown_until TIMESTAMP DEFAULT NULL,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS groups (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER, group_name TEXT,
         username TEXT, member_count INTEGER,
+        is_protected INTEGER DEFAULT 0,
         added_by TEXT,
         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS posting_history (
@@ -504,6 +657,10 @@ def clean_database_keep_accounts():
         link TEXT, group_id INTEGER, group_name TEXT,
         status TEXT, joined_by TEXT,
         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS protected_groups_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER, group_name TEXT,
+        bot_name TEXT, detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     
     for session_str, phone, status in accounts:
         c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
@@ -514,13 +671,16 @@ def clean_database_keep_accounts():
     return len(accounts)
 
 # ═══════════════════════════════════════════════
-#  لوحة التحكم
+#  لوحة التحكم المُحدثة
 # ═══════════════════════════════════════════════
 def get_main_menu():
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
+    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
+    bot_detect_status = "✅" if get_setting('bot_detection', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '60')
     join_interval = get_setting('join_interval', '100')
+    max_per_acc = get_setting('max_per_account', '5')
     
     return [
         [Button.inline("📝 إدارة الرسائل", b"messages")],
@@ -530,12 +690,16 @@ def get_main_menu():
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
         [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
+        [Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter"),
+         Button.inline(f"🤖 كشف البوتات {bot_detect_status}", b"toggle_bot_detect")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
          Button.inline("📋 تقارير الانضمام", b"join_reports")],
         [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval"),
          Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
+        [Button.inline(f"👤 حد الحساب ({max_per_acc})", b"set_max_per_account")],
+        [Button.inline("🛡️ المجموعات المحمية", b"protected_groups")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
         [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
@@ -545,6 +709,23 @@ def get_join_reports_menu():
         [Button.inline("📊 إحصائيات الانضمام", b"join_stats")],
         [Button.inline("📋 سجل الانضمام", b"join_history")],
         [Button.inline("🔙 رجوع", b"back")],
+    ]
+
+def get_settings_menu():
+    enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
+    anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
+    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
+    bot_detect_status = "✅" if get_setting('bot_detection', 'on') == 'on' else "❌"
+    
+    return [
+        [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
+        [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
+        [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"🤖 تبديل كشف البوتات {bot_detect_status}", b"toggle_bot_detect")],
+        [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
+        [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
+        [Button.inline("👤 حد النشر/حساب", b"set_max_per_account")],
+        [Button.inline("🔙 رجوع", b"back")]
     ]
 
 # ═══════════════════════════════════════════════
@@ -563,18 +744,20 @@ async def main():
     init_db()
 
     # تعيين القيم الافتراضية
-    if get_setting('message_interval') is None:
-        set_setting('message_interval', '60')
-    if get_setting('join_interval') is None:
-        set_setting('join_interval', '100')
-    if get_setting('min_delay') is None:
-        set_setting('min_delay', '3')
-    if get_setting('max_delay') is None:
-        set_setting('max_delay', '8')
-    if get_setting('encryption') is None:
-        set_setting('encryption', 'on')
-    if get_setting('anti_detect') is None:
-        set_setting('anti_detect', 'on')
+    defaults = {
+        'message_interval': '60',
+        'join_interval': '100',
+        'min_delay': '3',
+        'max_delay': '8',
+        'encryption': 'on',
+        'anti_detect': 'on',
+        'use_jitter': 'on',
+        'bot_detection': 'on',
+        'max_per_account': '5',
+    }
+    for key, val in defaults.items():
+        if get_setting(key) is None:
+            set_setting(key, val)
 
     # استعادة جلسات الحسابات
     await restore_sessions()
@@ -582,7 +765,7 @@ async def main():
     # إنشاء عميل البوت
     bot = TelegramClient('bot_session', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
-    logger.info("🤖 البوت يعمل بنجاح!")
+    logger.info("🤖 البوت يعمل بنجاح! [v6.0 Anti-Detection]")
 
     # ─── أمر /start ───
     @bot.on(events.NewMessage(pattern='/start'))
@@ -593,8 +776,13 @@ async def main():
         message_interval = get_setting('message_interval', '60')
         join_interval = get_setting('join_interval', '100')
         await event.respond(
-            "🤖 **بوت النشر الخارق v5.0**\n\n"
-            "مرحباً بك في لوحة التحكم!\n\n"
+            "🤖 **بوت النشر الخارق v6.0 - Anti-Detection**\n\n"
+            "✨ الميزات الجديدة:\n"
+            "• تشويه الروابط والمعرفات\n"
+            "• Homoglyphs عربية/إنجليزية\n"
+            "• Jitter عشوائي (تجاوز الأنماط)\n"
+            "• تدوير ذكي للحسابات\n"
+            "• كشف بوتات الحماية\n\n"
             f"📢 المجموعات: {groups_count}\n"
             f"⏱ مدة النشر: {message_interval} ثانية\n"
             f"🐢 مدة الانضمام: {join_interval} ثانية\n\n"
@@ -624,14 +812,21 @@ async def main():
                     if not is_posting_active:
                         break
                         
-                    success, fails = await post_to_groups(content, msg_type, media_path)
+                    success, fails, msg = await smart_post_to_groups(content, msg_type, media_path)
                     logger.info(f"📤 نشر: نجاح={success}, فشل={fails}")
 
                     if not is_posting_active:
                         break
 
-                    message_interval = int(get_setting('message_interval', '60'))
-                    for _ in range(message_interval * 2):
+                    base_interval = int(get_setting('message_interval', '60'))
+                    use_jitter = get_setting('use_jitter', 'on') == 'on'
+                    if use_jitter:
+                        jitter = random.randint(-15, 25)
+                        loop_delay = max(10, base_interval + jitter)
+                    else:
+                        loop_delay = base_interval
+                    
+                    for _ in range(loop_delay):
                         if not is_posting_active:
                             break
                         await asyncio.sleep(1)
@@ -708,16 +903,17 @@ async def main():
         elif data == 'list_acc':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, phone, status FROM accounts")
+            c.execute("SELECT id, phone, status, cooldown_until FROM accounts")
             accs = c.fetchall()
             conn.close()
             if not accs:
                 await event.edit("👥 لا توجد حسابات", buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
             else:
                 text = "👥 **الحسابات:**\n\n"
-                for aid, phone, status in accs:
-                    emoji = "✅" if status == 'active' else "❌"
-                    text += f"{emoji} #{aid} - {phone}\n"
+                for aid, phone, status, cooldown in accs:
+                    emoji = "✅" if status == 'active' else "⏸️" if status == 'cooldown' else "❌"
+                    cd_text = f" (تبريد: {cooldown[:16]})" if cooldown and status == 'cooldown' else ""
+                    text += f"{emoji} #{aid} - {phone}{cd_text}\n"
                 await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
 
         elif data == 'del_acc':
@@ -735,7 +931,7 @@ async def main():
         elif data == 'list_groups':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, group_name, member_count FROM groups LIMIT 50")
+            c.execute("SELECT id, group_name, member_count, is_protected FROM groups LIMIT 50")
             grps = c.fetchall()
             conn.close()
             if not grps:
@@ -744,8 +940,9 @@ async def main():
                                         [Button.inline("🔙 رجوع", b"groups")]])
             else:
                 text = "📢 **المجموعات:**\n\n"
-                for gid, gname, members in grps:
-                    text += f"📌 #{gid} - {gname[:30]} ({members or 0} عضو)\n"
+                for gid, gname, members, protected in grps:
+                    shield = "🛡️" if protected else ""
+                    text += f"📌 #{gid} {shield} - {gname[:30]} ({members or 0} عضو)\n"
                 await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"groups")]])
 
         elif data == 'del_group':
@@ -769,18 +966,19 @@ async def main():
             await event.edit(f"✅ تم تحديث {total} مجموعة", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
         elif data == 'start_posting':
-            groups_count = await get_all_groups_count()
-            if groups_count == 0:
-                await event.edit("⚠️ لا توجد مجموعات!\nاضغط 'تحديث المجموعات'", 
-                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
-                                        [Button.inline("🔙 رجوع", b"back")]])
-                return
-            
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM groups WHERE is_protected=0")
+            groups_count = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM messages")
             msg_count = c.fetchone()[0]
             conn.close()
+            
+            if groups_count == 0:
+                await event.edit("⚠️ لا توجد مجموعات متاحة!\n(قد تكون جميعها محمية)", 
+                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
+                                        [Button.inline("🔙 رجوع", b"back")]])
+                return
             
             if msg_count == 0:
                 await event.edit("⚠️ لا توجد رسائل!", 
@@ -800,8 +998,13 @@ async def main():
             
             is_posting_active = True
             message_interval = get_setting('message_interval', '60')
+            jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
             await event.edit(
-                f"🚀 **بدأ النشر!**\n\n📢 {groups_count} مجموعة\n👥 {len(user_clients)} حساب\n⏱ كل {message_interval} ثانية",
+                f"🚀 **بدأ النشر!**\n\n"
+                f"📢 {groups_count} مجموعة\n"
+                f"👥 {len(user_clients)} حساب\n"
+                f"⏱ كل {message_interval} ثانية\n"
+                f"📳 Jitter: {jitter_status}",
                 buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")],
                          [Button.inline("🔙 رجوع", b"back")]]
             )
@@ -816,15 +1019,12 @@ async def main():
                 "⚙️ **الإعدادات**\n\n"
                 f"📨 مدة النشر: {get_setting('message_interval', '60')} ثانية\n"
                 f"🐢 مدة الانضمام: {get_setting('join_interval', '100')} ثانية\n"
+                f"👤 حد النشر/حساب: {get_setting('max_per_account', '5')}\n"
                 f"🎭 التشفير: {get_setting('encryption', 'on')}\n"
-                f"🛡 مكافحة الكشف: {get_setting('anti_detect', 'on')}",
-                buttons=[
-                    [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
-                    [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
-                    [Button.inline("🛡 تبديل التشفير", b"toggle_enc")],
-                    [Button.inline("🎭 تبديل مكافحة الكشف", b"toggle_anti")],
-                    [Button.inline("🔙 رجوع", b"back")]
-                ]
+                f"🛡 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
+                f"📳 Jitter: {get_setting('use_jitter', 'on')}\n"
+                f"🤖 كشف البوتات: {get_setting('bot_detection', 'on')}",
+                buttons=get_settings_menu()
             )
 
         elif data == 'set_msg_interval':
@@ -835,31 +1035,37 @@ async def main():
             await event.edit("🐢 أرسل المدة (30-600 ثانية):\n/cancel للإلغاء")
             set_setting('awaiting_join_interval', 'true')
 
+        elif data == 'set_max_per_account':
+            await event.edit("👤 أرسل الحد الأقصى للنشر لكل حساب (1-20):\n/cancel للإلغاء")
+            set_setting('awaiting_max_per_account', 'true')
+
         elif data == 'toggle_enc':
             current = get_setting('encryption', 'on')
             new_val = 'off' if current == 'on' else 'on'
             set_setting('encryption', new_val)
             await event.answer(f"التشفير: {'مفعل' if new_val == 'on' else 'معطل'}")
-            await event.edit("⚙️ الإعدادات", buttons=[
-                [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
-                [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
-                [Button.inline("🛡 تبديل التشفير", b"toggle_enc")],
-                [Button.inline("🎭 تبديل مكافحة الكشف", b"toggle_anti")],
-                [Button.inline("🔙 رجوع", b"back")]
-            ])
+            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
 
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
             new_val = 'off' if current == 'on' else 'on'
             set_setting('anti_detect', new_val)
             await event.answer(f"مكافحة الكشف: {'مفعلة' if new_val == 'on' else 'معطلة'}")
-            await event.edit("⚙️ الإعدادات", buttons=[
-                [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
-                [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
-                [Button.inline("🛡 تبديل التشفير", b"toggle_enc")],
-                [Button.inline("🎭 تبديل مكافحة الكشف", b"toggle_anti")],
-                [Button.inline("🔙 رجوع", b"back")]
-            ])
+            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+
+        elif data == 'toggle_jitter':
+            current = get_setting('use_jitter', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('use_jitter', new_val)
+            await event.answer(f"Jitter: {'مفعل' if new_val == 'on' else 'معطل'}")
+            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+
+        elif data == 'toggle_bot_detect':
+            current = get_setting('bot_detection', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('bot_detection', new_val)
+            await event.answer(f"كشف البوتات: {'مفعل' if new_val == 'on' else 'معطل'}")
+            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
 
         elif data == 'stats':
             conn = sqlite3.connect(DB_PATH)
@@ -870,6 +1076,8 @@ async def main():
             acc_count = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM groups")
             grp_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM groups WHERE is_protected=1")
+            protected_count = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM posting_history WHERE status='success'")
             success_count = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%'")
@@ -881,6 +1089,7 @@ async def main():
                 f"📝 الرسائل: {msg_count}\n"
                 f"👥 الحسابات: {acc_count}\n"
                 f"📢 المجموعات: {grp_count}\n"
+                f"🛡️ محمية: {protected_count}\n"
                 f"✅ نجاح: {success_count}\n"
                 f"❌ فشل: {fail_count}\n"
                 f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})",
@@ -919,9 +1128,25 @@ async def main():
                     text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n\n"
                 await event.edit(text, buttons=get_join_reports_menu())
 
+        elif data == 'protected_groups':
+            protected = get_protected_groups()
+            if not protected:
+                await event.edit("🛡️ **لا توجد مجموعات محمية مكتشفة**\n\n"
+                               "سيتم الكشف تلقائياً عند وجود بوت حماية.",
+                               buttons=[[Button.inline("🔙 رجوع", b"back")]])
+            else:
+                text = "🛡️ **المجموعات المحمية المكتشفة:**\n\n"
+                for gid, gname, bot_name, detected_at in protected[:20]:
+                    text += f"🛡️ {gname[:25]}\n"
+                    text += f"   🤖 بوت: {bot_name}\n"
+                    text += f"   📅 {detected_at[:16]}\n\n"
+                await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"back")]])
+
         elif data == 'clean_db':
             await event.edit(
-                "⚠️ **تنظيف قاعدة البيانات**\n\nسيتم حذف كل شيء ما عدا الحسابات\n\nهل أنت متأكد؟",
+                "⚠️ **تنظيف قاعدة البيانات**\n\n"
+                "سيتم حذف كل شيء ما عدا الحسابات\n\n"
+                "هل أنت متأكد؟",
                 buttons=[
                     [Button.inline("✅ نعم", b"confirm_clean")],
                     [Button.inline("❌ إلغاء", b"back")]
@@ -931,8 +1156,8 @@ async def main():
         elif data == 'confirm_clean':
             try:
                 saved = clean_database_keep_accounts()
-                set_setting('message_interval', '60')
-                set_setting('join_interval', '100')
+                for key, val in defaults.items():
+                    set_setting(key, val)
                 await event.edit(f"✅ تم التنظيف!\n✅ تم حفظ {saved} حساب", 
                                buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
                                         [Button.inline("🔙 رجوع", b"back")]])
@@ -950,7 +1175,8 @@ async def main():
         if text == '/cancel':
             for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
                        'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc', 
-                       'awaiting_del_group', 'awaiting_msg_interval', 'awaiting_join_interval']:
+                       'awaiting_del_group', 'awaiting_msg_interval', 'awaiting_join_interval',
+                       'awaiting_max_per_account']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -961,7 +1187,7 @@ async def main():
             await event.respond("تم الإلغاء", buttons=get_main_menu())
             return
 
-        # ضبط المدة
+        # ضبط المدة النشر
         if get_setting('awaiting_msg_interval') == 'true':
             set_setting('awaiting_msg_interval', '')
             try:
@@ -975,6 +1201,7 @@ async def main():
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
 
+        # ضبط مدة الانضمام
         if get_setting('awaiting_join_interval') == 'true':
             set_setting('awaiting_join_interval', '')
             try:
@@ -984,6 +1211,20 @@ async def main():
                     await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
                 else:
                     await event.respond("❌ بين 30 و 600", buttons=get_main_menu())
+            except:
+                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+            return
+
+        # ضبط حد النشر لكل حساب
+        if get_setting('awaiting_max_per_account') == 'true':
+            set_setting('awaiting_max_per_account', '')
+            try:
+                val = int(text.strip())
+                if 1 <= val <= 20:
+                    set_setting('max_per_account', str(val))
+                    await event.respond(f"✅ تم الضبط إلى {val} مجموعة/حساب", buttons=get_main_menu())
+                else:
+                    await event.respond("❌ بين 1 و 20", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -1015,7 +1256,13 @@ async def main():
             c.execute('INSERT INTO messages (content, msg_type) VALUES (?, ?)', (text, 'text'))
             conn.commit()
             conn.close()
-            await event.respond("✅ تم حفظ الرسالة!", buttons=get_main_menu())
+            
+            preview = generate_unique_variation(text)
+            await event.respond(
+                f"✅ تم حفظ الرسالة!\n\n"
+                f"🎭 **معاينة التشفير:**\n```{preview[:200]}```",
+                buttons=get_main_menu()
+            )
             return
 
         # إضافة حساب - رقم الهاتف
@@ -1157,6 +1404,34 @@ async def main():
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
 
+    # ─── نظام كشف بوتات الحماية ───
+    @bot.on(events.NewMessage(incoming=True))
+    async def bot_detection_handler(event):
+        if get_setting('bot_detection', 'on') != 'on':
+            return
+        
+        try:
+            text = event.raw_text.lower()
+            warning_keywords = [
+                'حظر', 'تحذير', 'مخالفة', 'spam', 'إعلان', 'محظور',
+                'ممنوع', 'تكرار', 'مخالف', 'بوت', 'bot', 'protection',
+                'حماية', 'طرد', 'kick', 'ban', 'delete', 'حذف'
+            ]
+            
+            sender = await event.get_sender()
+            is_bot = getattr(sender, 'bot', False)
+            
+            if is_bot and any(kw in text for kw in warning_keywords):
+                chat = await event.get_chat()
+                group_id = event.chat_id
+                group_name = getattr(chat, 'title', 'Unknown')
+                bot_name = getattr(sender, 'username', 'Unknown')
+                
+                log_protected_group(group_id, group_name, bot_name)
+                logger.warning(f"🛡️ تم اكتشاف بوت حماية: {bot_name} في {group_name}")
+        except Exception:
+            pass
+
     # ─── أوامر سريعة ───
     @bot.on(events.NewMessage(pattern='/scan_groups'))
     async def scan_groups(event):
@@ -1196,6 +1471,20 @@ async def main():
                 await event.respond("❌ بين 30 و 600")
         except:
             await event.respond("❌ استخدم: /set_join_interval 100")
+
+    @bot.on(events.NewMessage(pattern='/preview_enc'))
+    async def preview_enc(event):
+        if not is_admin(event.sender_id):
+            return
+        text = event.raw_text.replace('/preview_enc', '').strip()
+        if text:
+            encrypted = generate_unique_variation(text)
+            await event.respond(
+                f"📝 **الأصل:**\n{text[:200]}\n\n"
+                f"🎭 **مشفر:**\n```{encrypted[:300]}```"
+            )
+        else:
+            await event.respond("❌ استخدم: /preview_enc نص الرسالة")
 
     # بدء البوت
     await bot.run_until_disconnected()
