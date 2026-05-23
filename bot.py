@@ -36,12 +36,11 @@ API_HASH = os.environ.get('API_HASH', '')
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
 PORT = int(os.environ.get('PORT', '10000'))
 
-# قراءة ADMIN_IDS كقائمة (متغير جديد)
+# قراءة ADMIN_IDS كقائمة
 ADMIN_IDS_RAW = os.environ.get('ADMIN_IDS', os.environ.get('ADMIN_ID', '0'))
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(',') if x.strip().isdigit()]
 
 def is_admin(user_id):
-    """التحقق مما إذا كان المستخدم من الأدمن"""
     return user_id in ADMIN_IDS
 
 if not ADMIN_IDS:
@@ -69,8 +68,7 @@ DB_PATH = os.environ.get('DB_PATH', 'bot_database.db')
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY, value TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         content TEXT, media_path TEXT, msg_type TEXT DEFAULT 'text',
@@ -209,7 +207,6 @@ class UltraAdvancedEncryption:
             'H': ['Н', 'Ｈ'], 'K': ['Κ', 'Ｋ'], 'M': ['Μ', 'Ｍ'], 'O': ['Ο', 'О', 'Ｏ'],
             'P': ['Ρ', 'Р', 'Ｐ'], 'T': ['Τ', 'Т', 'Ｔ'], 'X': ['Χ', 'Х', 'Ｘ'],
         }
-        # Homoglyphs للأحرف العربية
         self.arabic_homoglyphs = {
             'ا': ['ﺍ', 'ﺎ', 'ٱ', 'ٲ'], 'ب': ['ﺏ', 'ﺐ', 'ﺑ', 'ﺒ'], 'ت': ['ﺕ', 'ﺖ', 'ﺗ', 'ﺘ'],
             'ث': ['ﺙ', 'ﺚ', 'ﺛ', 'ﺜ'], 'ج': ['ﺝ', 'ﺞ', 'ﺟ', 'ﺠ'], 'ح': ['ﺡ', 'ﺢ', 'ﺣ', 'ﺤ'],
@@ -321,7 +318,6 @@ def encrypt_text(text):
     return ultra_encryption.encrypt(text)
 
 def generate_unique_variation(text):
-    """توليد نسخة فريدة في كل مرة - تجاوز كشف التكرار"""
     if get_setting('anti_detect', 'on') != 'on':
         return text
     result = encrypt_text(text)
@@ -396,6 +392,22 @@ async def get_all_groups_count():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM groups WHERE is_protected=0")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+async def get_all_messages_count():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM messages")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+async def get_active_accounts_count():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM accounts WHERE status='active'")
     count = c.fetchone()[0]
     conn.close()
     return count
@@ -528,9 +540,9 @@ async def smart_post_to_groups(message_content, msg_type='text', media_path=None
     conn.close()
 
     if not groups:
-        return 0, 0, "لا توجد مجموعات (غير محمية)"
+        return 0, "لا توجد مجموعات (غير محمية)"
     if not accounts:
-        return 0, 0, "لا توجد حسابات نشطة"
+        return 0, "لا توجد حسابات نشطة"
 
     success_count = 0
     fail_count = 0
@@ -732,6 +744,8 @@ def get_settings_menu():
 #  البوت الرئيسي
 # ═══════════════════════════════════════════════
 async def main():
+    global is_posting_active
+    
     # بدء خادم الويب
     Thread(target=run_web, daemon=True).start()
     logger.info(f"🌐 خادم الويب يعمل على المنفذ {PORT}")
@@ -791,8 +805,10 @@ async def main():
         )
 
     # ─── حلقة النشر ───
-    async def auto_posting_loop(bot):
+    async def auto_posting_loop():
         global is_posting_active
+        logger.info("🔄 بدء حلقة النشر...")
+        
         while is_posting_active:
             try:
                 if not is_posting_active:
@@ -805,6 +821,7 @@ async def main():
                 conn.close()
 
                 if not msgs:
+                    logger.warning("⚠️ لا توجد رسائل للنشر")
                     is_posting_active = False
                     break
 
@@ -812,7 +829,8 @@ async def main():
                     if not is_posting_active:
                         break
                         
-                    success, fails, msg = await smart_post_to_groups(content, msg_type, media_path)
+                    logger.info("📤 بدء جولة نشر جديدة...")
+                    success, fails = await smart_post_to_groups(content, msg_type, media_path)
                     logger.info(f"📤 نشر: نجاح={success}, فشل={fails}")
 
                     if not is_posting_active:
@@ -832,14 +850,39 @@ async def main():
                         await asyncio.sleep(1)
 
             except Exception as e:
-                logger.error(f"خطأ: {e}")
+                logger.error(f"خطأ في حلقة النشر: {e}")
                 await asyncio.sleep(5)
         
-        logger.info("✅ توقف النشر")
+        logger.info("✅ توقفت حلقة النشر")
+
+    # ─── أمر اختبار ───
+    @bot.on(events.NewMessage(pattern='/test'))
+    async def test_handler(event):
+        if not is_admin(event.sender_id):
+            return
+        await event.respond("✅ البوت يعمل! أرسل /start للقائمة الرئيسية")
+
+    # ─── أمر فحص البيانات ───
+    @bot.on(events.NewMessage(pattern='/check'))
+    async def check_handler(event):
+        if not is_admin(event.sender_id):
+            return
+        groups = await get_all_groups_count()
+        msgs = await get_all_messages_count()
+        accs = await get_active_accounts_count()
+        await event.respond(
+            f"📊 **بيانات البوت:**\n"
+            f"• المجموعات: {groups}\n"
+            f"• الرسائل: {msgs}\n"
+            f"• الحسابات النشطة: {accs}\n"
+            f"• حالة النشر: {'🟢 نشط' if is_posting_active else '🔴 متوقف'}"
+        )
 
     # ─── معالج الأزرار ───
     @bot.on(events.CallbackQuery)
     async def callback_handler(event):
+        global is_posting_active
+        
         if not is_admin(event.sender_id):
             await event.answer("⛔ غير مصرح", alert=True)
             return
@@ -965,54 +1008,64 @@ async def main():
                 total += count
             await event.edit(f"✅ تم تحديث {total} مجموعة", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
+        # ─── بدء النشر ───
         elif data == 'start_posting':
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT COUNT(*) FROM groups WHERE is_protected=0")
-            groups_count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM messages")
-            msg_count = c.fetchone()[0]
-            conn.close()
+            await event.answer("🚀 جاري تجهيز النشر...", alert=True)
+            
+            groups_count = await get_all_groups_count()
+            msg_count = await get_all_messages_count()
+            acc_count = await get_active_accounts_count()
+            
+            # رسالة تشخيصية
+            await event.respond(
+                f"📊 **فحص المتطلبات:**\n"
+                f"• المجموعات: {groups_count}\n"
+                f"• الرسائل: {msg_count}\n"
+                f"• الحسابات النشطة: {acc_count}\n"
+                f"• حالة النشر: {'🟢 يعمل' if is_posting_active else '🔴 متوقف'}"
+            )
             
             if groups_count == 0:
-                await event.edit("⚠️ لا توجد مجموعات متاحة!\n(قد تكون جميعها محمية)", 
+                await event.edit("⚠️ لا توجد مجموعات!\nاضغط 'تحديث المجموعات' أولاً", 
                                buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
                                         [Button.inline("🔙 رجوع", b"back")]])
                 return
             
             if msg_count == 0:
-                await event.edit("⚠️ لا توجد رسائل!", 
+                await event.edit("⚠️ لا توجد رسائل!\nأضف رسالة أولاً", 
                                buttons=[[Button.inline("➕ إضافة", b"add_msg")],
                                         [Button.inline("🔙 رجوع", b"back")]])
                 return
             
-            if not user_clients:
-                await event.edit("⚠️ لا توجد حسابات!", 
+            if acc_count == 0:
+                await event.edit("⚠️ لا توجد حسابات نشطة!\nأضف حساباً أولاً", 
                                buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
                                         [Button.inline("🔙 رجوع", b"back")]])
                 return
             
             if is_posting_active:
-                await event.edit("⚠️ النشر يعمل!", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+                await event.edit("⚠️ النشر يعمل بالفعل!", buttons=[[Button.inline("🔙 رجوع", b"back")]])
                 return
             
             is_posting_active = True
             message_interval = get_setting('message_interval', '60')
             jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
+            
             await event.edit(
                 f"🚀 **بدأ النشر!**\n\n"
                 f"📢 {groups_count} مجموعة\n"
-                f"👥 {len(user_clients)} حساب\n"
+                f"👥 {acc_count} حساب\n"
                 f"⏱ كل {message_interval} ثانية\n"
-                f"📳 Jitter: {jitter_status}",
+                f"📳 Jitter: {jitter_status}\n\n"
+                f"✅ النشر قيد التشغيل الآن!",
                 buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")],
                          [Button.inline("🔙 رجوع", b"back")]]
             )
-            asyncio.create_task(auto_posting_loop(bot))
+            asyncio.create_task(auto_posting_loop())
 
         elif data == 'stop_posting':
             is_posting_active = False
-            await event.edit("⏹ **تم الإيقاف**", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+            await event.edit("⏹ **تم إيقاف النشر**", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
         elif data == 'settings':
             await event.edit(
@@ -1087,19 +1140,18 @@ async def main():
             await event.edit(
                 f"📊 **الإحصائيات**\n\n"
                 f"📝 الرسائل: {msg_count}\n"
-                f"👥 الحسابات: {acc_count}\n"
+                f"👥 الحسابات النشطة: {acc_count}\n"
                 f"📢 المجموعات: {grp_count}\n"
                 f"🛡️ محمية: {protected_count}\n"
-                f"✅ نجاح: {success_count}\n"
-                f"❌ فشل: {fail_count}\n"
+                f"✅ نشر ناجح: {success_count}\n"
+                f"❌ نشر فاشل: {fail_count}\n"
                 f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
 
         elif data == 'slow_join':
-            join_interval = get_setting('join_interval', '100')
             await event.edit(
-                f"🐢 **انضمام بطيء**\n\nأرسل الروابط (كل رابط في سطر):\n/cancel للإلغاء"
+                "🐢 **انضمام بطيء**\n\nأرسل الروابط (كل رابط في سطر):\n/cancel للإلغاء"
             )
             set_setting('awaiting_slow_join', 'true')
 
@@ -1487,6 +1539,7 @@ async def main():
             await event.respond("❌ استخدم: /preview_enc نص الرسالة")
 
     # بدء البوت
+    logger.info("✅ البوت جاهز للاستخدام!")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
