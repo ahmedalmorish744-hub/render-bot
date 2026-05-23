@@ -4,7 +4,7 @@
 """
 ╔═══════════════════════════════════════════════════════════════╗
 ║     🤖 بوت النشر الخارق - النسخة النهائية 🚀                  ║
-║     انضمام تلقائي فوري + 20 رابط لكل رسالة                   ║
+║     دعم عدة أدمن + انضمام تلقائي + تشفير متقدم               ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -16,7 +16,7 @@ import random
 import sqlite3
 import asyncio
 import logging
-import aiohttp
+import urllib.request
 from threading import Thread
 from datetime import datetime
 
@@ -33,10 +33,22 @@ from flask import Flask, jsonify
 API_ID = int(os.environ.get('API_ID', '0'))
 API_HASH = os.environ.get('API_HASH', '')
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
-ADMIN_ID = int(os.environ.get('ADMIN_ID', '0'))
+PORT = int(os.environ.get('PORT', '10000'))
 
-if not all([API_ID, API_HASH, BOT_TOKEN, ADMIN_ID]):
-    logging.error("⚠️ يجب تعيين جميع متغيرات البيئة: API_ID, API_HASH, BOT_TOKEN, ADMIN_ID")
+# قراءة ADMIN_IDS كقائمة (متغير جديد)
+ADMIN_IDS_RAW = os.environ.get('ADMIN_IDS', os.environ.get('ADMIN_ID', '0'))
+ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(',') if x.strip().isdigit()]
+
+def is_admin(user_id):
+    """التحقق مما إذا كان المستخدم من الأدمن"""
+    return user_id in ADMIN_IDS
+
+if not ADMIN_IDS:
+    logging.error("⚠️ يجب تعيين ADMIN_IDS أو ADMIN_ID في متغيرات البيئة")
+    exit(1)
+
+if not all([API_ID, API_HASH, BOT_TOKEN]):
+    logging.error("⚠️ يجب تعيين API_ID, API_HASH, BOT_TOKEN")
     exit(1)
 
 # ═══════════════════════════════════════════════
@@ -120,21 +132,17 @@ def health():
     return jsonify({"status": "healthy"}), 200
 
 def run_web():
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
 # ═══════════════════════════════════════════════
-#  نظام الإبقاء على البوت نشطاً (Self Ping)
+#  نظام الإبقاء على البوت نشطاً (بدون aiohttp)
 # ═══════════════════════════════════════════════
 async def keep_alive_ping():
-    port = os.environ.get('PORT', 10000)
-    url = f"http://localhost:{port}/health"
+    url = f"http://localhost:{PORT}/health"
     while True:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info("🔄 [Keep Alive] البوت نشط")
+            urllib.request.urlopen(url, timeout=10)
+            logger.info("🔄 [Keep Alive] البوت نشط")
         except Exception as e:
             logger.error(f"❌ [Keep Alive] خطأ: {e}")
         await asyncio.sleep(240)
@@ -208,7 +216,7 @@ def generate_text_variation(text):
 user_clients = {}
 temp_sessions = {}
 is_posting_active = False
-is_joining_active = False  # متغير لمنع تداخل عمليات الانضمام
+is_joining_active = False
 
 async def restore_sessions():
     conn = sqlite3.connect(DB_PATH)
@@ -271,17 +279,13 @@ async def get_all_groups_count():
     return count
 
 # ═══════════════════════════════════════════════
-#  نظام الانضمام التلقائي الفوري (20 رابط لكل رسالة)
+#  نظام الانضمام التلقائي
 # ═══════════════════════════════════════════════
-async def auto_join_links(links, user_id=None):
-    """
-    انضمام تلقائي فوري للروابط
-    كل رابط ينضم له بعد المدة المحددة في الإعدادات
-    """
+async def auto_join_links(links):
     global is_joining_active
     
     if is_joining_active:
-        return 0, 0, "يوجد عملية انضمام قيد التنفيذ حالياً، انتظر قليلاً"
+        return 0, 0, "يوجد عملية انضمام قيد التنفيذ"
     
     is_joining_active = True
     
@@ -289,15 +293,13 @@ async def auto_join_links(links, user_id=None):
         is_joining_active = False
         return 0, 0, "لا توجد حسابات نشطة"
     
-    # اختيار حساب عشوائي للانضمام
     acc_id = random.choice(list(user_clients.keys()))
     client = user_clients[acc_id]
     
     success_count = 0
     failed_count = 0
-    join_interval = int(get_setting('join_interval', '100'))  # المدة بين الروابط من الإعدادات
+    join_interval = int(get_setting('join_interval', '100'))
     
-    # تنظيف الروابط
     clean_links = []
     for link in links:
         link = link.strip()
@@ -308,11 +310,10 @@ async def auto_join_links(links, user_id=None):
         is_joining_active = False
         return 0, 0, "لا توجد روابط صالحة"
     
-    # تحديد عدد الروابط (حد أقصى 20)
     if len(clean_links) > 20:
         clean_links = clean_links[:20]
     
-    logger.info(f"🚀 بدء الانضمام التلقائي لـ {len(clean_links)} رابط (المدة: {join_interval} ثانية بين كل رابط)")
+    logger.info(f"🚀 بدء الانضمام لـ {len(clean_links)} رابط")
     
     for i, link in enumerate(clean_links, 1):
         try:
@@ -320,16 +321,13 @@ async def auto_join_links(links, user_id=None):
             await asyncio.sleep(join_interval)
             
             group_info = None
-            
             if "joinchat" in link or "+" in link:
-                # رابط دعوة
                 hash_part = link.split('/')[-1].replace('+', '')
                 updates = await client(ImportChatInviteRequest(hash_part))
                 if updates.chats:
                     chat = updates.chats[0]
                     group_info = (chat.id, chat.title)
             else:
-                # رابط عادي
                 username = link.split('/')[-1]
                 entity = await client.get_entity(username)
                 if entity:
@@ -339,26 +337,22 @@ async def auto_join_links(links, user_id=None):
             success_count += 1
             logger.info(f"✅ [{i}/{len(clean_links)}] تم الانضمام إلى {link[:50]}")
             
-            # حفظ سجل الانضمام وإضافة المجموعة
             if group_info:
                 group_id, group_name = group_info
                 save_join_history(link, group_id, group_name[:50], 'success', f"account_{acc_id}")
                 add_group_to_db(group_id, group_name)
             
         except FloodWaitError as e:
-            wait_time = e.seconds
-            logger.warning(f"⏳ FloodWait: انتظار {wait_time} ثانية...")
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(e.seconds)
             failed_count += 1
-            save_join_history(link, 0, "غير معروف", f'failed: flood wait', f"account_{acc_id}")
-            
+            save_join_history(link, 0, "غير معروف", 'failed: flood wait', f"account_{acc_id}")
         except Exception as e:
             failed_count += 1
-            logger.error(f"❌ [{i}/{len(clean_links)}] فشل الانضمام لـ {link[:50]}: {e}")
+            logger.error(f"❌ [{i}/{len(clean_links)}] فشل: {e}")
             save_join_history(link, 0, "غير معروف", f'failed: {str(e)[:50]}', f"account_{acc_id}")
     
     is_joining_active = False
-    return success_count, failed_count, f"تم الانضمام لـ {success_count} من {len(clean_links)} رابط"
+    return success_count, failed_count, f"تم الانضمام لـ {success_count} من {len(clean_links)}"
 
 def save_join_history(link, group_id, group_name, status, joined_by):
     conn = sqlite3.connect(DB_PATH)
@@ -396,7 +390,7 @@ def get_join_history(limit=30):
     return rows
 
 # ═══════════════════════════════════════════════
-#  نظام النشر مع إمكانية الإيقاف الفوري
+#  نظام النشر
 # ═══════════════════════════════════════════════
 async def post_to_groups(message_content, msg_type='text', media_path=None):
     global is_posting_active
@@ -410,15 +404,14 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
     conn.close()
 
     if not groups:
-        return 0, "لا توجد مجموعات مسجلة"
+        return 0, "لا توجد مجموعات"
     if not accounts:
-        return 0, "لا توجد حسابات نشطة"
+        return 0, "لا توجد حسابات"
 
     success_count = 0
     fail_count = 0
     account_list = list(accounts)
     random.shuffle(account_list)
-
     message_interval = int(get_setting('message_interval', '60'))
 
     for idx, (group_id, group_name) in enumerate(groups):
@@ -427,7 +420,6 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
             
         acc_id = account_list[idx % len(account_list)][0]
         client = user_clients.get(acc_id)
-
         if not client:
             continue
 
@@ -449,16 +441,16 @@ async def post_to_groups(message_content, msg_type='text', media_path=None):
 
             success_count += 1
             log_posting(acc_id, int(group_id), 0, 'success')
-            logger.info(f"✅ [{success_count}] نشر في {group_name[:30]}")
+            logger.info(f"✅ نشر في {group_name[:30]}")
 
         except FloodWaitError as e:
             await asyncio.sleep(e.seconds)
             fail_count += 1
-            log_posting(acc_id, int(group_id), 0, f'failed: flood wait')
+            log_posting(acc_id, int(group_id), 0, 'failed: flood wait')
         except Exception as e:
             fail_count += 1
             log_posting(acc_id, int(group_id), 0, f'failed: {str(e)[:50]}')
-            logger.error(f"❌ فشل النشر في {group_name}: {e}")
+            logger.error(f"❌ فشل النشر: {e}")
 
     return success_count, fail_count
 
@@ -471,7 +463,7 @@ def log_posting(account_id, group_id, message_id, status):
     conn.close()
 
 # ═══════════════════════════════════════════════
-#  تنظيف قاعدة البيانات مع حفظ الحسابات
+#  تنظيف قاعدة البيانات
 # ═══════════════════════════════════════════════
 def clean_database_keep_accounts():
     conn = sqlite3.connect(DB_PATH)
@@ -522,7 +514,7 @@ def clean_database_keep_accounts():
     return len(accounts)
 
 # ═══════════════════════════════════════════════
-#  لوحة التحكم الرئيسية
+#  لوحة التحكم
 # ═══════════════════════════════════════════════
 def get_main_menu():
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
@@ -540,9 +532,10 @@ def get_main_menu():
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
-        [Button.inline(f"🐢 مدة الانضمام ({join_interval}ث)", b"set_join_interval"),
+        [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
          Button.inline("📋 تقارير الانضمام", b"join_reports")],
-        [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval")],
+        [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval"),
+         Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
         [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
@@ -560,7 +553,7 @@ def get_join_reports_menu():
 async def main():
     # بدء خادم الويب
     Thread(target=run_web, daemon=True).start()
-    logger.info("🌐 خادم الويب يعمل على المنفذ 10000")
+    logger.info(f"🌐 خادم الويب يعمل على المنفذ {PORT}")
     
     # بدء نظام الإبقاء على البوت نشطاً
     asyncio.create_task(keep_alive_ping())
@@ -594,30 +587,24 @@ async def main():
     # ─── أمر /start ───
     @bot.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
-        if event.sender_id != ADMIN_ID:
+        if not is_admin(event.sender_id):
             return
         groups_count = await get_all_groups_count()
         message_interval = get_setting('message_interval', '60')
         join_interval = get_setting('join_interval', '100')
         await event.respond(
             "🤖 **بوت النشر الخارق v5.0**\n\n"
-            "مرحباً بك في لوحة التحكم الرئيسية!\n\n"
-            "📌 **مميزات البوت:**\n"
-            "• انضمام تلقائي فوري عند إرسال الروابط\n"
-            "• 20 رابط كحد أقصى لكل رسالة\n"
-            "• مدة بين الروابط قابلة للتعديل\n"
-            "• تشفير متقدم جداً\n\n"
+            "مرحباً بك في لوحة التحكم!\n\n"
             f"📢 المجموعات: {groups_count}\n"
             f"⏱ مدة النشر: {message_interval} ثانية\n"
             f"🐢 مدة الانضمام: {join_interval} ثانية\n\n"
-            "اختر من القائمة أدناه:",
+            "اختر من القائمة:",
             buttons=get_main_menu()
         )
 
-    # ─── حلقة النشر التلقائي ───
+    # ─── حلقة النشر ───
     async def auto_posting_loop(bot):
         global is_posting_active
-        
         while is_posting_active:
             try:
                 if not is_posting_active:
@@ -630,7 +617,6 @@ async def main():
                 conn.close()
 
                 if not msgs:
-                    logger.warning("⚠️ لا توجد رسائل للنشر")
                     is_posting_active = False
                     break
 
@@ -638,9 +624,8 @@ async def main():
                     if not is_posting_active:
                         break
                         
-                    logger.info("📤 بدء جولة نشر جديدة...")
                     success, fails = await post_to_groups(content, msg_type, media_path)
-                    logger.info(f"📤 النتائج: نجاح={success}, فشل={fails}")
+                    logger.info(f"📤 نشر: نجاح={success}, فشل={fails}")
 
                     if not is_posting_active:
                         break
@@ -652,32 +637,16 @@ async def main():
                         await asyncio.sleep(1)
 
             except Exception as e:
-                logger.error(f"خطأ في حلقة النشر: {e}")
+                logger.error(f"خطأ: {e}")
                 await asyncio.sleep(5)
         
-        logger.info("✅ حلقة النشر توقفت تماماً")
+        logger.info("✅ توقف النشر")
 
-    # ─── أمر الإيقاف القسري ───
-    @bot.on(events.NewMessage(pattern='/force_stop'))
-    async def force_stop_handler(event):
-        if event.sender_id != ADMIN_ID:
-            return
-        
-        global is_posting_active
-        is_posting_active = False
-        
-        await event.respond(
-            "🛑 **تم إيقاف النشر فوراً!**\n\n"
-            "يمكنك بدء النشر مجدداً من القائمة",
-            buttons=get_main_menu()
-        )
-
-    # ─── التعامل مع الأزرار ───
+    # ─── معالج الأزرار ───
     @bot.on(events.CallbackQuery)
     async def callback_handler(event):
-        global is_posting_active
-        
-        if event.sender_id != ADMIN_ID:
+        if not is_admin(event.sender_id):
+            await event.answer("⛔ غير مصرح", alert=True)
             return
 
         data = event.data.decode('utf-8')
@@ -687,25 +656,23 @@ async def main():
             message_interval = get_setting('message_interval', '60')
             join_interval = get_setting('join_interval', '100')
             await event.edit(
-                "🤖 **بوت النشر الخارق v5.0**\n\n"
+                "🤖 **لوحة التحكم**\n\n"
                 f"📢 المجموعات: {groups_count}\n"
                 f"⏱ مدة النشر: {message_interval} ثانية\n"
-                f"🐢 مدة الانضمام: {join_interval} ثانية\n\n"
-                "اختر من القائمة أدناه:",
+                f"🐢 مدة الانضمام: {join_interval} ثانية",
                 buttons=get_main_menu()
             )
 
-        # ─── إدارة الرسائل ───
         elif data == 'messages':
             await event.edit("📝 **إدارة الرسائل**", buttons=[
-                [Button.inline("➕ إضافة رسالة", b"add_msg")],
-                [Button.inline("📋 عرض الرسائل", b"list_msg")],
-                [Button.inline("🗑 حذف رسالة", b"del_msg")],
+                [Button.inline("➕ إضافة", b"add_msg")],
+                [Button.inline("📋 عرض", b"list_msg")],
+                [Button.inline("🗑 حذف", b"del_msg")],
                 [Button.inline("🔙 رجوع", b"back")],
             ])
 
         elif data == 'add_msg':
-            await event.edit("➕ أرسل نص الرسالة الجديدة:\nاستخدم /cancel للإلغاء")
+            await event.edit("➕ أرسل نص الرسالة:\n/cancel للإلغاء")
             set_setting('awaiting_msg', 'true')
 
         elif data == 'list_msg':
@@ -717,26 +684,25 @@ async def main():
             if not msgs:
                 await event.edit("📋 لا توجد رسائل", buttons=[[Button.inline("🔙 رجوع", b"messages")]])
             else:
-                text = "📋 **الرسائل المحفوظة:**\n\n"
+                text = "📋 **الرسائل:**\n\n"
                 for mid, content, mtype in msgs:
                     text += f"#{mid} [{mtype}] - {content}...\n"
                 await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"messages")]])
 
         elif data == 'del_msg':
-            await event.edit("🗑 أرسل رقم الرسالة للحذف:\nاستخدم /cancel للإلغاء")
+            await event.edit("🗑 أرسل رقم الرسالة:\n/cancel للإلغاء")
             set_setting('awaiting_del_msg', 'true')
 
-        # ─── إدارة الحسابات ───
         elif data == 'accounts':
             await event.edit("👥 **إدارة الحسابات**", buttons=[
-                [Button.inline("➕ إضافة حساب", b"add_acc_phone")],
-                [Button.inline("📋 عرض الحسابات", b"list_acc")],
-                [Button.inline("🗑 حذف حساب", b"del_acc")],
+                [Button.inline("➕ إضافة", b"add_acc")],
+                [Button.inline("📋 عرض", b"list_acc")],
+                [Button.inline("🗑 حذف", b"del_acc")],
                 [Button.inline("🔙 رجوع", b"back")],
             ])
 
-        elif data == 'add_acc_phone':
-            await event.edit("➕ أرسل رقم الهاتف مع رمز البلد (مثال: +966512345678)\nاستخدم /cancel للإلغاء")
+        elif data == 'add_acc':
+            await event.edit("➕ أرسل رقم الهاتف (مثال: +966512345678)\n/cancel للإلغاء")
             set_setting('awaiting_phone', 'true')
 
         elif data == 'list_acc':
@@ -751,17 +717,16 @@ async def main():
                 text = "👥 **الحسابات:**\n\n"
                 for aid, phone, status in accs:
                     emoji = "✅" if status == 'active' else "❌"
-                    text += f"{emoji} #{aid} - {phone or 'بدون رقم'}\n"
+                    text += f"{emoji} #{aid} - {phone}\n"
                 await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
 
         elif data == 'del_acc':
-            await event.edit("🗑 أرسل رقم الحساب للحذف:\nاستخدم /cancel للإلغاء")
+            await event.edit("🗑 أرسل رقم الحساب:\n/cancel للإلغاء")
             set_setting('awaiting_del_acc', 'true')
 
-        # ─── إدارة المجموعات ───
         elif data == 'groups':
             await event.edit("📢 **إدارة المجموعات**", buttons=[
-                [Button.inline("📋 عرض المجموعات", b"list_groups")],
+                [Button.inline("📋 عرض", b"list_groups")],
                 [Button.inline("🗑 حذف مجموعة", b"del_group")],
                 [Button.inline("🗑 حذف الكل", b"del_all_groups")],
                 [Button.inline("🔙 رجوع", b"back")],
@@ -774,8 +739,8 @@ async def main():
             grps = c.fetchall()
             conn.close()
             if not grps:
-                await event.edit("📢 لا توجد مجموعات\nاضغط 'تحديث المجموعات' أولاً", 
-                               buttons=[[Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                await event.edit("📢 لا توجد مجموعات\nاضغط 'تحديث المجموعات'", 
+                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
                                         [Button.inline("🔙 رجوع", b"groups")]])
             else:
                 text = "📢 **المجموعات:**\n\n"
@@ -784,7 +749,7 @@ async def main():
                 await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"groups")]])
 
         elif data == 'del_group':
-            await event.edit("🗑 أرسل رقم المجموعة للحذف:\nاستخدم /cancel للإلغاء")
+            await event.edit("🗑 أرسل رقم المجموعة:\n/cancel للإلغاء")
             set_setting('awaiting_del_group', 'true')
 
         elif data == 'del_all_groups':
@@ -793,23 +758,21 @@ async def main():
             c.execute("DELETE FROM groups")
             conn.commit()
             conn.close()
-            await event.edit("🗑 تم حذف جميع المجموعات", buttons=[[Button.inline("🔙 رجوع", b"groups")]])
+            await event.edit("🗑 تم الحذف", buttons=[[Button.inline("🔙 رجوع", b"groups")]])
 
-        # ─── تحديث المجموعات ───
         elif data == 'refresh_groups':
-            await event.edit("🔄 جاري تحديث المجموعات...")
+            await event.edit("🔄 جاري التحديث...")
             total = 0
             for acc_id, client in user_clients.items():
                 count = await fetch_all_groups_for_account(acc_id, client)
                 total += count
             await event.edit(f"✅ تم تحديث {total} مجموعة", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
-        # ─── التحكم في النشر ───
         elif data == 'start_posting':
             groups_count = await get_all_groups_count()
             if groups_count == 0:
-                await event.edit("⚠️ لا توجد مجموعات!\nاضغط 'تحديث المجموعات' أولاً", 
-                               buttons=[[Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                await event.edit("⚠️ لا توجد مجموعات!\nاضغط 'تحديث المجموعات'", 
+                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
                                         [Button.inline("🔙 رجوع", b"back")]])
                 return
             
@@ -820,49 +783,41 @@ async def main():
             conn.close()
             
             if msg_count == 0:
-                await event.edit("⚠️ لا توجد رسائل!\nأضف رسالة أولاً", 
-                               buttons=[[Button.inline("➕ إضافة رسالة", b"add_msg")],
+                await event.edit("⚠️ لا توجد رسائل!", 
+                               buttons=[[Button.inline("➕ إضافة", b"add_msg")],
                                         [Button.inline("🔙 رجوع", b"back")]])
                 return
             
             if not user_clients:
-                await event.edit("⚠️ لا توجد حسابات!\nأضف حساباً أولاً", 
-                               buttons=[[Button.inline("➕ إضافة حساب", b"add_acc_phone")],
+                await event.edit("⚠️ لا توجد حسابات!", 
+                               buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
                                         [Button.inline("🔙 رجوع", b"back")]])
                 return
             
             if is_posting_active:
-                await event.edit("⚠️ النشر يعمل بالفعل!", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+                await event.edit("⚠️ النشر يعمل!", buttons=[[Button.inline("🔙 رجوع", b"back")]])
                 return
             
             is_posting_active = True
             message_interval = get_setting('message_interval', '60')
             await event.edit(
-                f"🚀 **بدأ النشر!**\n\n"
-                f"📢 {groups_count} مجموعة\n"
-                f"👥 {len(user_clients)} حساب\n"
-                f"⏱ كل {message_interval} ثانية\n\n"
-                f"لإيقاف النشر اضغط الزر أدناه",
-                buttons=[[Button.inline("⏹ إيقاف النشر", b"stop_posting")],
+                f"🚀 **بدأ النشر!**\n\n📢 {groups_count} مجموعة\n👥 {len(user_clients)} حساب\n⏱ كل {message_interval} ثانية",
+                buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")],
                          [Button.inline("🔙 رجوع", b"back")]]
             )
             asyncio.create_task(auto_posting_loop(bot))
 
         elif data == 'stop_posting':
             is_posting_active = False
-            logger.info("🛑 تم إيقاف النشر")
-            await event.edit("⏹ **تم إيقاف النشر**\n\nتوقف خلال ثوانٍ", 
-                           buttons=[[Button.inline("🔙 رجوع", b"back")]])
+            await event.edit("⏹ **تم الإيقاف**", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
-        # ─── الإعدادات ───
         elif data == 'settings':
             await event.edit(
                 "⚙️ **الإعدادات**\n\n"
                 f"📨 مدة النشر: {get_setting('message_interval', '60')} ثانية\n"
                 f"🐢 مدة الانضمام: {get_setting('join_interval', '100')} ثانية\n"
                 f"🎭 التشفير: {get_setting('encryption', 'on')}\n"
-                f"🛡 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n\n"
-                "استخدم الأزرار للتعديل:",
+                f"🛡 مكافحة الكشف: {get_setting('anti_detect', 'on')}",
                 buttons=[
                     [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
                     [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
@@ -873,11 +828,11 @@ async def main():
             )
 
         elif data == 'set_msg_interval':
-            await event.edit("⏱ أرسل المدة بين الرسائل (10-600 ثانية):\nاستخدم /cancel للإلغاء")
+            await event.edit("⏱ أرسل المدة (10-600 ثانية):\n/cancel للإلغاء")
             set_setting('awaiting_msg_interval', 'true')
 
         elif data == 'set_join_interval':
-            await event.edit("🐢 أرسل المدة بين الروابط (30-600 ثانية):\nاستخدم /cancel للإلغاء")
+            await event.edit("🐢 أرسل المدة (30-600 ثانية):\n/cancel للإلغاء")
             set_setting('awaiting_join_interval', 'true')
 
         elif data == 'toggle_enc':
@@ -906,7 +861,6 @@ async def main():
                 [Button.inline("🔙 رجوع", b"back")]
             ])
 
-        # ─── الإحصائيات ───
         elif data == 'stats':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
@@ -927,13 +881,19 @@ async def main():
                 f"📝 الرسائل: {msg_count}\n"
                 f"👥 الحسابات: {acc_count}\n"
                 f"📢 المجموعات: {grp_count}\n"
-                f"✅ نشر ناجح: {success_count}\n"
-                f"❌ نشر فاشل: {fail_count}\n"
+                f"✅ نجاح: {success_count}\n"
+                f"❌ فشل: {fail_count}\n"
                 f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
 
-        # ─── تقارير الانضمام ───
+        elif data == 'slow_join':
+            join_interval = get_setting('join_interval', '100')
+            await event.edit(
+                f"🐢 **انضمام بطيء**\n\nأرسل الروابط (كل رابط في سطر):\n/cancel للإلغاء"
+            )
+            set_setting('awaiting_slow_join', 'true')
+
         elif data == 'join_reports':
             await event.edit("🔗 **تقارير الانضمام**", buttons=get_join_reports_menu())
 
@@ -942,8 +902,8 @@ async def main():
             await event.edit(
                 f"📊 **إحصائيات الانضمام**\n\n"
                 f"📌 المجموع: {stats['total']}\n"
-                f"✅ ناجح: {stats['success']}\n"
-                f"❌ فاشل: {stats['failed']}\n"
+                f"✅ نجاح: {stats['success']}\n"
+                f"❌ فشل: {stats['failed']}\n"
                 f"📈 النسبة: {stats['success']/(stats['total'] or 1)*100:.1f}%",
                 buttons=get_join_reports_menu()
             )
@@ -956,21 +916,14 @@ async def main():
                 text = "🔗 **آخر عمليات الانضمام:**\n\n"
                 for link, group_name, joined_at, joined_by, status in history[:15]:
                     icon = "✅" if status == 'success' else "❌"
-                    time_str = datetime.fromisoformat(joined_at).strftime('%H:%M:%S') if joined_at else "?"
-                    text += f"{icon} {time_str} - {group_name[:25]}\n   🔗 {link[:40]}\n\n"
+                    text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n\n"
                 await event.edit(text, buttons=get_join_reports_menu())
 
-        # ─── تنظيف قاعدة البيانات ───
         elif data == 'clean_db':
             await event.edit(
-                "⚠️ **تحذير: تنظيف قاعدة البيانات**\n\n"
-                "سيتم حذف:\n"
-                "❌ الرسائل - ❌ المجموعات\n"
-                "❌ سجل النشر - ❌ سجل الانضمام\n\n"
-                "✅ **سيتم حفظ الحسابات**\n\n"
-                "هل أنت متأكد؟",
+                "⚠️ **تنظيف قاعدة البيانات**\n\nسيتم حذف كل شيء ما عدا الحسابات\n\nهل أنت متأكد؟",
                 buttons=[
-                    [Button.inline("✅ نعم، نظف", b"confirm_clean")],
+                    [Button.inline("✅ نعم", b"confirm_clean")],
                     [Button.inline("❌ إلغاء", b"back")]
                 ]
             )
@@ -980,24 +933,24 @@ async def main():
                 saved = clean_database_keep_accounts()
                 set_setting('message_interval', '60')
                 set_setting('join_interval', '100')
-                await event.edit(f"✅ تم التنظيف!\n✅ تم حفظ {saved} حساب\n🔄 اضغط تحديث المجموعات", 
-                               buttons=[[Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                await event.edit(f"✅ تم التنظيف!\n✅ تم حفظ {saved} حساب", 
+                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")],
                                         [Button.inline("🔙 رجوع", b"back")]])
             except Exception as e:
                 await event.edit(f"❌ فشل: {e}", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
-    # ─── معالج الرسائل النصية (الانضمام التلقائي الفوري) ───
+    # ─── معالج الرسائل النصية ───
     @bot.on(events.NewMessage)
     async def message_handler(event):
-        if event.sender_id != ADMIN_ID:
+        if not is_admin(event.sender_id):
             return
 
         text = event.raw_text
 
         if text == '/cancel':
             for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
-                       'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_del_group', 
-                       'awaiting_msg_interval', 'awaiting_join_interval']:
+                       'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc', 
+                       'awaiting_del_group', 'awaiting_msg_interval', 'awaiting_join_interval']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -1008,72 +961,51 @@ async def main():
             await event.respond("تم الإلغاء", buttons=get_main_menu())
             return
 
-        # ضبط المدة بين الرسائل
+        # ضبط المدة
         if get_setting('awaiting_msg_interval') == 'true':
             set_setting('awaiting_msg_interval', '')
             try:
                 val = int(text.strip())
                 if 10 <= val <= 600:
                     set_setting('message_interval', str(val))
-                    await event.respond(f"✅ تم ضبط مدة النشر إلى {val} ثانية", buttons=get_main_menu())
+                    await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ القيمة بين 10 و 600", buttons=get_main_menu())
+                    await event.respond("❌ بين 10 و 600", buttons=get_main_menu())
             except:
-                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
+                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
 
-        # ضبط المدة بين الروابط
         if get_setting('awaiting_join_interval') == 'true':
             set_setting('awaiting_join_interval', '')
             try:
                 val = int(text.strip())
                 if 30 <= val <= 600:
                     set_setting('join_interval', str(val))
-                    await event.respond(f"✅ تم ضبط مدة الانضمام إلى {val} ثانية", buttons=get_main_menu())
+                    await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ القيمة بين 30 و 600", buttons=get_main_menu())
+                    await event.respond("❌ بين 30 و 600", buttons=get_main_menu())
             except:
-                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
+                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
 
-        # ═══════════════════════════════════════════════
-        # الانضمام التلقائي الفوري - عند إرسال أي رابط
-        # ═══════════════════════════════════════════════
-        
-        # استخراج جميع الروابط من الرسالة
+        # الروابط - انضمام تلقائي
         links = re.findall(r'(https?://t\.me/(?:joinchat/|\+)?[a-zA-Z0-9_\-]+)', text)
-        
         if links and user_clients:
-            # تنظيف الروابط
-            clean_links = []
-            for link in links:
-                link = link.strip()
-                if link not in clean_links:
-                    clean_links.append(link)
+            join_interval = get_setting('join_interval', '100')
+            total_links = len(links[:20])
             
-            if clean_links:
-                join_interval = get_setting('join_interval', '100')
-                total_links = len(clean_links[:20])
-                
-                await event.respond(
-                    f"🚀 **تم اكتشاف {total_links} رابط**\n\n"
-                    f"🐢 جاري الانضمام التلقائي...\n"
-                    f"⏱ المدة بين كل رابط: {join_interval} ثانية\n"
-                    f"📊 الوقت المتوقع: {total_links * int(join_interval)} ثانية\n\n"
-                    f"سيتم الانضمام تلقائياً..."
-                )
-                
-                success, failed, msg = await auto_join_links(clean_links)
-                
-                await event.respond(
-                    f"📊 **نتيجة الانضمام التلقائي**\n\n"
-                    f"✅ نجاح: {success}\n"
-                    f"❌ فشل: {failed}\n"
-                    f"📈 النسبة: {success/(total_links or 1)*100:.1f}%\n"
-                    f"🐢 تم باستخدام {join_interval} ثانية بين كل رابط",
-                    buttons=get_main_menu()
-                )
-                return
+            await event.respond(
+                f"🚀 **تم اكتشاف {total_links} رابط**\n"
+                f"🐢 جاري الانضمام كل {join_interval} ثانية..."
+            )
+            
+            success, failed, msg = await auto_join_links(links)
+            
+            await event.respond(
+                f"📊 **النتيجة:**\n✅ نجاح: {success}\n❌ فشل: {failed}\n📈 {success/(total_links or 1)*100:.1f}%",
+                buttons=get_main_menu()
+            )
+            return
 
         # إضافة رسالة
         if get_setting('awaiting_msg') == 'true':
@@ -1086,7 +1018,7 @@ async def main():
             await event.respond("✅ تم حفظ الرسالة!", buttons=get_main_menu())
             return
 
-        # إضافة حساب - الخطوة 1: رقم الهاتف
+        # إضافة حساب - رقم الهاتف
         if get_setting('awaiting_phone') == 'true':
             set_setting('awaiting_phone', '')
             phone = text.strip()
@@ -1103,18 +1035,18 @@ async def main():
                     "phone_code_hash": result.phone_code_hash
                 }
                 set_setting('awaiting_code', 'true')
-                await event.respond(f"📩 تم إرسال الرمز إلى {phone}\nأرسل الرمز المكون من 5 أرقام:")
+                await event.respond(f"📩 تم إرسال الرمز إلى {phone}\nأرسل الرمز:")
             except Exception as e:
                 await event.respond(f"❌ {str(e)[:200]}")
             return
 
-        # إضافة حساب - الخطوة 2: رمز التحقق
+        # إضافة حساب - رمز التحقق
         if get_setting('awaiting_code') == 'true':
             set_setting('awaiting_code', '')
             code = text.strip()
             session_data = temp_sessions.get(event.sender_id)
             if not session_data:
-                await event.respond("❌ انتهت الجلسة، ابدأ من جديد")
+                await event.respond("❌ انتهت الجلسة")
                 return
             try:
                 await session_data["client"].sign_in(
@@ -1132,23 +1064,23 @@ async def main():
                 user_clients[acc_id] = session_data["client"]
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
-                await event.respond(f"✅ تم إضافة {me.phone}\n📢 تم استيراد {group_count} مجموعة", buttons=get_main_menu())
+                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except SessionPasswordNeededError:
                 set_setting('awaiting_password', 'true')
-                await event.respond("🔐 يتطلب كلمة مرور التحقق بخطوتين\nأرسل كلمة المرور:")
+                await event.respond("🔐 أرسل كلمة المرور:")
             except PhoneCodeInvalidError:
-                await event.respond("❌ رمز غير صحيح! ابدأ من جديد")
+                await event.respond("❌ رمز غير صحيح!")
             except Exception as e:
                 await event.respond(f"❌ {str(e)[:200]}")
             return
 
-        # إضافة حساب - الخطوة 3: كلمة المرور
+        # إضافة حساب - كلمة المرور
         if get_setting('awaiting_password') == 'true':
             set_setting('awaiting_password', '')
             password = text.strip()
             session_data = temp_sessions.get(event.sender_id)
             if not session_data:
-                await event.respond("❌ انتهت الجلسة، ابدأ من جديد")
+                await event.respond("❌ انتهت الجلسة")
                 return
             try:
                 await session_data["client"].sign_in(password=password)
@@ -1163,9 +1095,18 @@ async def main():
                 user_clients[acc_id] = session_data["client"]
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
-                await event.respond(f"✅ تم إضافة {me.phone}\n📢 تم استيراد {group_count} مجموعة", buttons=get_main_menu())
+                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except Exception as e:
-                await event.respond(f"❌ كلمة المرور غير صحيحة: {e}")
+                await event.respond(f"❌ {e}")
+            return
+
+        # انضمام بطيء يدوي
+        if get_setting('awaiting_slow_join') == 'true':
+            set_setting('awaiting_slow_join', '')
+            links = [l.strip() for l in text.split('\n') if l.strip()]
+            if links:
+                success, failed, msg = await auto_join_links(links)
+                await event.respond(f"✅ نجاح: {success}\n❌ فشل: {failed}", buttons=get_main_menu())
             return
 
         # حذف رسالة
@@ -1196,7 +1137,7 @@ async def main():
                 c.execute('DELETE FROM accounts WHERE id=?', (acc_id,))
                 conn.commit()
                 conn.close()
-                await event.respond("✅ تم حذف الحساب", buttons=get_main_menu())
+                await event.respond("✅ تم الحذف", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -1211,7 +1152,7 @@ async def main():
                 c.execute('DELETE FROM groups WHERE id=?', (grp_id,))
                 conn.commit()
                 conn.close()
-                await event.respond("✅ تم حذف المجموعة", buttons=get_main_menu())
+                await event.respond("✅ تم الحذف", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -1219,9 +1160,9 @@ async def main():
     # ─── أوامر سريعة ───
     @bot.on(events.NewMessage(pattern='/scan_groups'))
     async def scan_groups(event):
-        if event.sender_id != ADMIN_ID:
+        if not is_admin(event.sender_id):
             return
-        await event.respond("🔄 جاري مسح المجموعات...")
+        await event.respond("🔄 جاري المسح...")
         total = 0
         for acc_id, client in user_clients.items():
             count = await fetch_all_groups_for_account(acc_id, client)
@@ -1230,7 +1171,7 @@ async def main():
 
     @bot.on(events.NewMessage(pattern='/set_msg_interval'))
     async def set_msg_cmd(event):
-        if event.sender_id != ADMIN_ID:
+        if not is_admin(event.sender_id):
             return
         try:
             val = int(event.raw_text.split()[1])
@@ -1238,13 +1179,13 @@ async def main():
                 set_setting('message_interval', str(val))
                 await event.respond(f"✅ مدة النشر: {val} ثانية")
             else:
-                await event.respond("❌ القيمة بين 10 و 600")
+                await event.respond("❌ بين 10 و 600")
         except:
             await event.respond("❌ استخدم: /set_msg_interval 60")
 
     @bot.on(events.NewMessage(pattern='/set_join_interval'))
     async def set_join_cmd(event):
-        if event.sender_id != ADMIN_ID:
+        if not is_admin(event.sender_id):
             return
         try:
             val = int(event.raw_text.split()[1])
@@ -1252,7 +1193,7 @@ async def main():
                 set_setting('join_interval', str(val))
                 await event.respond(f"✅ مدة الانضمام: {val} ثانية")
             else:
-                await event.respond("❌ القيمة بين 30 و 600")
+                await event.respond("❌ بين 30 و 600")
         except:
             await event.respond("❌ استخدم: /set_join_interval 100")
 
