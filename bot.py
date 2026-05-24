@@ -3,8 +3,8 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║     🤖 بوت النشر الخارق - النسخة الكاملة 🚀                   ║
-║     تشفير متقدم + مكافحة كشف + تزيين + بدون حدود            ║
+║     🤖 بوت النشر الخارق - نسخة الحماية القصوى 🛡️             ║
+║     متجاوز لجميع بوتات الحماية (GroupHelp, AutoREU, etc.)    ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -18,7 +18,8 @@ import asyncio
 import logging
 import urllib.request
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import deque
 
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
@@ -176,7 +177,7 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "status": "running",
-        "bot": "Super Poster Bot - Full Protection",
+        "bot": "Super Poster Bot - Ultimate Protection",
         "uptime": datetime.now().isoformat()
     })
 
@@ -202,210 +203,242 @@ async def keep_alive_ping():
 
 # ═══════════════════════════════════════════════
 #  ═══════════════════════════════════════════════
-#  نظام التشفير المتقدم + مكافحة الكشف
+#  نظام التشفير المتطور - تجاوز بوتات الحماية
 #  ═══════════════════════════════════════════════
 # ═══════════════════════════════════════════════
 
-class AdvancedAntiDetection:
+class UltimateAntiDetection:
     """
-    نظام متكامل لمكافحة الكشف:
-    - تشفير الروابط
-    - إضافة أحرف غير مرئية
-    - تزيين النصوص
-    - تغيير بسيط في الصياغة
+    نظام متكامل لتجاوز جميع أنواع بوتات الحماية:
+    - GroupHelpBot, AutoREUbot, Majeedseubot, GHSecurityBot
+    - QxQbot, MezlaBot, UHBRoBot, almasah2bot, GHClone4Bot, Hemayaahbot
     """
     
     def __init__(self):
-        # أحرف غير مرئية
-        self.zero_width_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
+        # أحرف غير مرئية متعددة (تستخدم لتشويه النص دون تغيير المعنى)
+        self.invisible_chars = [
+            '\u200B',  # Zero-width space
+            '\u200C',  # Zero-width non-joiner
+            '\u200D',  # Zero-width joiner
+            '\uFEFF',  # Zero-width no-break space
+            '\u2060',  # Word joiner
+            '\u2061',  # Function application
+            '\u2062',  # Invisible times
+            '\u2063',  # Invisible separator
+            '\u2064',  # Invisible plus
+        ]
         
-        # زخارف ونقوش
+        # أحرف متشابهة بصرياً (Homoglyphs) - لتغيير شكل الكلمات
+        self.homoglyphs = {
+            'a': ['а', 'α', '⍺', 'ａ', '@'], 'b': ['Ь', 'β', 'в', 'ｂ'],
+            'c': ['с', 'ϲ', 'ⅽ', 'ｃ'], 'e': ['е', 'ε', 'ё', 'ｅ'],
+            'h': ['һ', 'н', 'հ', 'ｈ'], 'i': ['і', 'ɪ', 'ι', 'ｉ'],
+            'k': ['κ', 'к', 'ｋ'], 'o': ['о', 'ο', 'σ', 'ｏ'],
+            'p': ['р', 'ρ', 'ｐ'], 'x': ['х', '×', 'ⅹ', 'ｘ'],
+            'y': ['у', 'γ', 'ｙ'], 'A': ['Α', 'А', 'Ａ'],
+            'B': ['В', 'Β', 'Ｂ'], 'C': ['С', 'Ｃ'], 'E': ['Е', 'Ε', 'Ｅ'],
+            'H': ['Н', 'Ｈ'], 'K': ['Κ', 'Ｋ'], 'M': ['Μ', 'Ｍ'],
+            'O': ['Ο', 'О', 'Ｏ'], 'P': ['Ρ', 'Р', 'Ｐ'], 'T': ['Τ', 'Т', 'Ｔ'],
+            'X': ['Χ', 'Х', 'Ｘ'],
+        }
+        
+        # كلمات مفتاحية شائعة يتم استبدالها بمرادفات أو تشويهها
+        self.keywords = {
+            'اشترك': ['انضم', 'تابع', 'كن معنا', 'سجل'],
+            'قناة': ['مجموعة', 'منصة', 'صفحتنا', 'رابط'],
+            'تواصل': ['راسل', 'اتصل', 'أرسل', 'كلمنا'],
+            'ربح': ['كسب', 'أرباح', 'دخل', 'مكسب'],
+            'مجاني': ['بدون مقابل', 'مجاناً', 'بلا تكلفة', 'هدية'],
+            'عرض': ['فرصة', 'تخفيض', 'خصم', 'مناسبة'],
+            'سعر': ['تكلفة', 'قيمة', 'ثمن', 'رسوم'],
+            'خصم': ['تخفيض', 'حسم', 'تخفيضات'],
+            'رابط': ['لينك', 'وصلة', 'عنوان'],
+            'انضم': ['اشترك', 'سجل', 'كن معنا'],
+            'فوري': ['حالاً', 'مباشر', 'الآن', 'سريع'],
+        }
+        
+        # زخارف عشوائية
         self.decorations = [
             ('✨', '✨'), ('🌟', '🌟'), ('⭐', '⭐'), ('💫', '💫'),
             ('✧', '✧'), ('✦', '✦'), ('❁', '❁'), ('✿', '✿'),
             ('🌸', '🌸'), ('🌺', '🌺'), ('◈', '◈'), ('♥', '♥'),
             ('★', '★'), ('☆', '☆'), ('♡', '♡'), ('❂', '❂'),
+            ('➤', '➣'), ('▸', '◂'), ('►', '◄'),
         ]
         
-        # إطارات زخرفية
-        self.frames = [
-            lambda t: f"「 {t} 」",
-            lambda t: f"『 {t} 』",
-            lambda t: f"【 {t} 】",
-            lambda t: f"✦ {t} ✦",
-            lambda t: f"✧ {t} ✧",
-            lambda t: f"▸ {t} ◂",
-            lambda t: f"► {t} ◄",
-            lambda t: f"▪️ {t} ▪️",
-            lambda t: f"➤ {t} ➣",
-        ]
+        # ذاكرة مؤقتة للرسائل المرسلة (لمنع التكرار)
+        self.sent_messages_cache = deque(maxlen=500)
         
-        # خطوط عربية جميلة
-        self.arabic_fonts = {
-            'ا': 'ﺍ', 'ب': 'ﺏ', 'ت': 'ﺕ', 'ث': 'ﺙ', 'ج': 'ﺝ', 'ح': 'ﺡ',
-            'خ': 'ﺥ', 'د': 'ﺩ', 'ذ': 'ﺫ', 'ر': 'ﺭ', 'ز': 'ﺯ', 'س': 'ﺱ',
-            'ش': 'ﺵ', 'ص': 'ﺹ', 'ض': 'ﺽ', 'ط': 'ﻁ', 'ظ': 'ﻅ', 'ع': 'ﻉ',
-            'غ': 'ﻍ', 'ف': 'ﻑ', 'ق': 'ﻕ', 'ك': 'ﻙ', 'ل': 'ﻝ', 'م': 'ﻡ',
-            'ن': 'ﻥ', 'ه': 'ﻩ', 'و': 'ﻭ', 'ي': 'ﻱ', 'ة': 'ﺓ', 'ى': 'ﻯ'
-        }
-        
-        # خطوط إنجليزية جميلة
-        self.english_fonts = {
-            'a': '𝗮', 'b': '𝗯', 'c': '𝗰', 'd': '𝗱', 'e': '𝗲', 'f': '𝗳',
-            'g': '𝗴', 'h': '𝗵', 'i': '𝗶', 'j': '𝗷', 'k': '𝗸', 'l': '𝗹',
-            'm': '𝗺', 'n': '𝗻', 'o': '𝗼', 'p': '𝗽', 'q': '𝗾', 'r': '𝗿',
-            's': '𝘀', 't': '𝘁', 'u': '𝘂', 'v': '𝘃', 'w': '𝘄', 'x': '𝘅',
-            'y': '𝘆', 'z': '𝘇',
-            'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘', 'F': '𝗙',
-            'G': '𝗚', 'H': '𝗛', 'I': '𝗜', 'J': '𝗝', 'K': '𝗞', 'L': '𝗟',
-            'M': '𝗠', 'N': '𝗡', 'O': '𝗢', 'P': '𝗣', 'Q': '𝗤', 'R': '𝗥',
-            'S': '𝗦', 'T': '𝗧', 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫',
-            'Y': '𝗬', 'Z': '𝗭'
-        }
-    
-    def obfuscate_link(self, text):
-        """تشفير الروابط - أهم ميزة لتجاوز الحظر"""
-        # تشويه روابط t.me
-        text = text.replace('t.me', 't.\u200Bme')
-        text = text.replace('telegram.me', 'tele\u200Cgram.me')
-        # تشويه روابط https
-        text = text.replace('https://', 'https:\u200D//')
-        text = text.replace('http://', 'http:\u200C//')
+    def obfuscate_links(self, text):
+        """تشفير متقدم للروابط - أهم نقطة لتجاوز الحماية"""
+        # تشويه t.me
+        text = text.replace('t.me', 't\u200B.\u200Cme')
+        text = text.replace('telegram.me', 'tele\u200Dgram\u200B.me')
+        # تشويه https:// و http://
+        text = text.replace('https://', 'https:\u200C//')
+        text = text.replace('http://', 'http:\u200D//')
+        # إضافة أحرف غير مرئية داخل اسم المستخدم
+        def obfuscate_username(match):
+            username = match.group(1)
+            if len(username) > 5:
+                pos = random.randint(2, len(username) - 2)
+                username = username[:pos] + random.choice(self.invisible_chars) + username[pos:]
+            return f't.me/{username}'
+        text = re.sub(r't\.me/([a-zA-Z0-9_]+)', obfuscate_username, text)
         return text
     
-    def obfuscate_username(self, text):
+    def obfuscate_mentions(self, text):
         """تشويه المعرفات @username"""
-        def replace_at(match):
+        def replace_mention(match):
             username = match.group(1)
             return '@\u200B' + username
-        return re.sub(r'@([a-zA-Z0-9_]{3,})', replace_at, text)
+        return re.sub(r'@([a-zA-Z0-9_]{3,})', replace_mention, text)
     
-    def add_zero_width_chars(self, text, intensity=0.05):
-        """إضافة أحرف غير مرئية - تخفي النص من بوتات الكشف"""
-        if random.random() > 0.7:
-            chars = list(text)
-            for i in range(len(chars)):
-                if random.random() < intensity:
-                    chars.insert(i, random.choice(self.zero_width_chars))
-            return ''.join(chars)
+    def replace_keywords(self, text):
+        """استبدال الكلمات المفتاحية بمرادفات عشوائية"""
+        for keyword, replacements in self.keywords.items():
+            if keyword in text and random.random() > 0.6:
+                text = text.replace(keyword, random.choice(replacements))
         return text
     
-    def apply_arabic_font(self, text, intensity=0.3):
-        """تطبيق خط عربي جميل"""
-        if random.random() > (1 - intensity):
-            result = []
-            for char in text:
-                if char in self.arabic_fonts and random.random() < 0.5:
-                    result.append(self.arabic_fonts[char])
-                else:
-                    result.append(char)
-            return ''.join(result)
+    def apply_homoglyphs(self, text, intensity=0.15):
+        """استبدال أحرف عشوائية بأحرف متشابهة"""
+        result = []
+        for char in text:
+            if char in self.homoglyphs and random.random() < intensity:
+                result.append(random.choice(self.homoglyphs[char]))
+            else:
+                result.append(char)
+        return ''.join(result)
+    
+    def split_keywords(self, text):
+        """تقطيع الكلمات المفتاحية بأحرف غير مرئية"""
+        keyword_patterns = {
+            'اشترك': 'ا\u200Bش\u200Cت\u200Dر\u200Bك',
+            'قناة': 'ق\u200Cن\u200Dاة',
+            'تواصل': 'ت\u200Bو\u200Cاص\u200Dل',
+            'ربح': 'ر\u200Dب\u200Cح',
+            'مجاني': 'م\u200Bج\u200Cان\u200Dي',
+            'عرض': 'ع\u200Bر\u200Cض',
+            'سعر': 'س\u200Dع\u200Bر',
+            'خصم': 'خ\u200Cص\u200Dم',
+            'رابط': 'ر\u200Bا\u200Cب\u200Dط',
+            'انضم': 'ا\u200Dن\u200Bض\u200Cم',
+        }
+        for word, obfuscated in keyword_patterns.items():
+            if random.random() > 0.7:
+                text = text.replace(word, obfuscated)
+                text = text.replace(word.capitalize(), obfuscated.capitalize())
         return text
     
-    def apply_english_font(self, text, intensity=0.2):
-        """تطبيق خط إنجليزي جميل"""
-        if random.random() > (1 - intensity):
-            result = []
-            for char in text:
-                if char in self.english_fonts and random.random() < 0.4:
-                    result.append(self.english_fonts[char])
-                else:
-                    result.append(char)
-            return ''.join(result)
+    def add_random_noise(self, text):
+        """إضافة ضوضاء عشوائية (أرقام، إيموجي، مسافات)"""
+        noises = [
+            f" {random.randint(10, 999)}",
+            f"\n{random.choice(['✓', '✅', '•', '-', '★'])} ",
+            f" {random.choice(['👍', '🔥', '💯', '✨', '⭐'])}",
+            "",
+            "",
+            "",
+        ]
+        if random.random() > 0.8:
+            return text + random.choice(noises)
         return text
     
-    def add_frame(self, text):
-        """إضافة إطار حول النص"""
-        if random.random() > 0.6 and len(text) < 150:
-            return random.choice(self.frames)(text)
+    def add_invisible_chars_randomly(self, text, intensity=0.03):
+        """إضافة أحرف غير مرئية في مواقع عشوائية"""
+        if len(text) < 10 or random.random() > 0.5:
+            return text
+        chars = list(text)
+        for i in range(len(chars)):
+            if random.random() < intensity:
+                chars.insert(i, random.choice(self.invisible_chars))
+        return ''.join(chars)
+    
+    def reorder_words(self, text):
+        """إعادة ترتيب الكلمات بشكل عشوائي (مع الحفاظ على المعنى التقريبي)"""
+        if random.random() > 0.95 and len(text.split()) > 5:
+            words = text.split()
+            # بدل كلمتين عشوائيتين
+            idx1, idx2 = random.sample(range(len(words)), 2)
+            words[idx1], words[idx2] = words[idx2], words[idx1]
+            return ' '.join(words)
         return text
     
     def add_decorations(self, text):
         """إضافة زخارف حول النص"""
-        if random.random() > 0.5:
+        if random.random() > 0.6 and len(text) < 200:
             left, right = random.choice(self.decorations)
-            return f"{left} {text} {right}"
+            # اختيار عشوائي لنمط الزخرفة
+            patterns = [
+                f"{left} {text} {right}",
+                f"{left}{left} {text} {right}{right}",
+                f"{text}\n{left} {right}",
+                f"{left}\n{text}\n{right}",
+            ]
+            return random.choice(patterns)
         return text
     
-    def add_emoji_variation(self, text):
-        """إضافة إيموجي عشوائي للتنويع"""
-        emojis = [' 👍', ' 🔥', ' ✅', ' ⭐', ' 💯', ' ✨', ' 🌟']
-        if random.random() > 0.85:
-            return text + random.choice(emojis)
-        return text
+    def is_duplicate_message(self, text, group_id):
+        """التحقق من تكرار إرسال نفس النص لنفس المجموعة"""
+        cache_key = f"{group_id}:{hash(text)}"
+        if cache_key in self.sent_messages_cache:
+            return True
+        self.sent_messages_cache.append(cache_key)
+        return False
     
-    def split_keywords(self, text):
-        """تقطيع الكلمات المفتاحية الشائعة (خفيف)"""
-        patterns = [
-            (r'\b(اشترك)\b', 'اش\u200Bترك'),
-            (r'\b(قناة)\b', 'قن\u200Cاة'),
-            (r'\b(رابط)\b', 'را\u200Cبط'),
-            (r'\b(انضم)\b', 'ان\u200Bضم'),
-        ]
-        for pattern, replacement in patterns:
-            if random.random() > 0.8:
-                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-        return text
-    
-    def encrypt_full(self, text):
+    def generate_ultimate_variation(self, text, group_id=None):
         """
-        تطبيق جميع تقنيات التشفير ومكافحة الكشف
-        مع الحفاظ على قراءة النص
+        توليد نسخة فريدة ومحصنة من النص
+        تجمع بين جميع تقنيات مكافحة الكشف
         """
-        if get_setting('encryption', 'on') != 'on':
+        if get_setting('anti_detect', 'on') != 'on':
             return text
+        
+        # تجنب التكرار
+        if group_id and self.is_duplicate_message(text, group_id):
+            text = text + f" {random.randint(1, 999)}"
         
         result = text
         
-        # 1. تشفير الروابط (الأهم)
-        result = self.obfuscate_link(result)
-        result = self.obfuscate_username(result)
+        # 1. استبدال الكلمات المفتاحية بمرادفات
+        if random.random() > 0.5:
+            result = self.replace_keywords(result)
         
-        # 2. تقطيع الكلمات المفتاحية (خفيف)
-        if random.random() > 0.7:
+        # 2. تقطيع الكلمات المفتاحية
+        if random.random() > 0.6:
             result = self.split_keywords(result)
         
-        # 3. تطبيق الخطوط الجميلة
-        if get_setting('anti_detect', 'on') == 'on':
-            result = self.apply_arabic_font(result, 0.25)
-            result = self.apply_english_font(result, 0.15)
+        # 3. تشويه الروابط (الأهم)
+        result = self.obfuscate_links(result)
         
-        # 4. إضافة أحرف غير مرئية (خفيفة)
-        result = self.add_zero_width_chars(result, 0.04)
+        # 4. تشويه المعرفات
+        result = self.obfuscate_mentions(result)
         
-        # 5. تزيين النص
-        result = self.add_frame(result)
-        result = self.add_decorations(result)
-        result = self.add_emoji_variation(result)
+        # 5. تطبيق homoglyphs (بكثافة منخفضة)
+        result = self.apply_homoglyphs(result, intensity=0.12)
+        
+        # 6. إضافة أحرف غير مرئية
+        result = self.add_invisible_chars_randomly(result, intensity=0.04)
+        
+        # 7. إعادة ترتيب كلمات عشوائية (نادراً)
+        result = self.reorder_words(result)
+        
+        # 8. إضافة ضوضاء
+        result = self.add_random_noise(result)
+        
+        # 9. تزيين النص
+        if get_setting('encryption', 'on') == 'on':
+            result = self.add_decorations(result)
         
         return result
 
 # إنشاء نسخة من نظام مكافحة الكشف
-anti_detection = AdvancedAntiDetection()
+anti_detection = UltimateAntiDetection()
 
-def encrypt_text(text):
+def encrypt_text(text, group_id=None):
     """تشفير النص - الواجهة الرئيسية"""
-    return anti_detection.encrypt_full(text)
-
-def generate_unique_variation(text):
-    """
-    توليد نسخة فريدة من النص في كل مرة
-    يستخدم كل تقنيات مكافحة الكشف
-    """
-    if get_setting('anti_detect', 'on') != 'on':
-        return text
-    
-    # تطبيق التشفير المتقدم
-    result = encrypt_text(text)
-    
-    # إضافة تنويع إضافي عشوائي
-    chars = list(result)
-    if len(chars) > 10 and random.random() > 0.9:
-        pos = random.randint(5, len(chars) - 5)
-        chars.insert(pos, random.choice(anti_detection.zero_width_chars))
-        result = ''.join(chars)
-    
-    return result
+    return anti_detection.generate_ultimate_variation(text, group_id)
 
 # ═══════════════════════════════════════════════
 #  إدارة الحسابات والمجموعات
@@ -623,7 +656,7 @@ def get_join_history(limit=30):
     return rows
 
 # ═══════════════════════════════════════════════
-#  نظام النشر مع التشفير ومكافحة الكشف
+#  نظام النشر المتطور
 # ═══════════════════════════════════════════════
 async def send_contact_message(client, chat_id, contact_data, caption):
     try:
@@ -659,15 +692,15 @@ async def post_to_all_groups(message):
     base_interval = int(get_setting('message_interval', '60'))
     use_jitter = get_setting('use_jitter', 'on') == 'on'
     
-    # ⭐ تطبيق التشفير ومكافحة الكشف على النص
-    encrypted_content = generate_unique_variation(content) if content else ""
-    
     success_count = 0
     fail_count = 0
     
     for group_id, group_name in groups:
         if not is_posting_active:
             break
+        
+        # تشفير النص بشكل فريد لكل مجموعة (لمنع التكرار)
+        encrypted_content = encrypt_text(content, group_id) if content else ""
         
         available_accs = await get_available_accounts()
         
@@ -695,8 +728,8 @@ async def post_to_all_groups(message):
 
         try:
             if use_jitter:
-                jitter = random.randint(-10, 20)
-                actual_delay = max(10, base_interval + jitter)
+                jitter = random.randint(-10, 30)
+                actual_delay = max(15, base_interval + jitter)
             else:
                 actual_delay = base_interval
             
@@ -899,7 +932,7 @@ async def main():
 
     bot = TelegramClient('bot_session', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
-    logger.info("🤖 البوت يعمل - مع التشفير ومكافحة الكشف!")
+    logger.info("🤖 البوت يعمل - مع الحماية القصوى!")
 
     # ─── أمر /start ───
     @bot.on(events.NewMessage(pattern='/start'))
@@ -911,16 +944,17 @@ async def main():
         join_interval = get_setting('join_interval', '100')
         
         # مثال لتوضيح التشفير
-        example_text = "مرحباً بك في بوت النشر"
-        encrypted_example = generate_unique_variation(example_text)
+        example_text = "اشترك في قناتنا للحصول على عروض حصرية"
+        encrypted_example = encrypt_text(example_text)
         
         await event.respond(
-            "🛡 **بوت النشر - مع التشفير ومكافحة الكشف**\n\n"
-            "✨ **ميزات الحماية:**\n"
-            "• تشفير الروابط (t.me → t.\\u200Bme)\n"
+            "🛡 **بوت النشر - الحماية القصوى**\n\n"
+            "✨ **تقنيات تجاوز الحماية:**\n"
+            "• تشفير الروابط (t.me → t\\u200B.me)\n"
+            "• استبدال الكلمات المفتاحية بمرادفات\n"
             "• إضافة أحرف غير مرئية\n"
-            "• تزيين النصوص\n"
-            "• تنويع فريد لكل رسالة\n\n"
+            "• تنويع فريد لكل رسالة\n"
+            "• تجنب التكرار التام\n\n"
             f"📝 **مثال للتشفير:**\n{encrypted_example}\n\n"
             f"📢 المجموعات: {groups_count}\n"
             f"⏱ مدة النشر: {message_interval} ثانية\n"
@@ -932,7 +966,7 @@ async def main():
     # ─── حلقة النشر ───
     async def auto_posting_loop():
         global is_posting_active
-        logger.info("🔄 بدء النشر مع التشفير...")
+        logger.info("🔄 بدء النشر مع الحماية القصوى...")
         
         while is_posting_active:
             try:
@@ -954,7 +988,7 @@ async def main():
                     if not is_posting_active:
                         break
                         
-                    logger.info(f"📤 نشر رسالة #{msg[0]} ({msg[3]}) مع تشفير")
+                    logger.info(f"📤 نشر رسالة #{msg[0]} ({msg[3]}) مع تشفير متقدم")
                     success, fails, total = await post_to_all_groups(msg)
                     logger.info(f"📤 النتيجة: نجاح={success}, فشل={fails} من {total}")
 
@@ -964,8 +998,8 @@ async def main():
                     base_interval = int(get_setting('message_interval', '60'))
                     use_jitter = get_setting('use_jitter', 'on') == 'on'
                     if use_jitter:
-                        jitter = random.randint(-15, 25)
-                        loop_delay = max(10, base_interval + jitter)
+                        jitter = random.randint(-15, 35)
+                        loop_delay = max(15, base_interval + jitter)
                     else:
                         loop_delay = base_interval
                     
@@ -987,13 +1021,13 @@ async def main():
             return
         text = event.raw_text.replace('/encrypt', '').strip()
         if not text:
-            text = "هذا نص تجريبي لاختبار التشفير"
+            text = "اشترك في قناتنا للحصول على عروض حصرية"
         
-        encrypted = generate_unique_variation(text)
+        encrypted = encrypt_text(text)
         await event.respond(
             f"📝 **النص الأصلي:**\n{text}\n\n"
-            f"🛡 **بعد التشفير:**\n{encrypted}\n\n"
-            f"✨ تم تطبيق: تشفير الروابط + أحرف غير مرئية + تزيين"
+            f"🛡 **بعد التشفير المتقدم:**\n{encrypted}\n\n"
+            f"✨ تم تطبيق: تشفير الروابط + استبدال الكلمات + أحرف غير مرئية + تزيين"
         )
 
     # ─── أوامر سريعة ───
@@ -1028,7 +1062,7 @@ async def main():
     async def test_handler(event):
         if not is_admin(event.sender_id):
             return
-        await event.respond("✅ البوت يعمل مع التشفير ومكافحة الكشف!")
+        await event.respond("✅ البوت يعمل مع الحماية القصوى!")
 
     # ─── معالج الأزرار ───
     @bot.on(events.CallbackQuery)
@@ -1065,7 +1099,7 @@ async def main():
             await event.edit(
                 "➕ **إضافة رسالة**\n\n"
                 "أرسل:\n• نص عادي\n• صورة مع تعليق\n• فيديو مع تعليق\n• ملف مع تعليق\n• جهة اتصال مع تعليق\n\n"
-                "📌 سيتم تطبيق التشفير تلقائياً عند النشر\n"
+                "📌 سيتم تطبيق التشفير المتقدم تلقائياً عند النشر\n"
                 "/cancel للإلغاء"
             )
             set_setting('awaiting_msg', 'true')
@@ -1198,13 +1232,13 @@ async def main():
             anti_status = "✅ مفعل" if get_setting('anti_detect', 'on') == 'on' else "❌ معطل"
             
             await event.edit(
-                f"🚀 **بدأ النشر!**\n\n"
+                f"🚀 **بدأ النشر بالحماية القصوى!**\n\n"
                 f"📢 {groups_count} مجموعة\n"
                 f"👥 {len(all_accs)} حساب (متاح: {len(available)})\n"
                 f"⏱ كل {message_interval} ثانية\n"
                 f"🛡 التشفير: {enc_status}\n"
                 f"🎭 مكافحة الكشف: {anti_status}\n\n"
-                f"✅ النشر يعمل مع الحماية الكاملة!",
+                f"✅ النشر يعمل مع تجاوز البوتات!",
                 buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")]]
             )
             asyncio.create_task(auto_posting_loop())
@@ -1456,14 +1490,14 @@ async def main():
             conn.close()
             
             # معاينة التشفير
-            encrypted_preview = generate_unique_variation(content[:100]) if content else ""
+            encrypted_preview = encrypt_text(content[:200]) if content else ""
             
             types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
             await event.respond(
                 f"✅ **تم حفظ الرسالة #{msg_id}!**\n\n"
                 f"📎 النوع: {types.get(msg_type, msg_type)}\n"
                 f"🛡 **معاينة التشفير:**\n{encrypted_preview}\n\n"
-                f"سيتم تطبيق التشفير تلقائياً عند النشر",
+                f"سيتم تطبيق التشفير المتقدم تلقائياً عند النشر",
                 buttons=get_main_menu()
             )
             return
@@ -1653,7 +1687,7 @@ async def main():
         except:
             await event.respond("❌ استخدم: /set_join_interval 100")
 
-    logger.info("✅ البوت جاهز - مع التشفير المتقدم ومكافحة الكشف!")
+    logger.info("✅ البوت جاهز - مع الحماية القصوى وتجاوز البوتات!")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
