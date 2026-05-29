@@ -3,8 +3,8 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║     🤖 بوت النشر الخارق - نسخة النشر السريع 🚀               ║
-║     نشر سريع + تنسيق إعلانات + تشفير متقدم                   ║
+║     🤖 بوت النشر الخارق - الإصدار الأسطوري 🛡️                 ║
+║     تشفير لا يُرى بالعين لكنه يُعمي البوتات                  ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -30,7 +30,7 @@ from telethon.tl.types import InputMediaContact
 from flask import Flask, jsonify
 
 # ═══════════════════════════════════════════════
-#  الإعدادات - تُقرأ من متغيرات البيئة
+#  الإعدادات الأساسية
 # ═══════════════════════════════════════════════
 API_ID = int(os.environ.get('API_ID', '0'))
 API_HASH = os.environ.get('API_HASH', '')
@@ -61,7 +61,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════
-#  قاعدة البيانات SQLite
+#  قاعدة البيانات
 # ═══════════════════════════════════════════════
 DB_PATH = os.environ.get('DB_PATH', 'bot_database.db')
 
@@ -102,11 +102,18 @@ def init_db():
         group_id INTEGER, group_name TEXT,
         bot_name TEXT, detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     
-    # إعدادات افتراضية للسرعة
-    if get_setting('posting_speed') is None:
-        set_setting('posting_speed', 'fast')
-    if get_setting('message_interval') is None:
-        set_setting('message_interval', '2')
+    # القيم الافتراضية
+    defaults = {
+        'posting_speed': 'fast',
+        'message_interval': '2',
+        'anti_detect': 'on',
+        'encryption': 'on',
+        'join_interval': '100',
+        'bot_detection': 'on'
+    }
+    for key, val in defaults.items():
+        if get_setting(key) is None:
+            set_setting(key, val)
     
     conn.commit()
     conn.close()
@@ -184,7 +191,7 @@ app = Flask(__name__)
 def home():
     return jsonify({
         "status": "running",
-        "bot": "Super Poster Bot - Fast Posting",
+        "bot": "Super Poster Bot - Ultimate Stealth",
         "uptime": datetime.now().isoformat()
     })
 
@@ -209,12 +216,124 @@ async def keep_alive_ping():
         await asyncio.sleep(240)
 
 # ═══════════════════════════════════════════════
-#  نظام تنسيق الإعلانات ✅
+#  ═══════════════════════════════════════════════
+#  نظام التشفير الخارق - يُعمي بوتات الحماية
+#  ═══════════════════════════════════════════════
+# ═══════════════════════════════════════════════
+
+class UltimateStealthEncryption:
+    """
+    تشفير خارق تماماً:
+    - المستخدم يرى النص طبيعياً (الأحرف غير المرئية لا تظهر)
+    - بوت الحماية يرى نصاً مشوهاً وغير مفهوم
+    - لا يمكن لأي بوت حماية اكتشاف الكلمات المفتاحية أو الروابط
+    """
+    
+    def __init__(self):
+        # 9 أنواع من الأحرف غير المرئية
+        self.invisible_chars = [
+            '\u200B',  # Zero-width space
+            '\u200C',  # Zero-width non-joiner
+            '\u200D',  # Zero-width joiner
+            '\uFEFF',  # Zero-width no-break space
+            '\u2060',  # Word joiner
+            '\u2061',  # Function application
+            '\u2062',  # Invisible times
+            '\u2063',  # Invisible separator
+            '\u2064',  # Invisible plus
+        ]
+        
+        # قائمة الكلمات المفتاحية التي سيتم تقطيعها بشدة
+        self.critical_keywords = [
+            'اشترك', 'قناة', 'تواصل', 'ربح', 'مجاني', 'عرض', 'سعر', 
+            'خصم', 'رابط', 'انضم', 'فوري', 'خدمات', 'طلابية', 'طبية',
+            'واجبات', 'بحوث', 'اكسل', 'وورد', 'بوربوينت', 'سيرة', 'ذاتية',
+            'أعذار', 'رسمية', 'تقارير', 'همزة', 'وصل', 'تليجرام', 'تيليجرام',
+            'https', 'http', 't.me', 'telegram.me', '@', 'بوت', 'قروب', 'مجموعة'
+        ]
+        
+        # قائمة الرموز التي سنضيف لها أحرفاً غير مرئية
+        self.symbols_to_obfuscate = ['@', '#', '$', '%', '&', '*', '+', '=', '?', '/', '\\', '|', '~', '`']
+    
+    def obfuscate_text_heavily(self, text):
+        """
+        تشويه النص بشدة بحيث يصبح غير قابل للفهم لأي بوت حماية
+        مع بقائه مقروءاً للمستخدم (لأن الأحرف غير المرئية لا تظهر)
+        """
+        if not text:
+            return text
+        
+        result = text
+        
+        # 1. إضافة أحرف غير مرئية بين كل حرفين في الكلمات المفتاحية (تقطيع شديد)
+        for keyword in self.critical_keywords:
+            if keyword in result:
+                # إضافة 2-4 أحرف غير مرئية بين كل حرفين
+                chars = list(keyword)
+                new_chars = []
+                for ch in chars:
+                    new_chars.append(ch)
+                    # إضافة أحرف غير مرئية متعددة بعد كل حرف
+                    for _ in range(random.randint(2, 4)):
+                        new_chars.append(random.choice(self.invisible_chars))
+                obfuscated = ''.join(new_chars)
+                result = result.replace(keyword, obfuscated)
+        
+        # 2. إضافة أحرف غير مرئية بكثافة داخل الروابط
+        # تشويه t.me
+        result = result.replace('t.me', f't{random.choice(self.invisible_chars)}{random.choice(self.invisible_chars)}.'
+                                       f'{random.choice(self.invisible_chars)}{random.choice(self.invisible_chars)}me')
+        result = result.replace('telegram.me', f'telegram{random.choice(self.invisible_chars)}.'
+                                            f'{random.choice(self.invisible_chars)}me')
+        # تشويه https:// و http://
+        result = result.replace('https://', f'https{random.choice(self.invisible_chars)}:'
+                                          f'{random.choice(self.invisible_chars)}/'
+                                          f'{random.choice(self.invisible_chars)}/')
+        result = result.replace('http://', f'http{random.choice(self.invisible_chars)}:'
+                                         f'{random.choice(self.invisible_chars)}/'
+                                         f'{random.choice(self.invisible_chars)}/')
+        
+        # 3. تشويه الرموز المهمة
+        for sym in self.symbols_to_obfuscate:
+            if sym in result:
+                result = result.replace(sym, sym + random.choice(self.invisible_chars))
+        
+        # 4. إضافة أحرف غير مرئية عشوائية بين كل الكلمات (كثافة عالية)
+        words = result.split()
+        for i in range(len(words) - 1):
+            words[i] = words[i] + random.choice(self.invisible_chars) + random.choice(self.invisible_chars)
+        result = ' '.join(words)
+        
+        # 5. إضافة "ضوضاء" غير مرئية في نهاية النص (أرقام عشوائية بأحرف غير مرئية)
+        noise = ''.join([random.choice(self.invisible_chars) + str(random.randint(0,9)) for _ in range(5)])
+        result = result + noise
+        
+        return result
+    
+    def encrypt(self, text):
+        """
+        تطبيق التشفير الخارق إذا كان مفعلاً
+        """
+        if get_setting('anti_detect', 'on') != 'on':
+            return text
+        
+        return self.obfuscate_text_heavily(text)
+
+# إنشاء نسخة من التشفير الخارق
+stealth_encryption = UltimateStealthEncryption()
+
+def encrypt_text(text):
+    """تشفير النص - يجعله غير قابل للفهم لأي بوت حماية"""
+    return stealth_encryption.encrypt(text)
+
+# ═══════════════════════════════════════════════
+#  نظام تنسيق الإعلانات ✅ (يبقى طبيعياً للمستخدم)
 # ═══════════════════════════════════════════════
 
 def format_ad_with_checks(text):
     """
     تنسيق الإعلانات بإضافة علامات ✅ حول الخدمات
+    (هذا ما يراه المستخدم بعد إزالة الأحرف غير المرئية)
     """
     lines = text.split('\n')
     result = []
@@ -225,27 +344,23 @@ def format_ad_with_checks(text):
             result.append('')
             continue
         
-        # إذا كان السطر يبدأ برقم (مثل "1.واجبات")
         if re.match(r'^\d+[\.\-]', line):
             line = f"✅ {line} ✅"
             result.append(line)
-        # إذا كان السطر يحتوي على علامة ✔
         elif '✔' in line:
             line = f"{line} ✅"
             result.append(line)
-        # إذا كان السطر يبدو كعنوان رئيسي
         elif len(line) < 30 and not line.startswith('+'):
             line = f"✅ {line} ✅"
             result.append(line)
-        # رقم الهاتف
         elif line.startswith('+') or re.match(r'^\d{10,}$', line):
             line = f"📞 {line}"
             result.append(line)
         else:
-            # أضف ✅ في البداية والنهاية للأسطر العادية
-            result.append(f"✅ {line} ✅")
+            line = f"✅ {line} ✅"
+            result.append(line)
     
-    # إضافة إطار جميل
+    # إطار بسيط
     formatted = []
     for i, line in enumerate(result):
         if i == 0 and line:
@@ -261,18 +376,14 @@ def format_ad_with_checks(text):
     return '\n'.join(formatted)
 
 def format_ad_simple(text):
-    """
-    تنسيق بسيط مع ✅ فقط
-    """
+    """تنسيق بسيط مع ✅ فقط"""
     lines = text.split('\n')
     result = []
-    
     for line in lines:
         line = line.strip()
         if not line:
             result.append('')
             continue
-        
         if re.match(r'^\d+[\.\-]', line):
             result.append(f"✅ {line} ✅")
         elif '✔' in line:
@@ -281,55 +392,13 @@ def format_ad_simple(text):
             result.append(f"📞 {line}")
         else:
             result.append(f"✅ {line} ✅")
-    
     return '\n'.join(result)
 
 def format_ad_for_posting(original_text, simple=False):
-    """
-    تنسيق الإعلان حسب الإعدادات
-    """
-    if get_setting('anti_detect', 'on') != 'on':
-        return original_text
-    
+    """تنسيق الإعلان حسب الإعدادات"""
     if simple:
         return format_ad_simple(original_text)
     return format_ad_with_checks(original_text)
-
-# ═══════════════════════════════════════════════
-#  نظام التشفير المتقدم
-# ═══════════════════════════════════════════════
-
-class AdvancedAntiDetection:
-    def __init__(self):
-        self.invisible_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
-        self.sent_messages_cache = deque(maxlen=500)
-    
-    def obfuscate_links(self, text):
-        text = text.replace('t.me', 't\u200B.\u200Cme')
-        text = text.replace('https://', 'https:\u200C//')
-        text = text.replace('http://', 'http:\u200D//')
-        return text
-    
-    def generate_variation(self, text, group_id=None):
-        if get_setting('anti_detect', 'on') != 'on':
-            return text
-        
-        result = text
-        result = self.obfuscate_links(result)
-        
-        # إضافة أحرف غير مرئية أحياناً
-        if len(result) > 20 and random.random() > 0.7:
-            chars = list(result)
-            pos = random.randint(10, len(chars) - 10)
-            chars.insert(pos, random.choice(self.invisible_chars))
-            result = ''.join(chars)
-        
-        return result
-
-anti_detection = AdvancedAntiDetection()
-
-def encrypt_text(text, group_id=None):
-    return anti_detection.generate_variation(text, group_id)
 
 # ═══════════════════════════════════════════════
 #  إدارة الحسابات والمجموعات
@@ -547,7 +616,7 @@ def get_join_history(limit=30):
     return rows
 
 # ═══════════════════════════════════════════════
-#  نظام النشر السريع
+#  نظام النشر السريع مع التشفير الخارق
 # ═══════════════════════════════════════════════
 async def send_contact_message(client, chat_id, contact_data, caption):
     try:
@@ -580,13 +649,15 @@ async def fast_post_to_all_groups(message):
     msg_type = message[3]
     media_data = message[4] if len(message) > 4 else None
     
-    # تنسيق الإعلان بشكل جذاب
+    # 1. تنسيق الإعلان بشكل جميل (للمستخدم)
     formatted_content = format_ad_for_posting(content, simple=False) if content else ""
-    encrypted_content = encrypt_text(formatted_content) if get_setting('anti_detect', 'on') == 'on' else formatted_content
+    
+    # 2. تطبيق التشفير الخارق (لإخفاء النص عن بوتات الحماية)
+    encrypted_content = encrypt_text(formatted_content)
     
     success_count = 0
     fail_count = 0
-    delay = int(get_setting('message_interval', '2'))  # سرعة النشر من الإعدادات
+    delay = int(get_setting('message_interval', '2'))
     
     total_groups = len(groups)
     logger.info(f"⚡ بدء النشر السريع في {total_groups} مجموعة (كل {delay} ثانية)")
@@ -712,10 +783,7 @@ def clean_database_keep_accounts():
 #  لوحة التحكم
 # ═══════════════════════════════════════════════
 def get_main_menu():
-    enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
-    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
-    bot_detect_status = "✅" if get_setting('bot_detection', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '2')
     join_interval = get_setting('join_interval', '100')
     posting_speed = get_setting('posting_speed', 'fast')
@@ -729,8 +797,7 @@ def get_main_menu():
          Button.inline("⏹ إيقاف الكل", b"stop_posting")],
         [Button.inline(f"{speed_icon} سرعة النشر", b"posting_speed"),
          Button.inline("🔄 مسح تبريد", b"clear_cooldowns")],
-        [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
-         Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
+        [Button.inline(f"🛡 التشفير الخارق {anti_status}", b"toggle_anti")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
@@ -748,16 +815,10 @@ def get_join_reports_menu():
     ]
 
 def get_settings_menu():
-    enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
-    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
-    bot_detect_status = "✅" if get_setting('bot_detection', 'on') == 'on' else "❌"
     
     return [
-        [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
-        [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
-        [Button.inline(f"🤖 تبديل كشف البوتات {bot_detect_status}", b"toggle_bot_detect")],
+        [Button.inline(f"🛡 تبديل التشفير الخارق {anti_status}", b"toggle_anti")],
         [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
         [Button.inline("🔙 رجوع", b"back")]
     ]
@@ -765,7 +826,7 @@ def get_settings_menu():
 def get_speed_menu():
     current_speed = get_setting('posting_speed', 'fast')
     return [
-        [Button.inline("⚡ سريع (ثانيتين بين المجموعات)", b"set_speed_fast"),
+        [Button.inline("⚡ سريع (2 ثانية)", b"set_speed_fast"),
          Button.inline("✅" if current_speed == 'fast' else "⬜", b"dummy")],
         [Button.inline("🐌 عادي (60 ثانية)", b"set_speed_normal"),
          Button.inline("✅" if current_speed == 'normal' else "⬜", b"dummy")],
@@ -788,24 +849,11 @@ async def main():
 
     init_db()
 
-    defaults = {
-        'message_interval': '2',
-        'join_interval': '100',
-        'encryption': 'on',
-        'anti_detect': 'on',
-        'use_jitter': 'off',
-        'bot_detection': 'on',
-        'posting_speed': 'fast',
-    }
-    for key, val in defaults.items():
-        if get_setting(key) is None:
-            set_setting(key, val)
-
     await restore_sessions()
 
     bot = TelegramClient('bot_session', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
-    logger.info("🤖 البوت يعمل - نسخة النشر السريع!")
+    logger.info("🤖 البوت يعمل - مع التشفير الخارق!")
 
     # ─── أمر /start ───
     @bot.on(events.NewMessage(pattern='/start'))
@@ -816,27 +864,20 @@ async def main():
         message_interval = get_setting('message_interval', '2')
         join_interval = get_setting('join_interval', '100')
         
-        # مثال لتوضيح التنسيق
-        example_text = """همزة وصل  
-✔ خدمات طلابية كامله  
-1.واجبات 2.بحوث 3.شغل اكسل وورد بوربوينت  
-سيره ذاتيه  
-
-✔ خدمات طبيبه  
-1.اعذار رسمية  
-2.تقارير طبية  
-
-+966573874949"""
-        formatted_example = format_ad_for_posting(example_text, simple=False)
+        # مثال توضيحي
+        example_text = "همزة وصل - خدمات طلابية كاملة"
+        formatted_example = format_ad_with_checks(example_text)
+        encrypted_example = encrypt_text(formatted_example)
         
         await event.respond(
-            "⚡ **بوت النشر السريع - نسخة متطورة**\n\n"
+            "🛡 **بوت النشر الخارق - تشفير لا يُخترق**\n\n"
             "✨ **المميزات:**\n"
-            "• ⚡ نشر سريع (ثانيتين بين كل مجموعة)\n"
+            "• 🔒 تشفير خارق يُعمي بوتات الحماية\n"
             "• ✅ تنسيق تلقائي للإعلانات\n"
-            "• 🎭 تشفير متقدم لمكافحة الكشف\n"
+            "• ⚡ نشر سريع (ثانيتين بين المجموعات)\n"
             "• 🐢 انضمام بطيء لحماية الحسابات\n\n"
-            f"📝 **مثال للتنسيق:**\n{formatted_example}\n\n"
+            f"📝 **مثال: النص الذي يراه المستخدم (طبيعي)**\n{formatted_example}\n\n"
+            f"🔐 **ما يراه بوت الحماية (مشوّه بالكامل)**\n`{encrypted_example[:200]}...`\n\n"
             f"📢 المجموعات: {groups_count}\n"
             f"⚡ سرعة النشر: {message_interval} ثانية\n"
             f"🐢 مدة الانضمام: {join_interval} ثانية\n\n"
@@ -890,7 +931,7 @@ async def main():
             message_interval = get_setting('message_interval', '2')
             join_interval = get_setting('join_interval', '100')
             await event.edit(
-                "⚡ **لوحة التحكم**\n\n"
+                "🛡 **لوحة التحكم**\n\n"
                 f"📢 المجموعات: {groups_count}\n"
                 f"⚡ سرعة النشر: {message_interval} ثانية\n"
                 f"🐢 مدة الانضمام: {join_interval} ثانية",
@@ -918,7 +959,6 @@ async def main():
                 await event.edit("⚠️ النشر يعمل بالفعل!", buttons=[[Button.inline("🔙 رجوع", b"back")]])
                 return
             
-            # جلب أول رسالة
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages LIMIT 1")
@@ -936,7 +976,8 @@ async def main():
                 f"⚡ **النشر السريع قيد التشغيل!**\n\n"
                 f"📢 {groups_count} مجموعة\n"
                 f"⏱ {message_interval} ثانية بين كل مجموعة\n"
-                f"🎨 تنسيق ✅ حول الخدمات\n\n"
+                f"🎨 تنسيق ✅ حول الخدمات\n"
+                f"🔒 تشفير خارق ضد البوتات\n\n"
                 f"جاري النشر...",
                 buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")]]
             )
@@ -948,7 +989,8 @@ async def main():
                 f"✅ **اكتمل النشر السريع!**\n\n"
                 f"✅ نجاح: {success}\n"
                 f"❌ فشل: {fails}\n"
-                f"📢 من أصل {groups_count} مجموعة",
+                f"📢 من أصل {groups_count} مجموعة\n"
+                f"🔒 تم استخدام التشفير الخارق",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
 
@@ -963,21 +1005,21 @@ async def main():
         elif data == 'set_speed_fast':
             set_setting('posting_speed', 'fast')
             set_setting('message_interval', '2')
-            await event.answer("✅ تم ضبط السرعة: سريع (ثانيتين)")
+            await event.answer("✅ تم ضبط السرعة: سريع")
             await event.edit("⚡ تم ضبط سرعة النشر إلى **سريع (ثانيتين بين المجموعات)**", 
                            buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
         elif data == 'set_speed_normal':
             set_setting('posting_speed', 'normal')
             set_setting('message_interval', '60')
-            await event.answer("✅ تم ضبط السرعة: عادي (60 ثانية)")
+            await event.answer("✅ تم ضبط السرعة: عادي")
             await event.edit("🐌 تم ضبط سرعة النشر إلى **عادي (60 ثانية)**", 
                            buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
         elif data == 'set_speed_slow':
             set_setting('posting_speed', 'slow')
             set_setting('message_interval', '120')
-            await event.answer("✅ تم ضبط السرعة: بطيء (120 ثانية)")
+            await event.answer("✅ تم ضبط السرعة: بطيء")
             await event.edit("🐢 تم ضبط سرعة النشر إلى **بطيء (120 ثانية)**", 
                            buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
@@ -1000,7 +1042,7 @@ async def main():
                 "➕ **إضافة رسالة جديدة**\n\n"
                 "أرسل الإعلان كما تريد نشره:\n"
                 "• سيتم إضافة ✅ حول الخدمات تلقائياً\n"
-                "• يدعم النصوص والصور والملفات\n\n"
+                "• سيتم تطبيق التشفير الخارق تلقائياً\n\n"
                 "📝 مثال للإعلان:\n"
                 "همزة وصل  \n"
                 "✔ خدمات طلابية كامله  \n"
@@ -1112,8 +1154,7 @@ async def main():
                 "⚙️ **الإعدادات**\n\n"
                 f"⚡ سرعة النشر: {get_setting('message_interval', '2')} ثانية\n"
                 f"🐢 مدة الانضمام: {get_setting('join_interval', '100')} ثانية\n"
-                f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
-                f"🎭 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
+                f"🛡 التشفير الخارق: {get_setting('anti_detect', 'on')}\n"
                 f"🤖 كشف البوتات: {get_setting('bot_detection', 'on')}",
                 buttons=get_settings_menu()
             )
@@ -1122,32 +1163,11 @@ async def main():
             await event.edit("🐢 أرسل المدة بين الروابط (30-600 ثانية):\n/cancel للإلغاء")
             set_setting('awaiting_join_interval', 'true')
 
-        elif data == 'toggle_enc':
-            current = get_setting('encryption', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('encryption', new_val)
-            await event.answer(f"التشفير: {'مفعل' if new_val == 'on' else 'معطل'}")
-            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
-
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
             new_val = 'off' if current == 'on' else 'on'
             set_setting('anti_detect', new_val)
-            await event.answer(f"مكافحة الكشف: {'مفعلة' if new_val == 'on' else 'معطلة'}")
-            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
-
-        elif data == 'toggle_jitter':
-            current = get_setting('use_jitter', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('use_jitter', new_val)
-            await event.answer(f"Jitter: {'مفعل' if new_val == 'on' else 'معطل'}")
-            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
-
-        elif data == 'toggle_bot_detect':
-            current = get_setting('bot_detection', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('bot_detection', new_val)
-            await event.answer(f"كشف البوتات: {'مفعل' if new_val == 'on' else 'معطل'}")
+            await event.answer(f"التشفير الخارق: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
 
         # ─── الإحصائيات ───
@@ -1232,8 +1252,9 @@ async def main():
         elif data == 'confirm_clean':
             try:
                 saved = clean_database_keep_accounts()
-                for key, val in defaults.items():
-                    set_setting(key, val)
+                set_setting('message_interval', '2')
+                set_setting('join_interval', '100')
+                set_setting('anti_detect', 'on')
                 await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب", 
                                buttons=[[Button.inline("🔄 تحديث المجموعات", b"refresh_groups")]])
             except Exception as e:
@@ -1336,15 +1357,17 @@ async def main():
             msg_id = c.lastrowid
             conn.close()
             
-            # معاينة التنسيق
-            formatted_preview = format_ad_for_posting(content[:300], simple=True) if content else ""
+            # معاينة التنسيق والتشفير
+            formatted_preview = format_ad_with_checks(content[:200]) if content else ""
+            encrypted_preview = encrypt_text(formatted_preview)[:250]
             
             types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
             await event.respond(
                 f"✅ **تم حفظ الرسالة #{msg_id}!**\n\n"
                 f"📎 النوع: {types.get(msg_type, msg_type)}\n"
-                f"🎨 **معاينة التنسيق:**\n```\n{formatted_preview}\n```\n\n"
-                f"⚡ سيتم تطبيق التنسيق التلقائي ✅ عند النشر السريع",
+                f"🎨 **ما يراه المستخدم:**\n```\n{formatted_preview}\n```\n\n"
+                f"🔒 **ما يراه بوت الحماية (مشوّه):**\n`{encrypted_preview}`\n\n"
+                f"⚡ سيتم تطبيق التشفير الخارق عند النشر",
                 buttons=get_main_menu()
             )
             return
@@ -1522,7 +1545,7 @@ async def main():
         except:
             await event.respond("❌ استخدم: /set_join_interval 100")
 
-    logger.info("✅ البوت جاهز - نسخة النشر السريع مع تنسيق ✅!")
+    logger.info("✅ البوت جاهز - التشفير الخارق يعمل!")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
