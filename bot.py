@@ -5,7 +5,7 @@
 ╔═══════════════════════════════════════════════════════════════╗
 ║     🤖 بوت النشر الخارق - نسخة الحماية القصوى 🛡️             ║
 ║     متجاوز لجميع بوتات الحماية (GroupHelp, AutoREU, etc.)    ║
-║     + زر نشر سريع (بدون التأثير على الميزات الأخرى)          ║
+║     + نشر سريع ⚡                                            ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -60,6 +60,14 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════
+#  المتغيرات العامة
+# ═══════════════════════════════════════════════
+user_clients = {}
+temp_sessions = {}
+is_posting_active = False
+is_joining_active = False
 
 # ═══════════════════════════════════════════════
 #  قاعدة البيانات SQLite
@@ -396,11 +404,6 @@ def encrypt_text(text, group_id=None):
 # ═══════════════════════════════════════════════
 #  إدارة الحسابات والمجموعات
 # ═══════════════════════════════════════════════
-user_clients = {}
-temp_sessions = {}
-is_posting_active = False
-is_joining_active = False
-
 async def restore_sessions():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -609,8 +612,21 @@ def get_join_history(limit=30):
     return rows
 
 # ═══════════════════════════════════════════════
-#  ⚡ نظام النشر السريع (الميزة الجديدة) ⚡
+#  ⚡ نظام النشر السريع ⚡
 # ═══════════════════════════════════════════════
+async def send_contact_message(client, chat_id, contact_data, caption):
+    try:
+        contact = InputMediaContact(
+            phone_number=contact_data.get('phone', ''),
+            first_name=contact_data.get('first_name', ''),
+            last_name=contact_data.get('last_name', ''),
+            vcard=contact_data.get('vcard', '')
+        )
+        return await client.send_file(chat_id, contact, caption=caption)
+    except Exception as e:
+        logger.error(f"خطأ في إرسال جهة الاتصال: {e}")
+        raise
+
 async def fast_post_to_all_groups(message):
     global is_posting_active
     
@@ -667,13 +683,7 @@ async def fast_post_to_all_groups(message):
                 await client.send_file(int(group_id), media_path, caption=encrypted_content)
             elif msg_type == 'contact' and media_data:
                 contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
-                contact = InputMediaContact(
-                    phone_number=contact_data.get('phone', ''),
-                    first_name=contact_data.get('first_name', ''),
-                    last_name=contact_data.get('last_name', ''),
-                    vcard=contact_data.get('vcard', '')
-                )
-                await client.send_file(int(group_id), contact, caption=encrypted_content)
+                await send_contact_message(client, int(group_id), contact_data, encrypted_content)
             else:
                 if media_path and os.path.exists(media_path):
                     await client.send_file(int(group_id), media_path, caption=encrypted_content)
@@ -695,21 +705,8 @@ async def fast_post_to_all_groups(message):
     return success_count, fail_count, len(groups)
 
 # ═══════════════════════════════════════════════
-#  نظام النشر العادي (المحافظة عليه كما هو)
+#  نظام النشر العادي
 # ═══════════════════════════════════════════════
-async def send_contact_message(client, chat_id, contact_data, caption):
-    try:
-        contact = InputMediaContact(
-            phone_number=contact_data.get('phone', ''),
-            first_name=contact_data.get('first_name', ''),
-            last_name=contact_data.get('last_name', ''),
-            vcard=contact_data.get('vcard', '')
-        )
-        return await client.send_file(chat_id, contact, caption=caption)
-    except Exception as e:
-        logger.error(f"خطأ في إرسال جهة الاتصال: {e}")
-        raise
-
 async def post_to_all_groups(message):
     global is_posting_active
     
@@ -883,7 +880,7 @@ def clean_database_keep_accounts():
     return len(accounts)
 
 # ═══════════════════════════════════════════════
-#  لوحة التحكم (مضافة زر النشر السريع)
+#  لوحة التحكم
 # ═══════════════════════════════════════════════
 def get_main_menu():
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
@@ -1106,7 +1103,47 @@ async def main():
             return
         await event.respond("✅ البوت يعمل مع الحماية القصوى والنشر السريع!")
 
-    # ─── معالج الأزرار (مضاف إليه زر النشر السريع) ───
+    @bot.on(events.NewMessage(pattern='/fast_post'))
+    async def fast_post_command(event):
+        if not is_admin(event.sender_id):
+            return
+        
+        groups_count = await get_all_groups_count()
+        if groups_count == 0:
+            await event.respond("⚠️ لا توجد مجموعات! اضغط 'تحديث المجموعات' أولاً")
+            return
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages LIMIT 1")
+        msg = c.fetchone()
+        conn.close()
+        
+        if not msg:
+            await event.respond("⚠️ لا توجد رسائل! أضف رسالة أولاً")
+            return
+        
+        if is_posting_active:
+            await event.respond("⚠️ النشر يعمل بالفعل! استخدم /stop_posting أولاً")
+            return
+        
+        global is_posting_active
+        is_posting_active = True
+        fast_delay = get_setting('fast_post_delay', '2')
+        await event.respond(f"⚡ بدء النشر السريع في {groups_count} مجموعة (كل {fast_delay} ثانية)...")
+        
+        success, fails, total = await fast_post_to_all_groups(msg)
+        is_posting_active = False
+        
+        await event.respond(f"✅ اكتمل النشر السريع!\n✅ نجاح: {success}\n❌ فشل: {fails}\n📢 من أصل {total} مجموعة")
+
+    @bot.on(events.NewMessage(pattern='/stop_posting'))
+    async def stop_posting_command(event):
+        global is_posting_active
+        is_posting_active = False
+        await event.respond("⏹ **تم إيقاف النشر**")
+
+    # ─── معالج الأزرار ───
     @bot.on(events.CallbackQuery)
     async def callback_handler(event):
         global is_posting_active
@@ -1129,7 +1166,7 @@ async def main():
                 buttons=get_main_menu()
             )
 
-        # ─── النشر السريع (الميزة الجديدة) ───
+        # ─── النشر السريع ───
         elif data == 'fast_posting':
             await event.answer("⚡ جاري النشر السريع...", alert=True)
             
@@ -1246,7 +1283,7 @@ async def main():
             await event.edit("⚡ أرسل المدة بين المجموعات في النشر السريع (1-30 ثانية):\n/cancel للإلغاء")
             set_setting('awaiting_fast_delay', 'true')
 
-        # ─── باقي الأزرار (محفوظة كما هي) ───
+        # ─── باقي الأزرار ───
         elif data == 'messages':
             await event.edit("📝 **إدارة الرسائل**", buttons=[
                 [Button.inline("➕ إضافة", b"add_msg")],
@@ -1782,7 +1819,7 @@ async def main():
         except:
             pass
 
-    # ─── أوامر سريعة ───
+    # ─── أوامر سريعة إضافية ───
     @bot.on(events.NewMessage(pattern='/scan_groups'))
     async def scan_groups(event):
         if not is_admin(event.sender_id):
@@ -1829,47 +1866,6 @@ async def main():
                 await event.respond(f"✅ مدة الانضمام: {val} ثانية")
         except:
             await event.respond("❌ استخدم: /set_join_interval 100")
-
-    @bot.on(events.NewMessage(pattern='/fast_post'))
-    async def fast_post_command(event):
-        """أمر سريع لبدء النشر السريع"""
-        if not is_admin(event.sender_id):
-            return
-        
-        groups_count = await get_all_groups_count()
-        if groups_count == 0:
-            await event.respond("⚠️ لا توجد مجموعات! اضغط 'تحديث المجموعات' أولاً")
-            return
-        
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages LIMIT 1")
-        msg = c.fetchone()
-        conn.close()
-        
-        if not msg:
-            await event.respond("⚠️ لا توجد رسائل! أضف رسالة أولاً")
-            return
-        
-        if is_posting_active:
-            await event.respond("⚠️ النشر يعمل بالفعل! استخدم /stop_posting أولاً")
-            return
-        
-        global is_posting_active
-        is_posting_active = True
-        fast_delay = get_setting('fast_post_delay', '2')
-        await event.respond(f"⚡ بدء النشر السريع في {groups_count} مجموعة (كل {fast_delay} ثانية)...")
-        
-        success, fails, total = await fast_post_to_all_groups(msg)
-        is_posting_active = False
-        
-        await event.respond(f"✅ اكتمل النشر السريع!\n✅ نجاح: {success}\n❌ فشل: {fails}\n📢 من أصل {total} مجموعة")
-
-    @bot.on(events.NewMessage(pattern='/stop_posting'))
-    async def stop_posting_command(event):
-        global is_posting_active
-        is_posting_active = False
-        await event.respond("⏹ **تم إيقاف النشر**", buttons=get_main_menu())
 
     logger.info("✅ البوت جاهز - مع الحماية القصوى والنشر السريع!")
     await bot.run_until_disconnected()
