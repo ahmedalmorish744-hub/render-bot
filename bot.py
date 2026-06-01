@@ -26,7 +26,7 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import InputMediaContact
+from telethon.tl.types import InputMediaContact, Chat, Channel
 from flask import Flask, jsonify
 
 # ═══════════════════════════════════════════════
@@ -109,11 +109,15 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER, group_name TEXT,
         bot_name TEXT, detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    
+    c.execute('''CREATE TABLE IF NOT EXISTS blacklist (
+        group_id TEXT PRIMARY KEY,
+        group_name TEXT,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+
     if get_setting('fast_post_delay') is None:
-        set_setting('fast_post_delay', '2')
+        set_setting('fast_post_delay', '3')
     if get_setting('message_interval') is None:
-        set_setting('message_interval', '60')
+        set_setting('message_interval', '3')
     if get_setting('join_interval') is None:
         set_setting('join_interval', '100')
     if get_setting('encryption') is None:
@@ -124,7 +128,9 @@ def init_db():
         set_setting('use_jitter', 'on')
     if get_setting('bot_detection') is None:
         set_setting('bot_detection', 'on')
-    
+    if get_setting('obfuscation_enabled') is None:
+        set_setting('obfuscation_enabled', 'on')
+
     conn.commit()
     conn.close()
     logger.info("✅ قاعدة البيانات جاهزة")
@@ -144,10 +150,47 @@ def set_setting(key, value):
     conn.commit()
     conn.close()
 
+# ═══════════════════════════════════════════════
+#  Blacklist helper functions
+# ═══════════════════════════════════════════════
+def add_to_blacklist(group_id, group_name=""):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('INSERT OR IGNORE INTO blacklist (group_id, group_name, added_at) VALUES (?, ?, ?)',
+              (str(group_id), group_name, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def remove_from_blacklist(group_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM blacklist WHERE group_id=?', (str(group_id),))
+    conn.commit()
+    conn.close()
+
+def get_blacklisted_groups():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT group_id, group_name, added_at FROM blacklist ORDER BY added_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def is_group_blacklisted(group_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT 1 FROM blacklist WHERE group_id=?', (str(group_id),))
+    row = c.fetchone()
+    conn.close()
+    return row is not None
+
+# ═══════════════════════════════════════════════
+#  Account cooldown functions
+# ═══════════════════════════════════════════════
 def set_account_cooldown(acc_id, until_timestamp):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('UPDATE accounts SET cooldown_until=?, status=? WHERE id=?', 
+    c.execute('UPDATE accounts SET cooldown_until=?, status=? WHERE id=?',
               (datetime.fromtimestamp(until_timestamp).isoformat(), 'cooldown', acc_id))
     conn.commit()
     conn.close()
@@ -263,7 +306,7 @@ class UltimateAntiDetection:
             ('★', '★'), ('☆', '☆'), ('♡', '♡'), ('❂', '❂'),
         ]
         self.sent_messages_cache = deque(maxlen=500)
-    
+
     def obfuscate_links(self, text):
         text = text.replace('t.me', 't\u200B.\u200Cme')
         text = text.replace('telegram.me', 'tele\u200Dgram\u200B.me')
@@ -277,19 +320,19 @@ class UltimateAntiDetection:
             return f't.me/{username}'
         text = re.sub(r't\.me/([a-zA-Z0-9_]+)', obfuscate_username, text)
         return text
-    
+
     def obfuscate_mentions(self, text):
         def replace_mention(match):
             username = match.group(1)
             return '@\u200B' + username
         return re.sub(r'@([a-zA-Z0-9_]{3,})', replace_mention, text)
-    
+
     def replace_keywords(self, text):
         for keyword, replacements in self.keywords.items():
             if keyword in text and random.random() > 0.6:
                 text = text.replace(keyword, random.choice(replacements))
         return text
-    
+
     def apply_homoglyphs(self, text, intensity=0.15):
         result = []
         for char in text:
@@ -298,7 +341,7 @@ class UltimateAntiDetection:
             else:
                 result.append(char)
         return ''.join(result)
-    
+
     def split_keywords(self, text):
         keyword_patterns = {
             'اشترك': 'ا\u200Bش\u200Cت\u200Dر\u200Bك',
@@ -317,7 +360,7 @@ class UltimateAntiDetection:
                 text = text.replace(word, obfuscated)
                 text = text.replace(word.capitalize(), obfuscated.capitalize())
         return text
-    
+
     def add_random_noise(self, text):
         noises = [
             f" {random.randint(10, 999)}",
@@ -328,7 +371,7 @@ class UltimateAntiDetection:
         if random.random() > 0.8:
             return text + random.choice(noises)
         return text
-    
+
     def add_invisible_chars_randomly(self, text, intensity=0.03):
         if len(text) < 10 or random.random() > 0.5:
             return text
@@ -337,7 +380,7 @@ class UltimateAntiDetection:
             if random.random() < intensity:
                 chars.insert(i, random.choice(self.invisible_chars))
         return ''.join(chars)
-    
+
     def reorder_words(self, text):
         if random.random() > 0.95 and len(text.split()) > 5:
             words = text.split()
@@ -345,7 +388,7 @@ class UltimateAntiDetection:
             words[idx1], words[idx2] = words[idx2], words[idx1]
             return ' '.join(words)
         return text
-    
+
     def add_decorations(self, text):
         if random.random() > 0.6 and len(text) < 200:
             left, right = random.choice(self.decorations)
@@ -357,14 +400,14 @@ class UltimateAntiDetection:
             ]
             return random.choice(patterns)
         return text
-    
+
     def is_duplicate_message(self, text, group_id):
         cache_key = f"{group_id}:{hash(text)}"
         if cache_key in self.sent_messages_cache:
             return True
         self.sent_messages_cache.append(cache_key)
         return False
-    
+
     def generate_ultimate_variation(self, text, group_id=None):
         if get_setting('anti_detect', 'on') != 'on':
             return text
@@ -389,6 +432,139 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+# ═══════════════════════════════════════════════
+#  Text variation and obfuscation functions
+# ═══════════════════════════════════════════════
+
+def vary_text(text):
+    """Apply random variations to text before sending to make each message slightly different."""
+    if not text:
+        return text
+    result = text
+
+    # Add invisible char at beginning or middle
+    inv_char = random.choice(['\u200B', '\u200D'])
+    if random.random() > 0.5 and len(result) > 1:
+        pos = random.randint(1, len(result) - 1)
+        result = result[:pos] + inv_char + result[pos:]
+    else:
+        result = inv_char + result
+
+    # Toggle case of one random latin character
+    latin_chars = [i for i, c in enumerate(result) if c.isascii() and c.isalpha()]
+    if latin_chars:
+        pos = random.choice(latin_chars)
+        c = result[pos]
+        if c.isupper():
+            result = result[:pos] + c.lower() + result[pos+1:]
+        else:
+            result = result[:pos] + c.upper() + result[pos+1:]
+
+    # Add extra space between two random words
+    words = result.split(' ')
+    if len(words) > 2:
+        space_positions = [i for i in range(len(words) - 1) if words[i] and words[i+1]]
+        if space_positions:
+            idx = random.choice(space_positions)
+            words[idx] = words[idx] + ' '  # double space
+            result = ' '.join(words)
+
+    # Change punctuation at end of text
+    if result:
+        end_punct_map = {
+            '.': ['!', '..', '...', '!'],
+            '!': ['..', '!!!', '.'],
+            '..': ['...', '.', '!'],
+            '...': ['..', '!', '.'],
+        }
+        for punct, replacements in end_punct_map.items():
+            if result.rstrip().endswith(punct):
+                stripped = result.rstrip()
+                result = stripped[:-len(punct)] + random.choice(replacements) + result[len(stripped):]
+                break
+        else:
+            # No ending punctuation - sometimes add one
+            if random.random() > 0.6:
+                result = result.rstrip() + random.choice(['.', '!', '..'])
+
+    return result
+
+
+def obfuscate_for_humans(text):
+    """Apply human-readable obfuscation techniques to evade text-based detection."""
+    if not text:
+        return text
+    original_len = len(text)
+    result = text
+
+    # 1. Homoglyphs: Replace latin letters with Cyrillic lookalikes
+    homoglyph_map = {
+        'a': '\u0430',  # а
+        'o': '\u043E',  # о
+        'c': '\u0441',  # с
+        'e': '\u0435',  # е
+        'p': '\u0440',  # р
+        'x': '\u0445',  # х
+    }
+    if random.random() > 0.3:
+        chars = list(result)
+        for i, c in enumerate(chars):
+            if c in homoglyph_map and random.random() > 0.5:
+                chars[i] = homoglyph_map[c]
+        result = ''.join(chars)
+
+    # 2. Invisible chars: Insert \u200B or \u200C between some characters (not all)
+    if random.random() > 0.4 and len(result) > 5:
+        chars = list(result)
+        insert_positions = []
+        for i in range(1, len(chars)):
+            if random.random() > 0.85:  # ~15% of positions
+                insert_positions.append(i)
+        # Insert in reverse to preserve positions
+        for pos in reversed(insert_positions):
+            inv = random.choice(['\u200B', '\u200C'])
+            chars.insert(pos, inv)
+        result = ''.join(chars)
+
+    # 3. Alternative spaces: Replace normal space with \u00A0 (non-breaking) or \u2009 (thin space)
+    if random.random() > 0.4:
+        spaces = [i for i, c in enumerate(result) if c == ' ']
+        for pos in spaces:
+            if random.random() > 0.6:
+                replacement = random.choice(['\u00A0', '\u2009'])
+                result = result[:pos] + replacement + result[pos+1:]
+
+    # 4. Arabic diacritics: Add random diacritics on some Arabic letters
+    arabic_diacritics = ['\u064E', '\u064F', '\u0650', '\u0651', '\u0652']  # fatha, damma, kasra, shadda, sukun
+    if random.random() > 0.3:
+        chars = list(result)
+        arabic_positions = [i for i, c in enumerate(chars) if '\u0621' <= c <= '\u064A']
+        for pos in arabic_positions:
+            if random.random() > 0.75:  # ~25% of Arabic letters
+                diacritic = random.choice(arabic_diacritics)
+                chars.insert(pos + 1, diacritic)
+        result = ''.join(chars)
+
+    # 5. Bidirectional control: Use \u202E + reversed word + \u202C on a random Arabic word
+    if random.random() > 0.7:
+        arabic_words = re.findall(r'[\u0621-\u064A\u064E-\u0652]+', result)
+        if arabic_words:
+            word = random.choice(arabic_words)
+            if len(word) > 1:
+                reversed_word = word[::-1]
+                bidi_word = '\u202E' + reversed_word + '\u202C'
+                # Only replace the first occurrence to avoid issues
+                result = result.replace(word, bidi_word, 1)
+
+    # Constraint: Text length increase must be under 15%
+    max_len = int(original_len * 1.15)
+    if len(result) > max_len and max_len >= original_len:
+        # Trim from the end of added chars but keep original content
+        result = result[:max_len]
+
+    return result
+
 
 # ═══════════════════════════════════════════════
 #  إدارة الحسابات والمجموعات
@@ -442,6 +618,24 @@ async def fetch_all_groups_for_account(acc_id, client):
     except Exception as e:
         logger.error(f"❌ فشل استيراد المجموعات: {e}")
     return count
+
+async def get_account_groups(client):
+    """Dynamically fetch all groups/channels from a user account, excluding blacklisted ones."""
+    groups = []
+    try:
+        async for dialog in client.iter_dialogs():
+            entity = dialog.entity
+            # Filter only Chat and Channel type entities
+            if isinstance(entity, (Chat, Channel)):
+                group_id = dialog.id
+                group_name = dialog.name or "بدون اسم"
+                # Skip blacklisted groups
+                if is_group_blacklisted(group_id):
+                    continue
+                groups.append((group_id, group_name))
+    except Exception as e:
+        logger.error(f"❌ فشل جلب المجموعات من الحساب: {e}")
+    return groups
 
 async def get_all_groups_count():
     conn = sqlite3.connect(DB_PATH)
@@ -600,33 +794,59 @@ async def send_contact_message(client, chat_id, contact_data, caption):
 
 async def fast_post_to_all_groups(message):
     global is_posting_active
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT group_id, group_name FROM groups WHERE is_protected=0")
-    groups = c.fetchall()
-    conn.close()
-    if not groups:
+    # Dynamically fetch groups from all active accounts
+    all_groups = []
+    seen_ids = set()
+    for acc_id, client in list(user_clients.items()):
+        try:
+            acc_groups = await get_account_groups(client)
+            for gid, gname in acc_groups:
+                if gid not in seen_ids:
+                    seen_ids.add(gid)
+                    all_groups.append((gid, gname, acc_id))
+        except Exception as e:
+            logger.error(f"❌ فشل جلب مجموعات الحساب {acc_id}: {e}")
+            continue
+
+    if not all_groups:
         return 0, 0, "لا توجد مجموعات"
+
     msg_id = message[0]
     content = message[1]
     media_path = message[2]
     msg_type = message[3]
     media_data = message[4] if len(message) > 4 else None
-    fast_delay = int(get_setting('fast_post_delay', '2'))
+    fast_delay = max(2, int(get_setting('fast_post_delay', '3')))
+    obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
     success_count = 0
     fail_count = 0
-    for group_id, group_name in groups:
+    total_groups = len(all_groups)
+
+    for group_id, group_name, acc_id in all_groups:
         if not is_posting_active:
             break
-        encrypted_content = encrypt_text(content, group_id) if content else ""
-        available_accs = await get_available_accounts()
-        if not available_accs:
-            await asyncio.sleep(5)
-            continue
-        acc_id = random.choice(available_accs)
+        # Apply text processing pipeline: vary_text → obfuscate_for_humans (if enabled) → encrypt_text
+        if content:
+            varied = vary_text(content)
+            if obfuscation_on:
+                varied = obfuscate_for_humans(varied)
+            encrypted_content = encrypt_text(varied, group_id)
+        else:
+            encrypted_content = ""
+
         client = user_clients.get(acc_id)
         if not client:
-            continue
+            # Fallback: try any available account
+            available_accs = await get_available_accounts()
+            if not available_accs:
+                await asyncio.sleep(5)
+                continue
+            fallback_acc = random.choice(available_accs)
+            client = user_clients.get(fallback_acc)
+            if not client:
+                continue
+            acc_id = fallback_acc
+
         try:
             await asyncio.sleep(fast_delay)
             if not is_posting_active:
@@ -653,63 +873,119 @@ async def fast_post_to_all_groups(message):
             log_posting(acc_id, int(group_id), msg_id, 'success')
             logger.info(f"⚡ سريع ✅ {group_name[:30]}")
         except FloodWaitError as e:
-            logger.warning(f"⏸ FloodWait: {e.seconds}ث")
-            set_account_cooldown(acc_id, time.time() + e.seconds)
-            fail_count += 1
+            logger.warning(f"⏸ FloodWait: {e.seconds}ث - انتظار ثم إعادة المحاولة")
+            # Smart FloodWait: wait the required time then retry the same group once
+            try:
+                await asyncio.sleep(e.seconds + 1)
+                if not is_posting_active:
+                    break
+                if msg_type == 'text':
+                    await client.send_message(int(group_id), encrypted_content)
+                elif msg_type == 'photo' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'video' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'audio' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'document' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'contact' and media_data:
+                    contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
+                    await send_contact_message(client, int(group_id), contact_data, encrypted_content)
+                else:
+                    if media_path and os.path.exists(media_path):
+                        await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                    else:
+                        await client.send_message(int(group_id), encrypted_content)
+                success_count += 1
+                log_posting(acc_id, int(group_id), msg_id, 'success (retry after flood)')
+                logger.info(f"⚡ سريع ✅ (بعد FloodWait) {group_name[:30]}")
+            except Exception as retry_e:
+                fail_count += 1
+                logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
+                set_account_cooldown(acc_id, time.time() + e.seconds)
+            # Never stop the loop - continue to next group
         except Exception as e:
             fail_count += 1
             logger.error(f"❌ فشل: {e}")
-    return success_count, fail_count, len(groups)
+            # Never stop - log and continue
+    return success_count, fail_count, total_groups
 
 # ═══════════════════════════════════════════════
 #  النشر العادي
 # ═══════════════════════════════════════════════
 async def post_to_all_groups(message):
     global is_posting_active
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT group_id, group_name FROM groups WHERE is_protected=0")
-    groups = c.fetchall()
-    conn.close()
-    if not groups:
+    # Dynamically fetch groups from all active accounts
+    all_groups = []
+    seen_ids = set()
+    for acc_id, client in list(user_clients.items()):
+        try:
+            acc_groups = await get_account_groups(client)
+            for gid, gname in acc_groups:
+                if gid not in seen_ids:
+                    seen_ids.add(gid)
+                    all_groups.append((gid, gname, acc_id))
+        except Exception as e:
+            logger.error(f"❌ فشل جلب مجموعات الحساب {acc_id}: {e}")
+            continue
+
+    if not all_groups:
         return 0, 0, "لا توجد مجموعات"
+
     msg_id = message[0]
     content = message[1]
     media_path = message[2]
     msg_type = message[3]
     media_data = message[4] if len(message) > 4 else None
-    base_interval = int(get_setting('message_interval', '60'))
+    base_interval = max(2, int(get_setting('message_interval', '3')))
     use_jitter = get_setting('use_jitter', 'on') == 'on'
+    obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
     success_count = 0
     fail_count = 0
-    for group_id, group_name in groups:
+    total_groups = len(all_groups)
+
+    for group_id, group_name, acc_id in all_groups:
         if not is_posting_active:
             break
-        encrypted_content = encrypt_text(content, group_id) if content else ""
-        available_accs = await get_available_accounts()
-        if not available_accs:
-            all_accs = await get_all_accounts()
-            if all_accs:
-                min_wait = 999999
-                for acc_id in all_accs:
-                    in_cooldown, remaining = is_account_in_cooldown(acc_id)
-                    if in_cooldown and remaining < min_wait:
-                        min_wait = remaining
-                if min_wait < 999999:
-                    wait_time = min(min_wait, 60)
-                    logger.info(f"⏸ انتظار {wait_time:.0f} ثانية...")
-                    await asyncio.sleep(wait_time)
-                    continue
-            await asyncio.sleep(30)
-            continue
-        acc_id = random.choice(available_accs)
+        # Apply text processing pipeline: vary_text → obfuscate_for_humans (if enabled) → encrypt_text
+        if content:
+            varied = vary_text(content)
+            if obfuscation_on:
+                varied = obfuscate_for_humans(varied)
+            encrypted_content = encrypt_text(varied, group_id)
+        else:
+            encrypted_content = ""
+
         client = user_clients.get(acc_id)
         if not client:
-            continue
+            # Fallback: try any available account
+            available_accs = await get_available_accounts()
+            if not available_accs:
+                all_accs = await get_all_accounts()
+                if all_accs:
+                    min_wait = 999999
+                    for a_id in all_accs:
+                        in_cooldown, remaining = is_account_in_cooldown(a_id)
+                        if in_cooldown and remaining < min_wait:
+                            min_wait = remaining
+                    if min_wait < 999999:
+                        wait_time = min(min_wait, 60)
+                        logger.info(f"⏸ انتظار {wait_time:.0f} ثانية...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                await asyncio.sleep(30)
+                continue
+            fallback_acc = random.choice(available_accs)
+            client = user_clients.get(fallback_acc)
+            if not client:
+                continue
+            acc_id = fallback_acc
+
         try:
             if use_jitter:
-                jitter = random.randint(-10, 30)
-                actual_delay = max(15, base_interval + jitter)
+                jitter = random.randint(-1, 2)
+                actual_delay = max(2, base_interval + jitter)
             else:
                 actual_delay = base_interval
             for _ in range(actual_delay):
@@ -741,15 +1017,45 @@ async def post_to_all_groups(message):
             logger.info(f"✅ [{msg_type}] {group_name[:30]} (حساب {acc_id}) [مشفر]")
         except FloodWaitError as e:
             wait_time = e.seconds
-            logger.warning(f"⏸ حساب {acc_id} FloodWait: {wait_time}ث")
-            set_account_cooldown(acc_id, time.time() + wait_time)
-            fail_count += 1
-            log_posting(acc_id, int(group_id), msg_id, f'failed: flood wait {wait_time}s')
+            logger.warning(f"⏸ حساب {acc_id} FloodWait: {wait_time}ث - انتظار ثم إعادة المحاولة")
+            # Smart FloodWait: wait then retry once
+            try:
+                await asyncio.sleep(wait_time + 1)
+                if not is_posting_active:
+                    break
+                if msg_type == 'text':
+                    await client.send_message(int(group_id), encrypted_content)
+                elif msg_type == 'photo' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'video' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'audio' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'document' and media_path and os.path.exists(media_path):
+                    await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                elif msg_type == 'contact' and media_data:
+                    contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
+                    await send_contact_message(client, int(group_id), contact_data, encrypted_content)
+                else:
+                    if media_path and os.path.exists(media_path):
+                        await client.send_file(int(group_id), media_path, caption=encrypted_content)
+                    else:
+                        await client.send_message(int(group_id), encrypted_content)
+                success_count += 1
+                log_posting(acc_id, int(group_id), msg_id, 'success (retry after flood)')
+                logger.info(f"✅ [{msg_type}] (بعد FloodWait) {group_name[:30]}")
+            except Exception as retry_e:
+                fail_count += 1
+                set_account_cooldown(acc_id, time.time() + wait_time)
+                log_posting(acc_id, int(group_id), msg_id, f'failed: retry after flood {str(retry_e)[:30]}')
+                logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
+            # Never stop the loop - continue to next group
         except Exception as e:
             fail_count += 1
             log_posting(acc_id, int(group_id), msg_id, f'failed: {str(e)[:50]}')
             logger.error(f"❌ فشل النشر: {e}")
-    return success_count, fail_count, len(groups)
+            # Never stop - log and continue
+    return success_count, fail_count, total_groups
 
 def log_posting(account_id, group_id, message_id, status):
     conn = sqlite3.connect(DB_PATH)
@@ -773,6 +1079,7 @@ def clean_database_keep_accounts():
     c.execute("DROP TABLE IF EXISTS join_history")
     c.execute("DROP TABLE IF EXISTS settings")
     c.execute("DROP TABLE IF EXISTS protected_groups_log")
+    c.execute("DROP TABLE IF EXISTS blacklist")
     c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -806,6 +1113,10 @@ def clean_database_keep_accounts():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         group_id INTEGER, group_name TEXT,
         bot_name TEXT, detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS blacklist (
+        group_id TEXT PRIMARY KEY,
+        group_name TEXT,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     for session_str, phone, status in accounts:
         c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
                   (session_str, phone, status))
@@ -821,20 +1132,21 @@ def get_main_menu():
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     bot_detect_status = "✅" if get_setting('bot_detection', 'on') == 'on' else "❌"
-    message_interval = get_setting('message_interval', '60')
+    obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
+    message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '100')
-    fast_delay = get_setting('fast_post_delay', '2')
+    fast_delay = get_setting('fast_post_delay', '3')
     return [
         [Button.inline("📝 إدارة الرسائل", b"messages")],
         [Button.inline("👥 إدارة الحسابات", b"accounts")],
-        [Button.inline("📢 إدارة المجموعات", b"groups")],
         [Button.inline("⚡ نشر سريع", b"fast_posting"),
          Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
         [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter"),
-         Button.inline(f"🤖 كشف البوتات {bot_detect_status}", b"toggle_bot_detect")],
+        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
+         Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"🤖 كشف البوتات {bot_detect_status}", b"toggle_bot_detect")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
@@ -844,6 +1156,7 @@ def get_main_menu():
          Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
         [Button.inline("🔄 مسح تبريد الحسابات", b"clear_cooldowns")],
         [Button.inline("🛡️ المجموعات المحمية", b"protected_groups")],
+        [Button.inline("🚫 القائمة السوداء", b"blacklist")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
         [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
@@ -860,15 +1173,25 @@ def get_settings_menu():
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     bot_detect_status = "✅" if get_setting('bot_detection', 'on') == 'on' else "❌"
+    obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
     return [
         [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
         [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
+        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
         [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
         [Button.inline(f"🤖 تبديل كشف البوتات {bot_detect_status}", b"toggle_bot_detect")],
         [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
         [Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
         [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
         [Button.inline("🔙 رجوع", b"back")]
+    ]
+
+def get_blacklist_menu():
+    return [
+        [Button.inline("➕ إضافة للقائمة السوداء", b"add_blacklist")],
+        [Button.inline("📋 عرض القائمة السوداء", b"view_blacklist")],
+        [Button.inline("🗑 حذف من القائمة السوداء", b"del_blacklist")],
+        [Button.inline("🔙 رجوع", b"back")],
     ]
 
 # ═══════════════════════════════════════════════
@@ -891,15 +1214,16 @@ async def main():
         if not is_admin(event.sender_id):
             return
         groups_count = await get_all_groups_count()
-        message_interval = get_setting('message_interval', '60')
+        message_interval = get_setting('message_interval', '3')
         join_interval = get_setting('join_interval', '100')
-        fast_delay = get_setting('fast_post_delay', '2')
+        fast_delay = get_setting('fast_post_delay', '3')
         example_text = "اشترك في قناتنا للحصول على عروض حصرية"
         encrypted_example = encrypt_text(example_text)
         await event.respond(
             "🛡 **بوت النشر - الحماية القصوى + النشر السريع**\n\n"
             "✨ **تقنيات تجاوز الحماية:**\n"
             "• تشفير الروابط\n• استبدال الكلمات المفتاحية\n• إضافة أحرف غير مرئية\n• تنويع فريد لكل رسالة\n"
+            "• تشويش النص المتقدم (homoglyphs + diacritics + bidi)\n"
             f"• ⚡ نشر سريع ({fast_delay} ثانية بين المجموعات)\n\n"
             f"📝 **مثال للتشفير:**\n{encrypted_example}\n\n"
             f"📢 المجموعات: {groups_count}\n"
@@ -933,10 +1257,10 @@ async def main():
                     logger.info(f"📤 النتيجة: نجاح={success}, فشل={fails} من {total}")
                     if not is_posting_active:
                         break
-                    base_interval = int(get_setting('message_interval', '60'))
+                    base_interval = max(2, int(get_setting('message_interval', '3')))
                     use_jitter = get_setting('use_jitter', 'on') == 'on'
-                    loop_delay = base_interval + (random.randint(-15, 35) if use_jitter else 0)
-                    loop_delay = max(15, loop_delay)
+                    loop_delay = base_interval + (random.randint(-1, 2) if use_jitter else 0)
+                    loop_delay = max(2, loop_delay)
                     for _ in range(loop_delay):
                         if not is_posting_active:
                             break
@@ -953,8 +1277,14 @@ async def main():
         text = event.raw_text.replace('/encrypt', '').strip()
         if not text:
             text = "اشترك في قناتنا للحصول على عروض حصرية"
-        encrypted = encrypt_text(text)
-        await event.respond(f"📝 **النص الأصلي:**\n{text}\n\n🛡 **بعد التشفير:**\n{encrypted}")
+        varied = vary_text(text)
+        obfuscated = obfuscate_for_humans(varied)
+        encrypted = encrypt_text(obfuscated)
+        await event.respond(
+            f"📝 **النص الأصلي:**\n{text}\n\n"
+            f"🔀 **بعد التشويش:**\n{obfuscated}\n\n"
+            f"🛡 **بعد التشفير:**\n{encrypted}"
+        )
 
     @bot.on(events.NewMessage(pattern='/check'))
     async def check_handler(event):
@@ -964,13 +1294,15 @@ async def main():
         msgs = await get_all_messages_count()
         all_accs = await get_all_accounts()
         available = await get_available_accounts()
+        obf_status = '✅ مفعل' if get_setting('obfuscation_enabled', 'on') == 'on' else '❌ معطل'
         await event.respond(
             f"📊 **حالة البوت:**\n"
             f"• المجموعات: {groups}\n• الرسائل: {msgs}\n"
             f"• إجمالي الحسابات: {len(all_accs)}\n• حسابات متاحة: {len(available)}\n"
             f"• النشر: {'🟢 نشط' if is_posting_active else '🔴 متوقف'}\n"
             f"• التشفير: {'✅ مفعل' if get_setting('encryption', 'on') == 'on' else '❌ معطل'}\n"
-            f"• مكافحة الكشف: {'✅ مفعلة' if get_setting('anti_detect', 'on') == 'on' else '❌ معطلة'}"
+            f"• مكافحة الكشف: {'✅ مفعلة' if get_setting('anti_detect', 'on') == 'on' else '❌ معطلة'}\n"
+            f"• تشويش النص: {obf_status}"
         )
 
     @bot.on(events.NewMessage(pattern='/clear_cooldowns'))
@@ -991,9 +1323,8 @@ async def main():
         global is_posting_active
         if not is_admin(event.sender_id):
             return
-        groups_count = await get_all_groups_count()
-        if groups_count == 0:
-            await event.respond("⚠️ لا توجد مجموعات! اضغط 'تحديث المجموعات' أولاً")
+        if not user_clients:
+            await event.respond("⚠️ لا توجد حسابات! أضف حساباً أولاً")
             return
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -1007,8 +1338,8 @@ async def main():
             await event.respond("⚠️ النشر يعمل بالفعل! استخدم /stop_posting أولاً")
             return
         is_posting_active = True
-        fast_delay = get_setting('fast_post_delay', '2')
-        await event.respond(f"⚡ بدء النشر السريع في {groups_count} مجموعة (كل {fast_delay} ثانية)...")
+        fast_delay = get_setting('fast_post_delay', '3')
+        await event.respond(f"⚡ بدء النشر السريع (كل {fast_delay} ثانية)...")
         success, fails, total = await fast_post_to_all_groups(msg)
         is_posting_active = False
         await event.respond(f"✅ اكتمل النشر السريع!\n✅ نجاح: {success}\n❌ فشل: {fails}\n📢 من أصل {total} مجموعة")
@@ -1036,11 +1367,11 @@ async def main():
             return
         try:
             val = int(event.raw_text.split()[1])
-            if 10 <= val <= 600:
+            if 2 <= val <= 600:
                 set_setting('message_interval', str(val))
                 await event.respond(f"✅ مدة النشر العادي: {val} ثانية")
         except:
-            await event.respond("❌ استخدم: /set_msg_interval 60")
+            await event.respond("❌ استخدم: /set_msg_interval 3 (الحد الأدنى: 2)")
 
     @bot.on(events.NewMessage(pattern='/set_fast_delay'))
     async def set_fast_cmd(event):
@@ -1048,11 +1379,11 @@ async def main():
             return
         try:
             val = int(event.raw_text.split()[1])
-            if 1 <= val <= 30:
+            if 2 <= val <= 30:
                 set_setting('fast_post_delay', str(val))
                 await event.respond(f"✅ سرعة النشر السريع: {val} ثانية")
         except:
-            await event.respond("❌ استخدم: /set_fast_delay 2")
+            await event.respond("❌ استخدم: /set_fast_delay 3 (الحد الأدنى: 2)")
 
     @bot.on(events.NewMessage(pattern='/set_join_interval'))
     async def set_join_cmd(event):
@@ -1075,7 +1406,7 @@ async def main():
         data = event.data.decode('utf-8')
         if data == 'back':
             groups_count = await get_all_groups_count()
-            message_interval = get_setting('message_interval', '60')
+            message_interval = get_setting('message_interval', '3')
             join_interval = get_setting('join_interval', '100')
             await event.edit(
                 "🛡 **لوحة التحكم**\n\n"
@@ -1086,23 +1417,19 @@ async def main():
             )
         elif data == 'fast_posting':
             await event.answer("⚡ جاري النشر السريع...", alert=True)
-            groups_count = await get_all_groups_count()
             msg_count = await get_all_messages_count()
             all_accs = await get_all_accounts()
             available = await get_available_accounts()
-            fast_delay = get_setting('fast_post_delay', '2')
-            if groups_count == 0:
-                await event.edit("⚠️ لا توجد مجموعات!\nاضغط 'تحديث المجموعات' أولاً", 
-                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
+            fast_delay = get_setting('fast_post_delay', '3')
+            if not user_clients:
+                await event.edit("⚠️ لا توجد حسابات!\nاضغط 'إضافة حساب' أولاً",
+                               buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")]])
                 return
             if msg_count == 0:
                 await event.edit("⚠️ لا توجد رسائل!", buttons=[[Button.inline("➕ إضافة", b"add_msg")]])
                 return
-            if not all_accs:
-                await event.edit("⚠️ لا توجد حسابات!", buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")]])
-                return
             if is_posting_active:
-                await event.edit("⚠️ النشر يعمل بالفعل! (أوقف النشر أولاً)", 
+                await event.edit("⚠️ النشر يعمل بالفعل! (أوقف النشر أولاً)",
                                buttons=[[Button.inline("⏹ إيقاف النشر", b"stop_posting")]])
                 return
             conn = sqlite3.connect(DB_PATH)
@@ -1116,12 +1443,12 @@ async def main():
             is_posting_active = True
             enc_status = "✅ مفعل" if get_setting('encryption', 'on') == 'on' else "❌ معطل"
             anti_status = "✅ مفعل" if get_setting('anti_detect', 'on') == 'on' else "❌ معطل"
+            obf_status = "✅ مفعل" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌ معطل"
             await event.edit(
                 f"⚡ **النشر السريع قيد التشغيل!**\n\n"
-                f"📢 {groups_count} مجموعة\n"
                 f"👥 {len(all_accs)} حساب (متاح: {len(available)})\n"
                 f"⏱ كل {fast_delay} ثانية\n"
-                f"🛡 التشفير: {enc_status}\n🎭 مكافحة الكشف: {anti_status}\n\nجاري النشر...",
+                f"🛡 التشفير: {enc_status}\n🎭 مكافحة الكشف: {anti_status}\n🎭 تشويش النص: {obf_status}\n\nجاري النشر...",
                 buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")]]
             )
             success, fails, total = await fast_post_to_all_groups(msg)
@@ -1131,31 +1458,28 @@ async def main():
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
         elif data == 'start_posting':
-            groups_count = await get_all_groups_count()
             msg_count = await get_all_messages_count()
             all_accs = await get_all_accounts()
             available = await get_available_accounts()
-            if groups_count == 0:
-                await event.edit("⚠️ لا توجد مجموعات!\nاضغط 'تحديث المجموعات' أولاً", 
-                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
+            if not user_clients:
+                await event.edit("⚠️ لا توجد حسابات!\nاضغط 'إضافة حساب' أولاً",
+                               buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")]])
                 return
             if msg_count == 0:
                 await event.edit("⚠️ لا توجد رسائل!", buttons=[[Button.inline("➕ إضافة", b"add_msg")]])
-                return
-            if not all_accs:
-                await event.edit("⚠️ لا توجد حسابات!", buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")]])
                 return
             if is_posting_active:
                 await event.edit("⚠️ النشر يعمل بالفعل!", buttons=[[Button.inline("🔙 رجوع", b"back")]])
                 return
             is_posting_active = True
-            message_interval = get_setting('message_interval', '60')
+            message_interval = get_setting('message_interval', '3')
             enc_status = "✅ مفعل" if get_setting('encryption', 'on') == 'on' else "❌ معطل"
             anti_status = "✅ مفعل" if get_setting('anti_detect', 'on') == 'on' else "❌ معطل"
+            obf_status = "✅ مفعل" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌ معطل"
             await event.edit(
                 f"🚀 **بدأ النشر بالحماية القصوى!**\n\n"
-                f"📢 {groups_count} مجموعة\n👥 {len(all_accs)} حساب (متاح: {len(available)})\n"
-                f"⏱ كل {message_interval} ثانية\n🛡 التشفير: {enc_status}\n🎭 مكافحة الكشف: {anti_status}\n\n✅ النشر يعمل!",
+                f"👥 {len(all_accs)} حساب (متاح: {len(available)})\n"
+                f"⏱ كل {message_interval} ثانية\n🛡 التشفير: {enc_status}\n🎭 مكافحة الكشف: {anti_status}\n🎭 تشويش النص: {obf_status}\n\n✅ النشر يعمل!",
                 buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")]]
             )
             asyncio.create_task(auto_posting_loop())
@@ -1163,9 +1487,8 @@ async def main():
             is_posting_active = False
             await event.edit("⏹ **تم إيقاف النشر**", buttons=[[Button.inline("🔙 رجوع", b"back")]])
         elif data == 'set_fast_delay':
-            await event.edit("⚡ أرسل المدة بين المجموعات في النشر السريع (1-30 ثانية):\n/cancel للإلغاء")
+            await event.edit("⚡ أرسل المدة بين المجموعات في النشر السريع (2-30 ثانية):\n/cancel للإلغاء")
             set_setting('awaiting_fast_delay', 'true')
-        # باقي الأزرار (messages, accounts, groups, settings, stats, slow_join, join_reports, protected_groups, clean_db)
         elif data == 'messages':
             await event.edit("📝 **إدارة الرسائل**", buttons=[
                 [Button.inline("➕ إضافة", b"add_msg")],
@@ -1221,37 +1544,6 @@ async def main():
         elif data == 'del_acc':
             await event.edit("🗑 أرسل رقم الحساب:\n/cancel للإلغاء")
             set_setting('awaiting_del_acc', 'true')
-        elif data == 'groups':
-            await event.edit("📢 **إدارة المجموعات**", buttons=[
-                [Button.inline("📋 عرض", b"list_groups")],
-                [Button.inline("🗑 حذف مجموعة", b"del_group")],
-                [Button.inline("🗑 حذف الكل", b"del_all_groups")],
-                [Button.inline("🔙 رجوع", b"back")],
-            ])
-        elif data == 'list_groups':
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT id, group_name, member_count, is_protected FROM groups LIMIT 50")
-            grps = c.fetchall()
-            conn.close()
-            if not grps:
-                await event.edit("📢 لا توجد مجموعات", buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
-            else:
-                text = "📢 **المجموعات:**\n\n"
-                for gid, gname, members, protected in grps:
-                    shield = "🛡️" if protected else ""
-                    text += f"📌 #{gid} {shield} - {gname[:30]} ({members or 0} عضو)\n"
-                await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"groups")]])
-        elif data == 'del_group':
-            await event.edit("🗑 أرسل رقم المجموعة:\n/cancel للإلغاء")
-            set_setting('awaiting_del_group', 'true')
-        elif data == 'del_all_groups':
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("DELETE FROM groups")
-            conn.commit()
-            conn.close()
-            await event.edit("🗑 تم حذف جميع المجموعات", buttons=[[Button.inline("🔙 رجوع", b"groups")]])
         elif data == 'refresh_groups':
             await event.edit("🔄 جاري تحديث المجموعات...")
             total = 0
@@ -1264,19 +1556,21 @@ async def main():
             await event.answer("✅ تم مسح التبريد!", alert=True)
             await event.edit("✅ تم مسح تبريد جميع الحسابات", buttons=[[Button.inline("🔙 رجوع", b"back")]])
         elif data == 'settings':
+            obf_status = get_setting('obfuscation_enabled', 'on')
             await event.edit(
                 "⚙️ **الإعدادات**\n\n"
-                f"⏱ مدة النشر العادي: {get_setting('message_interval', '60')} ثانية\n"
-                f"⚡ مدة النشر السريع: {get_setting('fast_post_delay', '2')} ثانية\n"
+                f"⏱ مدة النشر العادي: {get_setting('message_interval', '3')} ثانية\n"
+                f"⚡ مدة النشر السريع: {get_setting('fast_post_delay', '3')} ثانية\n"
                 f"🐢 مدة الانضمام: {get_setting('join_interval', '100')} ثانية\n"
                 f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
                 f"🎭 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
+                f"🎭 تشويش النص: {obf_status}\n"
                 f"📳 Jitter: {get_setting('use_jitter', 'on')}\n"
                 f"🤖 كشف البوتات: {get_setting('bot_detection', 'on')}",
                 buttons=get_settings_menu()
             )
         elif data == 'set_msg_interval':
-            await event.edit("⏱ أرسل المدة (10-600 ثانية):\n/cancel للإلغاء")
+            await event.edit("⏱ أرسل المدة (2-600 ثانية، الحد الأدنى 2):\n/cancel للإلغاء")
             set_setting('awaiting_msg_interval', 'true')
         elif data == 'set_join_interval':
             await event.edit("🐢 أرسل المدة (30-600 ثانية):\n/cancel للإلغاء")
@@ -1293,6 +1587,12 @@ async def main():
             set_setting('anti_detect', new_val)
             await event.answer(f"مكافحة الكشف: {'مفعلة' if new_val == 'on' else 'معطلة'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+        elif data == 'toggle_obfuscate':
+            current = get_setting('obfuscation_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('obfuscation_enabled', new_val)
+            await event.answer(f"تشويش النص: {'مفعل' if new_val == 'on' else 'معطل'}")
+            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
         elif data == 'toggle_jitter':
             current = get_setting('use_jitter', 'on')
             new_val = 'off' if current == 'on' else 'on'
@@ -1305,6 +1605,24 @@ async def main():
             set_setting('bot_detection', new_val)
             await event.answer(f"كشف البوتات: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+        elif data == 'blacklist':
+            bl_count = len(get_blacklisted_groups())
+            await event.edit(f"🚫 **القائمة السوداء** ({bl_count} مجموعة)", buttons=get_blacklist_menu())
+        elif data == 'add_blacklist':
+            await event.edit("🚫 أرسل معرف المجموعة (group_id) لإضافتها للقائمة السوداء:\n/cancel للإلغاء")
+            set_setting('awaiting_add_blacklist', 'true')
+        elif data == 'view_blacklist':
+            blacklisted = get_blacklisted_groups()
+            if not blacklisted:
+                await event.edit("🚫 القائمة السوداء فارغة", buttons=get_blacklist_menu())
+            else:
+                text = "🚫 **القائمة السوداء:**\n\n"
+                for gid, gname, added_at in blacklisted[:30]:
+                    text += f"🚫 {gname[:25]} (ID: {gid})\n   📅 {added_at[:16]}\n\n"
+                await event.edit(text, buttons=get_blacklist_menu())
+        elif data == 'del_blacklist':
+            await event.edit("🚫 أرسل معرف المجموعة (group_id) لإزالتها من القائمة السوداء:\n/cancel للإلغاء")
+            set_setting('awaiting_del_blacklist', 'true')
         elif data == 'stats':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
@@ -1320,14 +1638,19 @@ async def main():
             success_count = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%'")
             fail_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM blacklist")
+            blacklist_count = c.fetchone()[0]
             join_stats = get_join_stats()
             conn.close()
+            obf_status = '✅' if get_setting('obfuscation_enabled', 'on') == 'on' else '❌'
             await event.edit(
                 f"📊 **الإحصائيات**\n\n"
                 f"📝 الرسائل: {msg_count}\n👥 الحسابات: {acc_count}\n"
                 f"📢 المجموعات: {grp_count}\n🛡️ محمية: {protected_count}\n"
+                f"🚫 القائمة السوداء: {blacklist_count}\n"
                 f"✅ نجاح: {success_count}\n❌ فشل: {fail_count}\n"
-                f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})",
+                f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})\n"
+                f"🎭 تشويش النص: {obf_status}",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
         elif data == 'slow_join':
@@ -1368,12 +1691,13 @@ async def main():
         elif data == 'confirm_clean':
             try:
                 saved = clean_database_keep_accounts()
-                set_setting('message_interval', '60')
-                set_setting('fast_post_delay', '2')
+                set_setting('message_interval', '3')
+                set_setting('fast_post_delay', '3')
                 set_setting('join_interval', '100')
                 set_setting('encryption', 'on')
                 set_setting('anti_detect', 'on')
-                await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب", 
+                set_setting('obfuscation_enabled', 'on')
+                await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب",
                                buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
             except Exception as e:
                 await event.edit(f"❌ فشل: {e}", buttons=[[Button.inline("🔙 رجوع", b"back")]])
@@ -1385,9 +1709,9 @@ async def main():
             return
         if event.raw_text == '/cancel':
             for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
-                       'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc', 
-                       'awaiting_del_group', 'awaiting_msg_interval', 'awaiting_join_interval',
-                       'awaiting_fast_delay']:
+                       'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc',
+                       'awaiting_msg_interval', 'awaiting_join_interval',
+                       'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -1401,11 +1725,11 @@ async def main():
             set_setting('awaiting_fast_delay', '')
             try:
                 val = int(event.raw_text.strip())
-                if 1 <= val <= 30:
+                if 2 <= val <= 30:
                     set_setting('fast_post_delay', str(val))
                     await event.respond(f"✅ تم ضبط سرعة النشر السريع إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ الرجاء إدخال قيمة بين 1 و 30", buttons=get_main_menu())
+                    await event.respond("❌ الرجاء إدخال قيمة بين 2 و 30 (الحد الأدنى 2)", buttons=get_main_menu())
             except:
                 await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
             return
@@ -1413,11 +1737,11 @@ async def main():
             set_setting('awaiting_msg_interval', '')
             try:
                 val = int(event.raw_text.strip())
-                if 10 <= val <= 600:
+                if 2 <= val <= 600:
                     set_setting('message_interval', str(val))
                     await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ بين 10 و 600", buttons=get_main_menu())
+                    await event.respond("❌ بين 2 و 600 (الحد الأدنى 2)", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -1432,6 +1756,35 @@ async def main():
                     await event.respond("❌ بين 30 و 600", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+            return
+        # Blacklist add
+        if get_setting('awaiting_add_blacklist') == 'true':
+            set_setting('awaiting_add_blacklist', '')
+            try:
+                group_id = event.raw_text.strip()
+                group_name = ""
+                # Try to resolve the group to get its name
+                for acc_id, client in user_clients.items():
+                    try:
+                        entity = await client.get_entity(int(group_id))
+                        group_name = getattr(entity, 'title', str(group_id))
+                        break
+                    except:
+                        continue
+                add_to_blacklist(group_id, group_name)
+                await event.respond(f"✅ تمت إضافة المجموعة إلى القائمة السوداء: {group_name or group_id}", buttons=get_main_menu())
+            except:
+                await event.respond("❌ معرف غير صالح", buttons=get_main_menu())
+            return
+        # Blacklist remove
+        if get_setting('awaiting_del_blacklist') == 'true':
+            set_setting('awaiting_del_blacklist', '')
+            try:
+                group_id = event.raw_text.strip()
+                remove_from_blacklist(group_id)
+                await event.respond(f"✅ تمت إزالة المجموعة من القائمة السوداء: {group_id}", buttons=get_main_menu())
+            except:
+                await event.respond("❌ معرف غير صالح", buttons=get_main_menu())
             return
         # الروابط - انضمام تلقائي
         links = re.findall(r'(https?://t\.me/(?:joinchat/|\+)?[a-zA-Z0-9_\-]+)', event.raw_text)
@@ -1491,13 +1844,17 @@ async def main():
             conn.commit()
             msg_id = c.lastrowid
             conn.close()
-            encrypted_preview = encrypt_text(content[:200]) if content else ""
+            # Show preview with full pipeline
+            varied_preview = vary_text(content[:200]) if content else ""
+            obfuscated_preview = obfuscate_for_humans(varied_preview) if content else ""
+            encrypted_preview = encrypt_text(obfuscated_preview, 0) if content else ""
             types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
             await event.respond(
                 f"✅ **تم حفظ الرسالة #{msg_id}!**\n\n"
                 f"📎 النوع: {types.get(msg_type, msg_type)}\n"
+                f"🔀 **معاينة التشويش:**\n{obfuscated_preview}\n\n"
                 f"🛡 **معاينة التشفير:**\n{encrypted_preview}\n\n"
-                f"سيتم تطبيق التشفير عند النشر",
+                f"سيتم تطبيق التشويش + التشفير عند النشر",
                 buttons=get_main_menu()
             )
             return
@@ -1611,19 +1968,6 @@ async def main():
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
-        if get_setting('awaiting_del_group') == 'true':
-            set_setting('awaiting_del_group', '')
-            try:
-                grp_id = int(event.raw_text.strip())
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('DELETE FROM groups WHERE id=?', (grp_id,))
-                conn.commit()
-                conn.close()
-                await event.respond("✅ تم الحذف", buttons=get_main_menu())
-            except:
-                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
-            return
 
     # كشف بوتات الحماية
     @bot.on(events.NewMessage(incoming=True))
@@ -1642,7 +1986,7 @@ async def main():
         except:
             pass
 
-    logger.info("✅ البوت جاهز - مع الحماية القصوى والنشر السريع")
+    logger.info("✅ البوت جاهز - مع الحماية القصوى والنشر السريع والتشويش")
     await bot.run_until_disconnected()
 
 if __name__ == '__main__':
