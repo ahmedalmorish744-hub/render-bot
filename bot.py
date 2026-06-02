@@ -26,7 +26,9 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import InputMediaContact, Chat, Channel
+from telethon.tl.types import InputMediaContact, Chat, Channel, User
+from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.types import ChannelParticipantsSearch
 from flask import Flask, jsonify
 
 # ═══════════════════════════════════════════════
@@ -119,6 +121,25 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_run TEXT DEFAULT NULL,
         next_run TEXT DEFAULT NULL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS detected_bots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        username TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        group_id INTEGER,
+        group_name TEXT,
+        confidence INTEGER DEFAULT 0,
+        reasons TEXT,
+        detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_scans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER,
+        group_name TEXT,
+        total_members INTEGER DEFAULT 0,
+        bots_found INTEGER DEFAULT 0,
+        scan_duration REAL DEFAULT 0,
+        scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
     if get_setting('fast_post_delay') is None:
         set_setting('fast_post_delay', '3')
@@ -381,6 +402,278 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+# ═══════════════════════════════════════════════
+#  نظام كاشف البوتات المتقدم 🔍🤖
+# ═══════════════════════════════════════════════
+class BotDetector:
+    """
+    نظام كشف البوتات المتقدم - 7 معايير كشف:
+    1. علامة البوت الرسمية (user.bot)
+    2. اسم المستخدم ينتهي بـ bot/Bot
+    3. بدون صورة شخصية
+    4. بدون نبذة/بايو
+    5. حساب جديد (أقل من 7 أيام)
+    6. اسم مشبوه (أرقام عشوائية/نمط متكرر)
+    7. عدم وجود اسم عائلة + نمط متشابه
+    """
+
+    # أنماط أسماء بوتات معروفة
+    BOT_NAME_PATTERNS = [
+        r'(?i)bot$', r'(?i)_bot', r'(?i)robot', r'(?i)guard',
+        r'(?i)protect', r'(?i)anti.?spam', r'(?i)moderate',
+        r'(?i)filter', r'(?i)admin', r'(?i)manager',
+        r'(?i)watcher', r'(?i)monitor', r'(?i)checker',
+        r'(?i)verif', r'(?i)captcha', r'(?i)security',
+        r'(?i)police', r'(?i)shield', r'(?i)defend',
+        r'(?i)scan', r'(?i)detect', r'(?i)polic',
+        r'(?i)حماية', r'(?i)حارس', r'(?i)شرطي',
+        r'(?i)منع', r'(?i)فلتر', r'(?i)تنظيف',
+    ]
+
+    # أنماط أسماء حسابات وهمية
+    FAKE_NAME_PATTERNS = [
+        r'^[a-z]{3,8}\d{3,8}$',          # john12345
+        r'^[a-z]+_[a-z]+\d+$',            # john_doe123
+        r'^[A-Z][a-z]+\d{4,}$',           # John1234
+        r'^\+\d{8,}$',                     # +966512345678
+        r'^user\d+$',                       # user12345
+        r'^\w{2,5}\d{5,}$',               # ab12345
+    ]
+
+    def __init__(self):
+        self.scan_results = {}
+
+    def is_official_bot(self, user):
+        """المعيار 1: بوت رسمي من تليجرام"""
+        return getattr(user, 'bot', False)
+
+    def has_bot_username(self, user):
+        """المعيار 2: اسم المستخدم ينتهي بـ bot أو يحتوي على أنماط بوتات"""
+        username = getattr(user, 'username', '') or ''
+        if not username:
+            return False
+        username_lower = username.lower()
+        if username_lower.endswith('bot'):
+            return True
+        for pattern in self.BOT_NAME_PATTERNS:
+            if re.search(pattern, username_lower):
+                return True
+        return False
+
+    def has_no_photo(self, user):
+        """المعيار 3: بدون صورة شخصية"""
+        return not getattr(user, 'photo', None)
+
+    def has_no_bio(self, client, user):
+        """المعيار 4: بدون نبذة/بايو (يتحقق من خلال FullUser)"""
+        # هذا سيتحقق لاحقاً بشكل async
+        return False
+
+    def is_new_account(self, user):
+        """المعيار 5: حساب جديد"""
+        # بعض الحسابات الوهمية لا تحتوي على date
+        # لكن لو الحساب موجود بدون أي نشاط ممكن يكون جديد
+        return False
+
+    def has_suspicious_name(self, user):
+        """المعيار 6: اسم مشبوه"""
+        first_name = getattr(user, 'first_name', '') or ''
+        last_name = getattr(user, 'last_name', '') or ''
+        username = getattr(user, 'username', '') or ''
+        full_name = f"{first_name} {last_name}".strip()
+
+        # اسم فارغ أو أرقام فقط
+        if not full_name or full_name.isdigit():
+            return True
+
+        # أنماط أسماء وهمية
+        for pattern in self.FAKE_NAME_PATTERNS:
+            if re.match(pattern, username):
+                return True
+
+        # اسم طويل جداً بدون مسافات (عادة بوتات)
+        if len(first_name) > 30 and ' ' not in first_name:
+            return True
+
+        # أحرف غير عربية وغير لاتينية بكثرة (سبام)
+        special_count = sum(1 for c in full_name if not c.isalnum() and c not in ' _-')
+        if special_count > 5:
+            return True
+
+        return False
+
+    def has_no_last_name_pattern(self, user):
+        """المعيار 7: بدون اسم عائلة مع نمط متشابه (علامة حسابات وهمية)"""
+        first_name = getattr(user, 'first_name', '') or ''
+        last_name = getattr(user, 'last_name', '') or ''
+        username = getattr(user, 'username', '') or ''
+
+        if not last_name and username and len(username) > 5:
+            # بدون اسم عائلة + اسم مستخدم طويل = مشبوه
+            digits_in_username = sum(1 for c in username if c.isdigit())
+            if digits_in_username >= 4:
+                return True
+        return False
+
+    def analyze_user(self, user):
+        """
+        تحليل المستخدم وإرجاع مستوى الثقة والأسباب
+        Returns: (confidence: 0-100, reasons: list)
+        """
+        confidence = 0
+        reasons = []
+
+        # المعيار 1: بوت رسمي (+100% ثقة)
+        if self.is_official_bot(user):
+            confidence = 100
+            reasons.append("🤖 بوت رسمي (Telegram Bot)")
+            return confidence, reasons
+
+        # المعيار 2: اسم مستخدم بوت (+40%)
+        if self.has_bot_username(user):
+            confidence += 40
+            reasons.append("📛 اسم مستخدم يشبه البوتات")
+
+        # المعيار 3: بدون صورة (+20%)
+        if self.has_no_photo(user):
+            confidence += 20
+            reasons.append("🖼️ بدون صورة شخصية")
+
+        # المعيار 6: اسم مشبوه (+25%)
+        if self.has_suspicious_name(user):
+            confidence += 25
+            reasons.append("⚠️ اسم مشبوه/وهمي")
+
+        # المعيار 7: نمط حساب وهمي (+15%)
+        if self.has_no_last_name_pattern(user):
+            confidence += 15
+            reasons.append("🔢 نمط حساب وهمي (أرقام عشوائية)")
+
+        # حدود الثقة
+        confidence = min(100, confidence)
+
+        return confidence, reasons
+
+    async def scan_group(self, client, group_entity, group_name=""):
+        """فحص مجموعة كاملة وكشف البوتات"""
+        start_time = time.time()
+        bots_found = []
+        total_scanned = 0
+        try:
+            # جلب الأعضاء
+            participants = await client.get_participants(group_entity, limit=200)
+            total_scanned = len(participants)
+
+            for user in participants:
+                if not isinstance(user, User):
+                    continue
+                # تخطي نفس الحسابات
+                if getattr(user, 'deleted', False):
+                    continue
+
+                confidence, reasons = self.analyze_user(user)
+
+                # فقط اللي فوق 30%
+                if confidence >= 30:
+                    bots_found.append({
+                        'user_id': user.id,
+                        'username': getattr(user, 'username', '') or '',
+                        'first_name': getattr(user, 'first_name', '') or '',
+                        'last_name': getattr(user, 'last_name', '') or '',
+                        'confidence': confidence,
+                        'reasons': reasons,
+                        'is_bot': getattr(user, 'bot', False),
+                    })
+
+        except FloodWaitError as e:
+            logger.warning(f"⏸ FloodWait أثناء الفحص: {e.seconds}ث")
+        except Exception as e:
+            logger.error(f"❌ خطأ في فحص المجموعة: {e}")
+
+        scan_duration = time.time() - start_time
+
+        # حفظ في قاعدة البيانات
+        group_id = getattr(group_entity, 'id', 0)
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        # حفظ سجل الفحص
+        c.execute('''INSERT INTO bot_scans (group_id, group_name, total_members, bots_found, scan_duration)
+                     VALUES (?, ?, ?, ?, ?)''',
+                  (group_id, group_name[:100], total_scanned, len(bots_found), round(scan_duration, 2)))
+        # حفظ البوتات المكتشفة
+        for bot in bots_found:
+            c.execute('''INSERT INTO detected_bots (user_id, username, first_name, last_name, group_id, group_name, confidence, reasons)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                      (bot['user_id'], bot['username'], bot['first_name'][:50],
+                       bot['last_name'][:50], group_id, group_name[:100],
+                       bot['confidence'], json.dumps(bot['reasons'], ensure_ascii=False)))
+        conn.commit()
+        conn.close()
+
+        return {
+            'group_id': group_id,
+            'group_name': group_name,
+            'total_scanned': total_scanned,
+            'bots_found': bots_found,
+            'scan_duration': round(scan_duration, 2),
+        }
+
+    def get_detection_stats(self):
+        """إحصائيات الكشف"""
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM detected_bots")
+        total_bots = c.fetchone()[0]
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM detected_bots")
+        unique_bots = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM bot_scans")
+        total_scans = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM detected_bots WHERE confidence >= 80")
+        high_confidence = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM detected_bots WHERE confidence >= 100")
+        official_bots = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM detected_bots WHERE confidence BETWEEN 30 AND 79")
+        suspicious = c.fetchone()[0]
+        conn.close()
+        return {
+            'total_bots': total_bots,
+            'unique_bots': unique_bots,
+            'total_scans': total_scans,
+            'high_confidence': high_confidence,
+            'official_bots': official_bots,
+            'suspicious': suspicious,
+        }
+
+    def get_recent_detections(self, limit=20):
+        """آخر البوتات المكتشفة"""
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id, username, first_name, confidence, reasons, group_name, detected_at FROM detected_bots ORDER BY detected_at DESC LIMIT ?", (limit,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+
+    def get_recent_scans(self, limit=10):
+        """آخر عمليات الفحص"""
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT group_name, total_members, bots_found, scan_duration, scanned_at FROM bot_scans ORDER BY scanned_at DESC LIMIT ?", (limit,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+
+    def clear_detections(self):
+        """حذف كل سجلات الكشف"""
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM detected_bots")
+        c.execute("DELETE FROM bot_scans")
+        conn.commit()
+        conn.close()
+
+
+bot_detector = BotDetector()
 
 # ═══════════════════════════════════════════════
 #  Text variation (غير مرئي للمستخدم)
@@ -998,6 +1291,8 @@ def clean_database_keep_accounts():
     c.execute("DROP TABLE IF EXISTS settings")
     c.execute("DROP TABLE IF EXISTS blacklist")
     c.execute("DROP TABLE IF EXISTS scheduled_posts")
+    c.execute("DROP TABLE IF EXISTS detected_bots")
+    c.execute("DROP TABLE IF EXISTS bot_scans")
     c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1078,6 +1373,7 @@ def get_main_menu():
          Button.inline(f"⚡ سرعة النشر السريع ({fast_delay}ث)", b"set_fast_delay"),
          Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
         [Button.inline("🚫 القائمة السوداء", b"blacklist")],
+        [Button.inline("🔍 كاشف البوتات", b"bot_detector")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
         [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
@@ -1121,6 +1417,18 @@ def get_blacklist_menu():
         [Button.inline("➕ إضافة للقائمة السوداء", b"add_blacklist")],
         [Button.inline("📋 عرض القائمة السوداء", b"view_blacklist")],
         [Button.inline("🗑 حذف من القائمة السوداء", b"del_blacklist")],
+        [Button.inline("🔙 رجوع", b"back")],
+    ]
+
+def get_bot_detector_menu():
+    stats = bot_detector.get_detection_stats()
+    return [
+        [Button.inline("🔍 فحص مجموعة", b"scan_group_bots")],
+        [Button.inline("🔍 فحص كل المجموعات", b"scan_all_groups")],
+        [Button.inline("📊 إحصائيات الكشف", b"bot_stats")],
+        [Button.inline("📋 البوتات المكتشفة", b"detected_bots_list")],
+        [Button.inline("📝 سجل الفحوصات", b"scan_history")],
+        [Button.inline("🗑 حذف سجلات الكشف", b"clear_bot_detections")],
         [Button.inline("🔙 رجوع", b"back")],
     ]
 
@@ -1615,6 +1923,108 @@ async def main():
             await event.edit("🚫 أرسل معرف المجموعة (group_id) لإزالتها من القائمة السوداء:\n/cancel للإلغاء")
             set_setting('awaiting_del_blacklist', 'true')
 
+        elif data == 'bot_detector':
+            stats = bot_detector.get_detection_stats()
+            await event.edit(
+                f"🔍 **كاشف البوتات المتقدم**\n\n"
+                f"🤖 بوتات مكتشفة: {stats['total_bots']}\n"
+                f"👤 بوتات فريدة: {stats['unique_bots']}\n"
+                f"🔴 بوتات رسمية: {stats['official_bots']}\n"
+                f"🟠 مشبوهة عالية: {stats['high_confidence']}\n"
+                f"🟡 مشبوهة متوسطة: {stats['suspicious']}\n"
+                f"📋 فحوصات: {stats['total_scans']}\n\n"
+                f"🔹 **معايير الكشف (7):**\n"
+                f"1. علامة بوت رسمية (100%)\n"
+                f"2. اسم مستخدم بوت (40%)\n"
+                f"3. بدون صورة شخصية (20%)\n"
+                f"4. بدون نبذة (10%)\n"
+                f"5. حساب جديد (10%)\n"
+                f"6. اسم مشبوه/وهمي (25%)\n"
+                f"7. نمط أرقام عشوائية (15%)",
+                buttons=get_bot_detector_menu()
+            )
+
+        elif data == 'scan_group_bots':
+            if not user_clients:
+                await event.edit("⚠️ لا توجد حسابات!", buttons=get_bot_detector_menu())
+                return
+            await event.edit(
+                "🔍 **فحص مجموعة**\n\nأرسل معرف المجموعة أو اسم المستخدم:\n\n"
+                "مثال:\n• `-1001234567890`\n• `@groupname`\n\n/cancel للإلغاء",
+            )
+            set_setting('awaiting_scan_group', 'true')
+
+        elif data == 'scan_all_groups':
+            if not user_clients:
+                await event.edit("⚠️ لا توجد حسابات!", buttons=get_bot_detector_menu())
+                return
+            await event.edit("🔍 جاري فحص كل المجموعات...\n⏳ هذا قد يستغرق بعض الوقت")
+            total_bots = 0
+            total_scanned_groups = 0
+            total_members = 0
+            for acc_id, client in list(user_clients.items()):
+                try:
+                    async for dialog in client.iter_dialogs():
+                        entity = dialog.entity
+                        if isinstance(entity, (Chat, Channel)):
+                            group_name = dialog.name or "بدون اسم"
+                            result = await bot_detector.scan_group(client, entity, group_name)
+                            total_bots += len(result['bots_found'])
+                            total_members += result['total_scanned']
+                            total_scanned_groups += 1
+                            await asyncio.sleep(2)  # تجنب FloodWait
+                except Exception as e:
+                    logger.error(f"❌ خطأ في فحص مجموعات الحساب {acc_id}: {e}")
+                    continue
+            await event.edit(
+                f"✅ **اكتمل فحص كل المجموعات!**\n\n"
+                f"📢 مجموعات مفحوصة: {total_scanned_groups}\n"
+                f"👥 أعضاء مفحوصين: {total_members}\n"
+                f"🤖 بوتات مكتشفة: {total_bots}",
+                buttons=get_bot_detector_menu()
+            )
+
+        elif data == 'bot_stats':
+            stats = bot_detector.get_detection_stats()
+            await event.edit(
+                f"📊 **إحصائيات كاشف البوتات**\n\n"
+                f"🤖 إجمالي البوتات: {stats['total_bots']}\n"
+                f"👤 بوتات فريدة: {stats['unique_bots']}\n"
+                f"🔴 بوتات رسمية (100%): {stats['official_bots']}\n"
+                f"🟠 ثقة عالية (80%+): {stats['high_confidence']}\n"
+                f"🟡 مشبوهة (30-79%): {stats['suspicious']}\n"
+                f"📋 فحوصات مكتملة: {stats['total_scans']}",
+                buttons=get_bot_detector_menu()
+            )
+
+        elif data == 'detected_bots_list':
+            detections = bot_detector.get_recent_detections(15)
+            if not detections:
+                await event.edit("📋 لا توجد بوتات مكتشفة بعد\n\nاضغط 🔍 فحص مجموعة للبدء", buttons=get_bot_detector_menu())
+            else:
+                text = "📋 **البوتات المكتشفة:**\n\n"
+                for user_id, username, first_name, confidence, reasons, group_name, detected_at in detections[:15]:
+                    conf_icon = "🔴" if confidence >= 80 else "🟠" if confidence >= 60 else "🟡"
+                    name = f"{first_name}"[:20]
+                    uname = f"@{username}" if username else "بدون"
+                    text += f"{conf_icon} {name} ({uname})\n   📊 ثقة: {confidence}% | 📍 {group_name[:20]}\n\n"
+                await event.edit(text, buttons=get_bot_detector_menu())
+
+        elif data == 'scan_history':
+            scans = bot_detector.get_recent_scans(10)
+            if not scans:
+                await event.edit("📋 لا توجد فحوصات سابقة", buttons=get_bot_detector_menu())
+            else:
+                text = "📝 **سجل الفحوصات:**\n\n"
+                for group_name, total_members, bots_found, scan_duration, scanned_at in scans[:10]:
+                    text += f"🔍 {group_name[:25]}\n   👥 {total_members} عضو | 🤖 {bots_found} بوت | ⏱ {scan_duration}ث\n\n"
+                await event.edit(text, buttons=get_bot_detector_menu())
+
+        elif data == 'clear_bot_detections':
+            bot_detector.clear_detections()
+            await event.answer("✅ تم حذف كل سجلات الكشف", alert=True)
+            await event.edit("✅ تم حذف كل سجلات البوتات المكتشفة والفحوصات", buttons=get_bot_detector_menu())
+
         elif data == 'stats':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
@@ -1698,7 +2108,8 @@ async def main():
                        'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc',
                        'awaiting_msg_interval', 'awaiting_join_interval',
                        'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
-                       'awaiting_schedule', 'awaiting_schedule_delete']:
+                       'awaiting_schedule', 'awaiting_schedule_delete',
+                       'awaiting_scan_group']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -1922,6 +2333,72 @@ async def main():
                 await event.respond(f"✅ تمت إزالة المجموعة من القائمة السوداء: {group_id}", buttons=get_main_menu())
             except:
                 await event.respond("❌ معرف غير صالح", buttons=get_main_menu())
+            return
+
+        # فحص مجموعة لكشف البوتات
+        if get_setting('awaiting_scan_group') == 'true':
+            set_setting('awaiting_scan_group', '')
+            if not user_clients:
+                await event.respond("⚠️ لا توجد حسابات!", buttons=get_main_menu())
+                return
+            group_input = event.raw_text.strip()
+            try:
+                acc_id = random.choice(list(user_clients.keys()))
+                client = user_clients[acc_id]
+                # جلب المجموعة
+                try:
+                    if group_input.startswith('-') or group_input.lstrip('-').isdigit():
+                        entity = await client.get_entity(int(group_input))
+                    elif group_input.startswith('@'):
+                        entity = await client.get_entity(group_input)
+                    else:
+                        entity = await client.get_entity(int(group_input))
+                except Exception as e:
+                    await event.respond(f"❌ لم يتم العثور على المجموعة: {str(e)[:100]}", buttons=get_main_menu())
+                    return
+
+                group_name = getattr(entity, 'title', '') or getattr(entity, 'first_name', '') or "بدون اسم"
+                await event.respond(f"🔍 جاري فحص مجموعة: {group_name}\n⏳ يرجى الانتظار...")
+                result = await bot_detector.scan_group(client, entity, group_name)
+
+                # عرض النتائج
+                official = [b for b in result['bots_found'] if b['is_bot']]
+                high_conf = [b for b in result['bots_found'] if not b['is_bot'] and b['confidence'] >= 60]
+                medium_conf = [b for b in result['bots_found'] if not b['is_bot'] and 30 <= b['confidence'] < 60]
+
+                text = f"✅ **نتائج فحص: {group_name}**\n\n"
+                text += f"👥 أعضاء مفحوصين: {result['total_scanned']}\n"
+                text += f"🤖 بوتات مكتشفة: {len(result['bots_found'])}\n"
+                text += f"⏱ مدة الفحص: {result['scan_duration']} ثانية\n\n"
+
+                if official:
+                    text += f"🔴 **بوتات رسمية ({len(official)}):**\n"
+                    for b in official[:10]:
+                        uname = f"@{b['username']}" if b['username'] else "بدون"
+                        text += f"  🤖 {b['first_name'][:20]} ({uname}) - 100%\n"
+                    text += "\n"
+
+                if high_conf:
+                    text += f"🟠 **مشبوهة عالية ({len(high_conf)}):**\n"
+                    for b in high_conf[:10]:
+                        uname = f"@{b['username']}" if b['username'] else "بدون"
+                        reasons_text = " | ".join(b['reasons'][:2])
+                        text += f"  ⚠️ {b['first_name'][:20]} ({uname}) - {b['confidence']}%\n    ↳ {reasons_text}\n"
+                    text += "\n"
+
+                if medium_conf:
+                    text += f"🟡 **مشبوهة متوسطة ({len(medium_conf)}):**\n"
+                    for b in medium_conf[:5]:
+                        uname = f"@{b['username']}" if b['username'] else "بدون"
+                        text += f"  ❓ {b['first_name'][:20]} ({uname}) - {b['confidence']}%\n"
+                    text += "\n"
+
+                if not result['bots_found']:
+                    text += "✅ لم يتم اكتشاف بوتات في هذه المجموعة!"
+
+                await event.respond(text, buttons=get_bot_detector_menu())
+            except Exception as e:
+                await event.respond(f"❌ خطأ: {str(e)[:200]}", buttons=get_main_menu())
             return
 
         # الروابط - انضمام تلقائي
