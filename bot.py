@@ -135,8 +135,8 @@ def init_db():
         set_setting('use_jitter', 'on')
     if get_setting('obfuscation_enabled') is None:
         set_setting('obfuscation_enabled', 'on')
-    if get_setting('yaytext_enabled') is None:
-        set_setting('yaytext_enabled', 'on')
+    if get_setting('yaytext_messletters_obfuscation') is None:
+        set_setting('yaytext_messletters_obfuscation', 'on')
 
     conn.commit()
     conn.close()
@@ -386,12 +386,13 @@ def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
 
 # ═══════════════════════════════════════════════
-#  نظام أنماط YayText المتقدم 🔄✨
+#  نظام تشويش YayText & Messletters المتقدم 🔄✨
 # ═══════════════════════════════════════════════
-class YayTextObfuscator:
+class YayTextMesslettersObfuscator:
     """
-    نظام تحويل النصوص إلى أنماط Unicode مزخرفة ومشوشة
-    مستوحى من YayText - يحول النص لأشكال يونيكود مختلفة
+    نظام تشويش متقدم مستوحى من YayText و Messletters
+    يحول النصوص لأنماط Unicode مزخرفة ومشوشة
+    مع تشويش خاص للروابط والمعرفات والأرقام
     بحيث يصبح غير قابل للتعرف من بوتات الحماية
     مع بقائه مقروءاً تماماً للمستخدمين
     """
@@ -426,6 +427,18 @@ class YayTextObfuscator:
     SANS_MONO_MAP = {}
     # ─── خط Small Caps ───
     SMALL_CAPS_MAP = {}
+    # ─── خط Fullwidth (Messletters) ───
+    FULLWIDTH_MAP = {}
+
+    # ─── جداول أرقام Unicode مستقلة ───
+    DIGIT_BOLD_MAP = {}
+    DIGIT_DOUBLE_STRUCK_MAP = {}
+    DIGIT_SANS_MAP = {}
+    DIGIT_SANS_BOLD_MAP = {}
+    DIGIT_MONO_MAP = {}
+    DIGIT_FULLWIDTH_MAP = {}
+    DIGIT_CIRCLED_MAP = {}
+    DIGIT_NEGATIVE_CIRCLED_MAP = {}
 
     # ─── Homoglyphs متشابهة ───
     HOMOGLYPH_MAP = {}
@@ -439,14 +452,13 @@ class YayTextObfuscator:
 
     def _build_maps(self):
         """بناء جداول التحويل لكل نمط"""
-        # الأحرف اللاتينية الكبيرة A-Z (ASCII 65-90)
+        # ═══ الأحرف اللاتينية الكبيرة A-Z ═══
         # Bold: U+1D400 - U+1D419
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.BOLD_MAP[c] = chr(0x1D400 + i)
         # Italic: U+1D434 - U+1D44D
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.ITALIC_MAP[c] = chr(0x1D434 + i)
-            # استثناء: h = U+210E (Planck)
             if c == 'H':
                 self.ITALIC_MAP['H'] = '\u210E'
         # Bold Italic: U+1D468 - U+1D481
@@ -456,7 +468,6 @@ class YayTextObfuscator:
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.MONOSPACE_MAP[c] = chr(0x1D670 + i)
         # Script: U+1D49C - U+1D4B5
-        script_upper = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
         script_exceptions = {'B': '\u212C', 'E': '\u2130', 'F': '\u2131',
                             'H': '\u210B', 'I': '\u2110', 'L': '\u2112',
                             'M': '\u2133', 'R': '\u211B'}
@@ -499,12 +510,14 @@ class YayTextObfuscator:
         # Sans-Serif Bold Italic: U+1D63C - U+1D655
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D63C + i)
-        # Sans-Serif Monospace: U+1D6A8 - U+1D6C1 (هذه فعلياً Math Mono)
-        # لكن النطاق الصحيح هو U+1D6A8 لـ Mathematical Sans-Serif
+        # Sans-Serif Monospace: U+1D6A8 - U+1D6C1
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.SANS_MONO_MAP[c] = chr(0x1D6A8 + i)
+        # Fullwidth: U+FF21 - U+FF3A (Messletters)
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.FULLWIDTH_MAP[c] = chr(0xFF21 + i)
 
-        # ─── الأحرف اللاتينية الصغيرة a-z ───
+        # ═══ الأحرف اللاتينية الصغيرة a-z ═══
         # Bold: U+1D41A - U+1D433
         for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
             self.BOLD_MAP[c] = chr(0x1D41A + i)
@@ -553,28 +566,52 @@ class YayTextObfuscator:
         # Sans-Serif Monospace: U+1D6C2 - U+1D6DB
         for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
             self.SANS_MONO_MAP[c] = chr(0x1D6C2 + i)
+        # Fullwidth: U+FF41 - U+FF5A (Messletters)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FULLWIDTH_MAP[c] = chr(0xFF41 + i)
 
-        # ─── الأرقام 0-9 ───
-        # Bold: U+1D7CE - U+1D7D7
+        # ═══ الأرقام 0-9 لكل نمط خط ═══
+        # Bold digits: U+1D7CE - U+1D7D7
         for i in range(10):
             self.BOLD_MAP[str(i)] = chr(0x1D7CE + i)
-        # Double-Struck: أرقام بخط مزدوج
+            self.DIGIT_BOLD_MAP[str(i)] = chr(0x1D7CE + i)
+        # Double-Struck digits: U+1D7D8 - U+1D7E1
         ds_digits = {'0': '\U0001D7D8', '1': '\U0001D7D9', '2': '\U0001D7DA',
                      '3': '\U0001D7DB', '4': '\U0001D7DC', '5': '\U0001D7DD',
                      '6': '\U0001D7DE', '7': '\U0001D7DF', '8': '\U0001D7E0',
                      '9': '\U0001D7E1'}
         self.DOUBLE_STRUCK_MAP.update(ds_digits)
-        # Sans: U+1D7E2 - U+1D7EB
+        self.DIGIT_DOUBLE_STRUCK_MAP = dict(ds_digits)
+        # Sans digits: U+1D7E2 - U+1D7EB
         for i in range(10):
             self.SANS_MAP[str(i)] = chr(0x1D7E2 + i)
-        # Sans Bold: U+1D7EC - U+1D7F5
+            self.DIGIT_SANS_MAP[str(i)] = chr(0x1D7E2 + i)
+        # Sans Bold digits: U+1D7EC - U+1D7F5
         for i in range(10):
             self.SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
-        # Monospace: U+1D7F6 - U+1D7FF
+            self.DIGIT_SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
+        # Monospace digits: U+1D7F6 - U+1D7FF
         for i in range(10):
             self.MONOSPACE_MAP[str(i)] = chr(0x1D7F6 + i)
+            self.DIGIT_MONO_MAP[str(i)] = chr(0x1D7F6 + i)
+        # Fullwidth digits: U+FF10 - U+FF19 (Messletters)
+        for i in range(10):
+            self.FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
+            self.DIGIT_FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
+        # Circled digits: U+2460 - U+2468 (1-9) + U+24EA (0)
+        self.DIGIT_CIRCLED_MAP = {
+            '0': '\u24EA', '1': '\u2460', '2': '\u2461', '3': '\u2462',
+            '4': '\u2463', '5': '\u2464', '6': '\u2465', '7': '\u2466',
+            '8': '\u2467', '9': '\u2468'
+        }
+        # Negative circled digits: U+2776 - U+277F
+        self.DIGIT_NEGATIVE_CIRCLED_MAP = {
+            '0': '\u24FF', '1': '\u2776', '2': '\u2777', '3': '\u2778',
+            '4': '\u2779', '5': '\u277A', '6': '\u277B', '7': '\u277C',
+            '8': '\u277D', '9': '\u277E'
+        }
 
-        # ─── Small Caps ───
+        # ═══ Small Caps ═══
         small_caps = {
             'A': '\u1D00', 'B': '\u0299', 'C': '\u1D04', 'D': '\u1D05',
             'E': '\u1D07', 'F': '\uA730', 'G': '\u0262', 'H': '\u029C',
@@ -586,9 +623,9 @@ class YayTextObfuscator:
         }
         self.SMALL_CAPS_MAP = small_caps
 
-        # ─── Homoglyphs ───
+        # ═══ Homoglyphs (Cyrillic/Greek مشابهة) ═══
         self.HOMOGLYPH_MAP = {
-            'a': '\u0430', 'A': '\u0410',  # Cyrillic
+            'a': '\u0430', 'A': '\u0410',
             'c': '\u0441', 'C': '\u0421',
             'e': '\u0435', 'E': '\u0415',
             'o': '\u043E', 'O': '\u041E',
@@ -603,27 +640,23 @@ class YayTextObfuscator:
             'M': '\u041C', 'B': '\u0412',
         }
 
-        # ─── الزخارف والرموز ───
+        # ═══ الزخارف والرموز (Messletters) ═══
         self.DECORATIONS = [
-            # حروف محاطة بدوائر
+            # حروف محاطة بدوائر (a-z)
             ['\u24D0', '\u24D1', '\u24D2', '\u24D3', '\u24D4', '\u24D5',
              '\u24D6', '\u24D7', '\u24D8', '\u24D9', '\u24DA', '\u24DB',
              '\u24DC', '\u24DD', '\u24DE', '\u24DF', '\u24E0', '\u24E1',
              '\u24E2', '\u24E3', '\u24E4', '\u24E5', '\u24E6', '\u24E7',
              '\u24E8', '\u24E9'],
-            # حروف محاطة بدوائر مملوءة
-            ['\u1F150', '\u1F151', '\u1F152', '\u1F153', '\u1F154',
-             '\u1F155', '\u1F156', '\u1F157', '\u1F158', '\u1F159',
-             '\u1F15A', '\u1F15B', '\u1F15C', '\u1F15D', '\u1F15E',
-             '\u1F15F', '\u1F160', '\u1F161', '\u1F162', '\u1F163'],
-            # حروف مربعة مملوءة
-            ['\u1F170', '\u1F171', '\u1F172', '\u1F173', '\u1F174',
-             '\u1F175', '\u1F176', '\u1F177', '\u1F178', '\u1F179',
-             '\u1F17A', '\u1F17B', '\u1F17C', '\u1F17D', '\u1F17E',
-             '\u1F17F', '\u1F180', '\u1F181', '\u1F182', '\u1F183'],
+            # حروف محاطة بدوائر كبيرة (A-Z)
+            ['\u24B6', '\u24B7', '\u24B8', '\u24B9', '\u24BA', '\u24BB',
+             '\u24BC', '\u24BD', '\u24BE', '\u24BF', '\u24C0', '\u24C1',
+             '\u24C2', '\u24C3', '\u24C4', '\u24C5', '\u24C6', '\u24C7',
+             '\u24C8', '\u24C9', '\u24CA', '\u24CB', '\u24CC', '\u24CD',
+             '\u24CE', '\u24CF'],
         ]
 
-        # قائمة كل الأنماط المتاحة
+        # ═══ قائمة كل الأنماط المتاحة ═══
         self.STYLES = [
             ('bold', self.BOLD_MAP),
             ('italic', self.ITALIC_MAP),
@@ -638,7 +671,18 @@ class YayTextObfuscator:
             ('sans_bold', self.SANS_BOLD_MAP),
             ('sans_italic', self.SANS_ITALIC_MAP),
             ('sans_bold_italic', self.SANS_BOLD_ITALIC_MAP),
+            ('fullwidth', self.FULLWIDTH_MAP),
             ('small_caps', self.SMALL_CAPS_MAP),
+        ]
+
+        # ═══ جداول تحويل الأرقام المتاحة ═══
+        self.DIGIT_STYLES = [
+            self.DIGIT_BOLD_MAP,
+            self.DIGIT_DOUBLE_STRUCK_MAP,
+            self.DIGIT_SANS_MAP,
+            self.DIGIT_SANS_BOLD_MAP,
+            self.DIGIT_MONO_MAP,
+            self.DIGIT_FULLWIDTH_MAP,
         ]
 
     def _apply_map(self, text, char_map):
@@ -674,7 +718,7 @@ class YayTextObfuscator:
         return ''.join(result)
 
     def _apply_homoglyphs(self, text, intensity=0.35):
-        """استبدال أحرف بنظيراتها المتشابهة (Cyrillic etc)"""
+        """استبدال أحرف بنظيراتها المتشابهة (Cyrillic/Greek)"""
         result = []
         for c in text:
             if c in self.HOMOGLYPH_MAP and random.random() < intensity:
@@ -684,14 +728,13 @@ class YayTextObfuscator:
         return ''.join(result)
 
     def _apply_decorations(self, text, intensity=0.08):
-        """إضافة رموز زخرفية عشوائية قبل/بعد كلمات"""
+        """إضافة رموز زخرفية عشوائية (Messletters style)"""
         words = text.split(' ')
         decorated = []
         for word in words:
             if not word:
                 decorated.append(word)
                 continue
-            # تطبيق زخرفة على الحرف الأول أحياناً
             if word[0].isalpha() and random.random() < intensity:
                 first_upper = word[0].upper()
                 if first_upper >= 'A' and first_upper <= 'Z':
@@ -702,29 +745,138 @@ class YayTextObfuscator:
             decorated.append(word)
         return ' '.join(decorated)
 
+    def _obfuscate_link_segment(self, link_text):
+        """
+        تشويش رابط مع الحفاظ على إمكانية النقر
+        إضافة أحرف غير مرئية في مواقع استراتيجية داخل الرابط
+        """
+        result = link_text
+        # إضافة حرف غير مرئي بعد https://
+        if 'https://' in result:
+            result = result.replace('https://', 'https://\u200B', 1)
+        elif 'http://' in result:
+            result = result.replace('http://', 'http://\u200B', 1)
+        # إضافة حرف غير مرئي بعد النطاق (t.me/ أو wa.me/)
+        if 't.me/' in result:
+            result = result.replace('t.me/', 't\u200B.me/', 1)
+        if 'wa.me/' in result:
+            result = result.replace('wa.me/', 'wa\u200B.me/', 1)
+        # إضافة حرف غير مرئي قبل المسار بعد أول /
+        # مثال: https://t.me/username -> https://t.me/\u200Busername
+        match = re.search(r'(https?://[^/]+/)(.*)', result)
+        if match and match.group(2):
+            prefix = match.group(1)
+            path = match.group(2)
+            if '\u200B' not in path[:1]:
+                result = prefix + '\u200B' + path
+        return result
+
+    def _obfuscate_username_segment(self, username_text):
+        """
+        تشويش معرف @username مع الحفاظ على إمكانية النقر
+        إضافة حرف غير مرئي بعد علامة @ مباشرة
+        """
+        if username_text.startswith('@'):
+            return '@\u200B' + username_text[1:]
+        return username_text
+
+    def _obfuscate_numbers_in_text(self, text, intensity=0.5):
+        """
+        تشويش الأرقام في النص باستخدام أنماط Unicode مختلفة
+        يحافظ على قراءة الرقم ولكن يمنع بوتات الحماية من التعرف عليه
+        لا يتم تغيير الأرقام داخل الروابط
+        """
+        # اختيار نمط أرقام عشوائي
+        chosen_digit_map = random.choice(self.DIGIT_STYLES)
+        result = []
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if c.isdigit() and random.random() < intensity:
+                # تحقق أننا لسنا داخل رابط (لا نشوش أرقام الروابط)
+                before = text[:i]
+                # إذا كان قبل الرقم http أو :// أو جزء من رابط، لا نشوشه
+                if re.search(r'https?://\S*$', before) or re.search(r't\.me/\S*$', before) or re.search(r'wa\.me/\S*$', before):
+                    result.append(c)
+                else:
+                    result.append(chosen_digit_map.get(c, c))
+            else:
+                result.append(c)
+            i += 1
+        return ''.join(result)
+
+    def _add_invisible_to_numbers(self, text, intensity=0.3):
+        """
+        إضافة أحرف غير مرئية داخل تسلسلات الأرقام (هواتف، معرفات)
+        بدون تغيير الأرقام نفسها - فقط إخفاء النمط
+        """
+        result = []
+        i = 0
+        in_link = False
+        while i < len(text):
+            c = text[i]
+            # تتبع إذا كنا داخل رابط
+            if text[i:i+8] == 'https://' or text[i:i+7] == 'http://':
+                in_link = True
+            elif c in (' ', '\n', '\t'):
+                in_link = False
+            # إضافة حرف غير مرئي قبل تسلسلات الأرقام (هواتف)
+            if c.isdigit() and not in_link and i > 0 and text[i-1] in ('+', ' ', '-', '('):
+                if random.random() < intensity:
+                    result.append('\u200B')
+            result.append(c)
+            # إضافة حرف غير مرئي بعد مجموعات الأرقام (كل 3-4 أرقام)
+            if c.isdigit() and not in_link:
+                # عد الأرقام المتتالية
+                digit_run = 0
+                j = i
+                while j < len(text) and text[j].isdigit():
+                    digit_run += 1
+                    j += 1
+                if digit_run >= 4 and random.random() < intensity:
+                    # أضف حرف غير مرئي بعد 3 أرقام
+                    pos_in_run = 0
+                    for k in range(i, j):
+                        result.append(text[k])
+                        pos_in_run += 1
+                        if pos_in_run == 3 and k + 1 < j and random.random() < 0.5:
+                            result.append('\u200C')
+                    i = j
+                    continue
+            i += 1
+        return ''.join(result)
+
     def _get_random_style(self):
         """اختيار نمط عشوائي مختلف عن السابق"""
         available = list(range(len(self.STYLES)))
         if self._last_style in available and len(available) > 1:
             available.remove(self._last_style)
-        # أضف أنماط Strikethrough و Underline كخيارات
+        # أضف أنماط Strikethrough و Underline و Homoglyphs كخيارات
         available.append(-1)  # strikethrough
         available.append(-2)  # underline
         available.append(-3)  # homoglyphs only
+        available.append(-4)  # fullwidth + homoglyphs (Messletters combo)
         chosen = random.choice(available)
         self._last_style = chosen
         return chosen
 
     def _extract_protected_segments(self, text):
-        """استخراج الروابط والمعرفات لحمايتها من التحويل"""
+        """استخراج الروابط والمعرفات لحمايتها من تحويل الأنماط"""
         protected = []
         # حماية الروابط الكاملة (https:// و http://)
         for match in re.finditer(r'https?://\S+', text):
-            protected.append((match.start(), match.end(), match.group()))
+            protected.append((match.start(), match.end(), match.group(), 'link'))
         # حماية @username
         for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
-            protected.append((match.start(), match.end(), match.group()))
-        # ترتيب حسب الموقع وإزالة التداخلات
+            # تحقق من عدم التداخل مع رابط
+            overlaps = False
+            for p in protected:
+                if match.start() >= p[0] and match.start() < p[1]:
+                    overlaps = True
+                    break
+            if not overlaps:
+                protected.append((match.start(), match.end(), match.group(), 'username'))
+        # ترتيب حسب الموقع
         protected.sort(key=lambda x: x[0])
         # إزالة الأجزاء المتداخلة
         clean = []
@@ -738,21 +890,23 @@ class YayTextObfuscator:
     def obfuscate(self, text):
         """
         التحويل الرئيسي - يختار نمطاً عشوائياً ويطبقه
-        مع حماية الروابط والمعرفات
+        مع حماية الروابط والمعرفات من تحويل الأنماط
+        لكن يتم تشويشها بأحرف غير مرئية
+        ويتم تشويش الأرقام بأنماط Unicode مختلفة
         """
         if not text or len(text) < 2:
             return text
 
-        # حماية الروابط والمعرفات
+        # حماية الروابط والمعرفات من تحويل الأنماط (لكن سيتم تشويشها لاحقاً)
         protected = self._extract_protected_segments(text)
 
         # تقسيم النص إلى أجزاء محمية وغير محمية
         segments = []
         last_end = 0
-        for start, end, original in protected:
+        for start, end, original, seg_type in protected:
             if start > last_end:
                 segments.append(('text', text[last_end:start]))
-            segments.append(('protected', original))
+            segments.append((seg_type, original))
             last_end = end
         if last_end < len(text):
             segments.append(('text', text[last_end:]))
@@ -760,30 +914,42 @@ class YayTextObfuscator:
         # إذا كل النص محمي (رابط فقط مثلاً)
         text_segments = [s for s in segments if s[0] == 'text']
         if not text_segments or all(len(s[1].strip()) < 2 for s in text_segments):
-            # لا يوجد نص كافٍ للتحويل، نطبق homoglyphs فقط
-            return self._apply_homoglyphs(text, intensity=0.2)
+            # لا يوجد نص كافٍ للتحويل، نطبق تشويش الروابط والمعرفات والأرقام فقط
+            result = text
+            result = self._obfuscate_link_segment(result)
+            result = self._obfuscate_username_segment(result)
+            result = self._obfuscate_numbers_in_text(result, intensity=0.4)
+            return result
 
         # اختيار النمط
         style_idx = self._get_random_style()
 
-        # تطبيق النمط على الأجزاء غير المحمية
+        # تطبيق النمط على كل جزء
         result_segments = []
         for seg_type, seg_text in segments:
-            if seg_type == 'protected':
-                result_segments.append(seg_text)
+            if seg_type == 'link':
+                # الروابط: لا نطبق أنماط، فقط تشويش بأحرف غير مرئية
+                obfuscated = self._obfuscate_link_segment(seg_text)
+                result_segments.append(obfuscated)
+            elif seg_type == 'username':
+                # المعرفات: لا نطبق أنماط، فقط تشويش بأحرف غير مرئية
+                obfuscated = self._obfuscate_username_segment(seg_text)
+                result_segments.append(obfuscated)
             else:
+                # النص العادي: تطبيق النمط المختار
                 if style_idx >= 0:
                     style_name, char_map = self.STYLES[style_idx]
                     transformed = self._apply_map(seg_text, char_map)
                 elif style_idx == -1:
-                    # Strikethrough
                     transformed = self._apply_strikethrough(seg_text)
                 elif style_idx == -2:
-                    # Underline
                     transformed = self._apply_underline(seg_text)
                 elif style_idx == -3:
-                    # Homoglyphs فقط
                     transformed = self._apply_homoglyphs(seg_text, intensity=0.5)
+                elif style_idx == -4:
+                    # Messletters combo: Fullwidth + Homoglyphs
+                    transformed = self._apply_map(seg_text, self.FULLWIDTH_MAP)
+                    transformed = self._apply_homoglyphs(transformed, intensity=0.2)
                 else:
                     transformed = seg_text
 
@@ -791,13 +957,32 @@ class YayTextObfuscator:
                 if style_idx >= 0 and style_idx != -3:
                     transformed = self._apply_homoglyphs(transformed, intensity=0.1)
 
+                # تشويش الأرقام في النص العادي
+                transformed = self._obfuscate_numbers_in_text(transformed, intensity=0.4)
+
                 # إضافة زخرفة خفيفة (5%)
-                if random.random() < 0.3:
-                    transformed = self._apply_decorations(transformed, intensity=0.05)
+                if random.random() < 0.25:
+                    transformed = self._apply_decorations(transformed, intensity=0.04)
+
+                # إضافة أحرف غير مرئية بين الكلمات
+                if random.random() < 0.4:
+                    words = transformed.split(' ')
+                    new_words = []
+                    for w in words:
+                        new_words.append(w)
+                        if random.random() < 0.15:
+                            new_words.append(random.choice(['\u200B', '\u200C']))
+                    transformed = ' '.join(new_words)
 
                 result_segments.append(transformed)
 
-        return ''.join(result_segments)
+        final_result = ''.join(result_segments)
+
+        # إضافة حرف غير مرئي في البداية (لتغيير الهاش)
+        inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
+        final_result = inv_char + final_result
+
+        return final_result
 
     def get_style_name(self, idx=None):
         """اسم النمط الحالي"""
@@ -811,12 +996,14 @@ class YayTextObfuscator:
             return 'underline'
         elif idx == -3:
             return 'homoglyphs'
+        elif idx == -4:
+            return 'fullwidth_homoglyphs'
         return 'unknown'
 
     def get_all_style_names(self):
         """أسماء كل الأنماط المتاحة"""
         names = [s[0] for s in self.STYLES]
-        names.extend(['strikethrough', 'underline', 'homoglyphs_only'])
+        names.extend(['strikethrough', 'underline', 'homoglyphs_only', 'fullwidth_homoglyphs'])
         return names
 
     def preview_all(self, text):
@@ -829,18 +1016,21 @@ class YayTextObfuscator:
         results['strikethrough'] = self._apply_strikethrough(text)
         results['underline'] = self._apply_underline(text)
         results['homoglyphs'] = self._apply_homoglyphs(text, intensity=0.5)
+        results['fullwidth_homoglyphs'] = self._apply_homoglyphs(
+            self._apply_map(text, self.FULLWIDTH_MAP), intensity=0.2)
         return results
 
 
-yaytext_obfuscator = YayTextObfuscator()
+yaytext_obfuscator = YayTextMesslettersObfuscator()
 
 
 def yaytext_obfuscate(text):
     """
-    تطبيق أنماط YayText على النص - تُستدعى قبل الإرسال مباشرة
+    تطبيق تشويش YayText & Messletters على النص - تُستدعى قبل الإرسال مباشرة
     يتم اختيار نمط عشوائي مختلف لكل رسالة
+    يشمل: تشويش النصوص + الروابط + المعرفات + الأرقام
     """
-    if get_setting('yaytext_enabled', 'on') != 'on':
+    if get_setting('yaytext_messletters_obfuscation', 'on') != 'on':
         return text
     if not text:
         return text
@@ -1522,7 +1712,7 @@ def get_main_menu():
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
-    yt_status = "✅" if get_setting('yaytext_enabled', 'on') == 'on' else "❌"
+    ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '100')
     fast_delay = get_setting('fast_post_delay', '3')
@@ -1538,7 +1728,7 @@ def get_main_menu():
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
          Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
-        [Button.inline(f"🔄 أنماط YayText {yt_status}", b"toggle_yaytext")],
+        [Button.inline(f"🔄 تشويش YayText & Messletters {ym_status}", b"toggle_yaytext")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
@@ -1574,13 +1764,13 @@ def get_settings_menu():
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
-    yt_status = "✅" if get_setting('yaytext_enabled', 'on') == 'on' else "❌"
+    ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
     return [
         [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
         [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
         [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
-        [Button.inline(f"🔄 أنماط YayText {yt_status}", b"toggle_yaytext")],
+        [Button.inline(f"🔄 تشويش YayText & Messletters {ym_status}", b"toggle_yaytext")],
         [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
         [Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
         [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
@@ -2032,7 +2222,8 @@ async def main():
                 f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
                 f"🎭 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
                 f"🎭 تشويش النص: {obf_status}\n"
-                f"📳 Jitter: {get_setting('use_jitter', 'on')}",
+                f"📳 Jitter: {get_setting('use_jitter', 'on')}\n"
+                f"🔄 تشويش YayText & Messletters: {get_setting('yaytext_messletters_obfuscation', 'on')}",
                 buttons=get_settings_menu()
             )
 
@@ -2067,32 +2258,33 @@ async def main():
             await event.answer(f"Jitter: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
         elif data == 'toggle_yaytext':
-            current = get_setting('yaytext_enabled', 'on')
+            current = get_setting('yaytext_messletters_obfuscation', 'on')
             new_val = 'off' if current == 'on' else 'on'
-            set_setting('yaytext_enabled', new_val)
+            set_setting('yaytext_messletters_obfuscation', new_val)
             if new_val == 'on':
-                example = "Hello World عروض حصرية"
+                example = "Hello World عروض حصرية @user https://t.me/test 966512345678"
                 preview = yaytext_obfuscator.obfuscate(example)
-                await event.answer("أنماط YayText: مفعلة ✨")
+                await event.answer("تشويش YayText & Messletters: مفعل ✨")
                 await event.edit(
-                    f"🔄 **أنماط YayText: مفعلة** ✅\n\n"
+                    f"🔄 **تشويش YayText & Messletters: مفعل** ✅\n\n"
                     f"📝 **معاينة:**\n"
                     f"الأصلي: {example}\n"
-                    f"المحول: {preview}\n\n"
-                    f"🎨 **الأنماط المتاحة ({len(yaytext_obfuscator.get_all_style_names())}):**\n"
-                    f"• Bold, Italic, Bold Italic\n"
-                    f"• Monospace, Script, Bold Script\n"
-                    f"• Fraktur, Bold Fraktur\n"
-                    f"• Double-Struck, Sans-Serif\n"
-                    f"• Small Caps, Strikethrough\n"
-                    f"• Underline, Homoglyphs\n"
-                    f"• زخارف ورموز\n\n"
+                    f"المشوش: {preview}\n\n"
+                    f"🎨 **أنماط النصوص ({len(yaytext_obfuscator.get_all_style_names())}):**\n"
+                    f"• Bold, Italic, Bold Italic, Monospace\n"
+                    f"• Script, Bold Script, Fraktur, Bold Fraktur\n"
+                    f"• Double-Struck, Sans-Serif, Fullwidth\n"
+                    f"• Small Caps, Strikethrough, Underline\n"
+                    f"• Homoglyphs, زخارف Messletters\n\n"
+                    f"🔗 **تشويش الروابط:** أحرف غير مرئية في الرابط\n"
+                    f"👤 **تشويش المعرفات:** @\u200Busername\n"
+                    f"🔢 **تشويش الأرقام:** أنماط Unicode للأرقام\n\n"
                     f"🔄 كل رسالة تستخدم نمط مختلف تلقائياً",
                     buttons=get_settings_menu()
                 )
             else:
-                await event.answer("أنماط YayText: معطلة")
-                await event.edit("🔄 **أنماط YayText: معطلة** ❌", buttons=get_settings_menu())
+                await event.answer("تشويش YayText & Messletters: معطل")
+                await event.edit("🔄 **تشويش YayText & Messletters: معطل** ❌", buttons=get_settings_menu())
 
         elif data == 'blacklist':
             bl_count = len(get_blacklisted_groups())
