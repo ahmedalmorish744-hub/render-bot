@@ -72,6 +72,13 @@ is_joining_active = False
 scheduled_tasks = {}  # {schedule_id: asyncio.Task}
 
 # ═══════════════════════════════════════════════
+#  إعدادات النشر الشبحي 👻
+# ═══════════════════════════════════════════════
+GHOST_POST_ENABLED = True        # تفعيل النشر الشبحي
+GHOST_POST_LIFETIME = 20         # ثواني قبل التعديل/الحذف
+GHOST_POST_MODE = 'replace'      # 'replace' = تعديل بنص مختلف | 'delete' = حذف | 'empty' = تفريغ
+
+# ═══════════════════════════════════════════════
 #  قاعدة البيانات
 # ═══════════════════════════════════════════════
 DB_PATH = os.environ.get('DB_PATH', 'bot_database.db')
@@ -137,6 +144,12 @@ def init_db():
         set_setting('obfuscation_enabled', 'on')
     if get_setting('yaytext_messletters_obfuscation') is None:
         set_setting('yaytext_messletters_obfuscation', 'on')
+    if get_setting('ghost_post_enabled') is None:
+        set_setting('ghost_post_enabled', 'on')
+    if get_setting('ghost_post_lifetime') is None:
+        set_setting('ghost_post_lifetime', '20')
+    if get_setting('ghost_post_mode') is None:
+        set_setting('ghost_post_mode', 'replace')
 
     conn.commit()
     conn.close()
@@ -422,234 +435,218 @@ anti_detection = UltimateAntiDetection()
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
 
-# ═══════════════════════════════════════════════
-#  نظام تشويش YayText & Messletters المتقدم 🔄✨
-# ═══════════════════════════════════════════════
 class YayTextMesslettersObfuscator:
     """
-    نظام تشويش متقدم مستوحى من YayText و Messletters
-    يحول النصوص لأنماط Unicode مزخرفة ومشوشة
-    مع تشويش خاص للروابط والمعرفات والأرقام
-    بحيث يصبح غير قابل للتعرف من بوتات الحماية
-    مع بقائه مقروءاً تماماً للمستخدمين
+    نظام تشويش وتشفير مدمج خارق من 6 مصادر:
+    - fancy-fonts-generator: 27 نمط خط Unicode
+    - text_unicoder: تحويلات رونية + يونانية + مقلوبة + أجزاء
+    - telegram-fancy-fonts-bot: أنماط Cherokee + CJK + Cyrillic
+    - convert-case: Zalgo + يتوسطه خط + مسطر + مقلوب
+    - YayText + Messletters: أنماط إضافية
+    - تقنيات مخصصة: أحرف غير مرئية + مسافات بديلة + تشويش عربي
+    
+    إجمالي: 45+ نمط تحويل مختلف
+    كل رسالة تحصل على تركيبة عشوائية مختلفة
+    يستحيل على بوتات الحماية التعرف على النص
     """
 
-    # ─── خط عريض (Math Bold) ───
+    # ══════════════════════════════════════════════
+    #  خريطة الحروف اللاتينية (A-Z, a-z, 0-9)
+    #  لكل نمط من أنماط Unicode
+    # ══════════════════════════════════════════════
+    
+    # ─── Mathematical Alphanumeric Symbols (11 نمط) ───
     BOLD_MAP = {}
-    # ─── خط مائل (Math Italic) ───
     ITALIC_MAP = {}
-    # ─── خط عريض مائل (Math Bold Italic) ───
     BOLD_ITALIC_MAP = {}
-    # ─── خط Monospace ───
     MONOSPACE_MAP = {}
-    # ─── خط Cursive / Script ───
     SCRIPT_MAP = {}
-    # ─── خط Cursive عريض ───
     BOLD_SCRIPT_MAP = {}
-    # ─── خط Fraktur (قوطي) ───
     FRAKTUR_MAP = {}
-    # ─── خط Fraktur عريض ───
     BOLD_FRAKTUR_MAP = {}
-    # ─── خط Double-Struck ───
     DOUBLE_STRUCK_MAP = {}
-    # ─── خط Sans-Serif ───
     SANS_MAP = {}
-    # ─── خط Sans-Serif عريض ───
     SANS_BOLD_MAP = {}
-    # ─── خط Sans-Serif مائل ───
     SANS_ITALIC_MAP = {}
-    # ─── خط Sans-Serif عريض مائل ───
     SANS_BOLD_ITALIC_MAP = {}
-    # ─── خط Monospace Sans ───
     SANS_MONO_MAP = {}
-    # ─── خط Small Caps ───
-    SMALL_CAPS_MAP = {}
-    # ─── خط Fullwidth (Messletters) ───
+    
+    # ─── أنماط Messletters / Fancy Fonts الإضافية ───
     FULLWIDTH_MAP = {}
-
-    # ─── جداول أرقام Unicode مستقلة ───
+    SMALL_CAPS_MAP = {}
+    SUPERSCRIPT_MAP = {}
+    BUBBLES_MAP = {}
+    BUBBLE_BLACK_MAP = {}
+    PARENTHESIS_MAP = {}
+    SQUARED_MAP = {}
+    
+    # ─── أنماط Cross-Script (من telegram-fancy-fonts-bot) ───
+    RUSSIAN_MAP = {}
+    JAPANESE_MAP = {}
+    ARABIC_STYLE_MAP = {}
+    FAIRY_MAP = {}
+    WIZARD_MAP = {}
+    FUNKY_MAP = {}
+    
+    # ─── أنماط Diacritical (من fancy-fonts-generator) ───
+    ACUTE_MAP = {}
+    ROCK_DOTS_MAP = {}
+    STROKED_MAP = {}
+    INVERTED_MAP = {}
+    
+    # ─── جداول أرقام Unicode ───
     DIGIT_BOLD_MAP = {}
     DIGIT_DOUBLE_STRUCK_MAP = {}
     DIGIT_SANS_MAP = {}
     DIGIT_SANS_BOLD_MAP = {}
     DIGIT_MONO_MAP = {}
     DIGIT_FULLWIDTH_MAP = {}
-    DIGIT_CIRCLED_MAP = {}
-    DIGIT_NEGATIVE_CIRCLED_MAP = {}
-
-    # ─── Homoglyphs متشابهة ───
+    DIGIT_SUPERSCRIPT_MAP = {}
+    DIGIT_BUBBLES_MAP = {}
+    DIGIT_INVERTED_MAP = {}
+    
+    # ─── Homoglyphs سيريلية/يونانية ───
     HOMOGLYPH_MAP = {}
-
-    # ─── زخارف ورموز ───
-    DECORATIONS = []
+    
+    # ─── خريطة المقلوب (Upside-down) من text_unicoder ───
+    UPSIDE_DOWN_MAP = {}
+    
+    # ─── خريطة اليونانية الصوتية من text_unicoder ───
+    GREEK_MAP = {}
+    
+    # ─── خريطة الرونية من text_unicoder ───
+    RUNE_MAP = {}
 
     def __init__(self):
         self._build_maps()
         self._last_style = -1
+        self._build_styles_list()
 
     def _build_maps(self):
-        """بناء جداول التحويل لكل نمط"""
-        # ═══ الأحرف اللاتينية الكبيرة A-Z ═══
-        # Bold: U+1D400 - U+1D419
+        """بناء كل جداول التحويل"""
+        
+        # ═══ Mathematical Bold (U+1D400) ═══
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.BOLD_MAP[c] = chr(0x1D400 + i)
-        # Italic: U+1D434 - U+1D44D
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.ITALIC_MAP[c] = chr(0x1D434 + i)
-            if c == 'H':
-                self.ITALIC_MAP['H'] = '\u210E'
-        # Bold Italic: U+1D468 - U+1D481
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.BOLD_ITALIC_MAP[c] = chr(0x1D468 + i)
-        # Monospace: U+1D670 - U+1D689
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.MONOSPACE_MAP[c] = chr(0x1D670 + i)
-        # Script: U+1D49C - U+1D4B5
-        script_exceptions = {'B': '\u212C', 'E': '\u2130', 'F': '\u2131',
-                            'H': '\u210B', 'I': '\u2110', 'L': '\u2112',
-                            'M': '\u2133', 'R': '\u211B'}
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            if c in script_exceptions:
-                self.SCRIPT_MAP[c] = script_exceptions[c]
-            else:
-                self.SCRIPT_MAP[c] = chr(0x1D49C + i)
-        # Bold Script: U+1D4D0 - U+1D4E9
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4D0 + i)
-        # Fraktur: U+1D504 - U+1D51D
-        fraktur_exceptions = {'C': '\u212D', 'H': '\u210C', 'I': '\u2111',
-                              'R': '\u211C', 'Z': '\u2128'}
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            if c in fraktur_exceptions:
-                self.FRAKTUR_MAP[c] = fraktur_exceptions[c]
-            else:
-                self.FRAKTUR_MAP[c] = chr(0x1D504 + i)
-        # Bold Fraktur: U+1D56C - U+1D585
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D56C + i)
-        # Double-Struck: U+1D538 - U+1D551
-        ds_exceptions = {'C': '\u2102', 'H': '\u210D', 'N': '\u2115',
-                         'P': '\u2119', 'Q': '\u211A', 'R': '\u211D', 'Z': '\u2124'}
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            if c in ds_exceptions:
-                self.DOUBLE_STRUCK_MAP[c] = ds_exceptions[c]
-            else:
-                self.DOUBLE_STRUCK_MAP[c] = chr(0x1D538 + i)
-        # Sans-Serif: U+1D5A0 - U+1D5B9
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.SANS_MAP[c] = chr(0x1D5A0 + i)
-        # Sans-Serif Bold: U+1D5D4 - U+1D5ED
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.SANS_BOLD_MAP[c] = chr(0x1D5D4 + i)
-        # Sans-Serif Italic: U+1D608 - U+1D621
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.SANS_ITALIC_MAP[c] = chr(0x1D608 + i)
-        # Sans-Serif Bold Italic: U+1D63C - U+1D655
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D63C + i)
-        # Sans-Serif Monospace: U+1D6A8 - U+1D6C1
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.SANS_MONO_MAP[c] = chr(0x1D6A8 + i)
-        # Fullwidth: U+FF21 - U+FF3A (Messletters)
-        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.FULLWIDTH_MAP[c] = chr(0xFF21 + i)
-
-        # ═══ الأحرف اللاتينية الصغيرة a-z ═══
-        # Bold: U+1D41A - U+1D433
         for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
             self.BOLD_MAP[c] = chr(0x1D41A + i)
-        # Italic: U+1D44E - U+1D467
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.ITALIC_MAP[c] = chr(0x1D44E + i)
-            if c == 'h':
-                self.ITALIC_MAP['h'] = '\u210F'
-        # Bold Italic: U+1D482 - U+1D49B
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.BOLD_ITALIC_MAP[c] = chr(0x1D482 + i)
-        # Monospace: U+1D68A - U+1D6A3
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.MONOSPACE_MAP[c] = chr(0x1D68A + i)
-        # Script: U+1D4B6 - U+1D4CF
-        script_lower_exceptions = {'e': '\u212F', 'g': '\u210A', 'o': '\u2134'}
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            if c in script_lower_exceptions:
-                self.SCRIPT_MAP[c] = script_lower_exceptions[c]
-            else:
-                self.SCRIPT_MAP[c] = chr(0x1D4B6 + i)
-        # Bold Script: U+1D4EA - U+1D503
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4EA + i)
-        # Fraktur: U+1D51E - U+1D537
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.FRAKTUR_MAP[c] = chr(0x1D51E + i)
-        # Bold Fraktur: U+1D586 - U+1D59F
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D586 + i)
-        # Double-Struck: U+1D552 - U+1D56B
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.DOUBLE_STRUCK_MAP[c] = chr(0x1D552 + i)
-        # Sans-Serif: U+1D5BA - U+1D5D3
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.SANS_MAP[c] = chr(0x1D5BA + i)
-        # Sans-Serif Bold: U+1D5EE - U+1D607
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.SANS_BOLD_MAP[c] = chr(0x1D5EE + i)
-        # Sans-Serif Italic: U+1D622 - U+1D63B
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.SANS_ITALIC_MAP[c] = chr(0x1D622 + i)
-        # Sans-Serif Bold Italic: U+1D656 - U+1D66F
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D656 + i)
-        # Sans-Serif Monospace: U+1D6C2 - U+1D6DB
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.SANS_MONO_MAP[c] = chr(0x1D6C2 + i)
-        # Fullwidth: U+FF41 - U+FF5A (Messletters)
-        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.FULLWIDTH_MAP[c] = chr(0xFF41 + i)
-
-        # ═══ الأرقام 0-9 لكل نمط خط ═══
-        # Bold digits: U+1D7CE - U+1D7D7
         for i in range(10):
             self.BOLD_MAP[str(i)] = chr(0x1D7CE + i)
             self.DIGIT_BOLD_MAP[str(i)] = chr(0x1D7CE + i)
-        # Double-Struck digits: U+1D7D8 - U+1D7E1
+        
+        # ═══ Mathematical Italic (U+1D434) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.ITALIC_MAP[c] = chr(0x1D434 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.ITALIC_MAP[c] = chr(0x1D44E + i)
+        self.ITALIC_MAP['h'] = '\u210F'
+        
+        # ═══ Mathematical Bold Italic (U+1D468) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_ITALIC_MAP[c] = chr(0x1D468 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_ITALIC_MAP[c] = chr(0x1D482 + i)
+        
+        # ═══ Mathematical Monospace (U+1D670) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.MONOSPACE_MAP[c] = chr(0x1D670 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.MONOSPACE_MAP[c] = chr(0x1D68A + i)
+        for i in range(10):
+            self.MONOSPACE_MAP[str(i)] = chr(0x1D7F6 + i)
+            self.DIGIT_MONO_MAP[str(i)] = chr(0x1D7F6 + i)
+        
+        # ═══ Mathematical Script (U+1D49C) ═══
+        script_exc = {'B': '\u212C', 'E': '\u2130', 'F': '\u2131',
+                      'H': '\u210B', 'I': '\u2110', 'L': '\u2112',
+                      'M': '\u2133', 'R': '\u211B'}
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SCRIPT_MAP[c] = script_exc.get(c, chr(0x1D49C + i))
+        script_lower_exc = {'e': '\u212F', 'g': '\u210A', 'o': '\u2134'}
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SCRIPT_MAP[c] = script_lower_exc.get(c, chr(0x1D4B6 + i))
+        
+        # ═══ Mathematical Bold Script (U+1D4D0) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4D0 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4EA + i)
+        
+        # ═══ Mathematical Fraktur (U+1D504) ═══
+        fraktur_exc = {'C': '\u212D', 'H': '\u210C', 'I': '\u2111',
+                       'R': '\u211C', 'Z': '\u2128'}
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.FRAKTUR_MAP[c] = fraktur_exc.get(c, chr(0x1D504 + i))
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FRAKTUR_MAP[c] = chr(0x1D51E + i)
+        
+        # ═══ Mathematical Bold Fraktur (U+1D56C) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D56C + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D586 + i)
+        
+        # ═══ Mathematical Double-Struck (U+1D538) ═══
+        ds_exc = {'C': '\u2102', 'H': '\u210D', 'N': '\u2115',
+                  'P': '\u2119', 'Q': '\u211A', 'R': '\u211D', 'Z': '\u2124'}
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.DOUBLE_STRUCK_MAP[c] = ds_exc.get(c, chr(0x1D538 + i))
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.DOUBLE_STRUCK_MAP[c] = chr(0x1D552 + i)
         ds_digits = {'0': '\U0001D7D8', '1': '\U0001D7D9', '2': '\U0001D7DA',
                      '3': '\U0001D7DB', '4': '\U0001D7DC', '5': '\U0001D7DD',
                      '6': '\U0001D7DE', '7': '\U0001D7DF', '8': '\U0001D7E0',
                      '9': '\U0001D7E1'}
         self.DOUBLE_STRUCK_MAP.update(ds_digits)
         self.DIGIT_DOUBLE_STRUCK_MAP = dict(ds_digits)
-        # Sans digits: U+1D7E2 - U+1D7EB
+        
+        # ═══ Mathematical Sans-Serif (U+1D5A0) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_MAP[c] = chr(0x1D5A0 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_MAP[c] = chr(0x1D5BA + i)
         for i in range(10):
             self.SANS_MAP[str(i)] = chr(0x1D7E2 + i)
             self.DIGIT_SANS_MAP[str(i)] = chr(0x1D7E2 + i)
-        # Sans Bold digits: U+1D7EC - U+1D7F5
+        
+        # ═══ Mathematical Sans-Serif Bold (U+1D5D4) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_BOLD_MAP[c] = chr(0x1D5D4 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_BOLD_MAP[c] = chr(0x1D5EE + i)
         for i in range(10):
             self.SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
             self.DIGIT_SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
-        # Monospace digits: U+1D7F6 - U+1D7FF
-        for i in range(10):
-            self.MONOSPACE_MAP[str(i)] = chr(0x1D7F6 + i)
-            self.DIGIT_MONO_MAP[str(i)] = chr(0x1D7F6 + i)
-        # Fullwidth digits: U+FF10 - U+FF19 (Messletters)
+        
+        # ═══ Mathematical Sans-Serif Italic (U+1D608) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_ITALIC_MAP[c] = chr(0x1D608 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_ITALIC_MAP[c] = chr(0x1D622 + i)
+        
+        # ═══ Mathematical Sans-Serif Bold Italic (U+1D63C) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D63C + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D656 + i)
+        
+        # ═══ Sans-Serif Monospace ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_MONO_MAP[c] = chr(0x1D6A8 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_MONO_MAP[c] = chr(0x1D6C2 + i)
+        
+        # ═══ Fullwidth (U+FF21) ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.FULLWIDTH_MAP[c] = chr(0xFF21 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FULLWIDTH_MAP[c] = chr(0xFF41 + i)
         for i in range(10):
             self.FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
             self.DIGIT_FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
-        # Circled digits: U+2460 - U+2468 (1-9) + U+24EA (0)
-        self.DIGIT_CIRCLED_MAP = {
-            '0': '\u24EA', '1': '\u2460', '2': '\u2461', '3': '\u2462',
-            '4': '\u2463', '5': '\u2464', '6': '\u2465', '7': '\u2466',
-            '8': '\u2467', '9': '\u2468'
-        }
-        # Negative circled digits: U+2776 - U+277F
-        self.DIGIT_NEGATIVE_CIRCLED_MAP = {
-            '0': '\u24FF', '1': '\u2776', '2': '\u2777', '3': '\u2778',
-            '4': '\u2779', '5': '\u277A', '6': '\u277B', '7': '\u277C',
-            '8': '\u277D', '9': '\u277E'
-        }
-
+        
         # ═══ Small Caps ═══
-        small_caps = {
+        self.SMALL_CAPS_MAP = {
             'A': '\u1D00', 'B': '\u0299', 'C': '\u1D04', 'D': '\u1D05',
             'E': '\u1D07', 'F': '\uA730', 'G': '\u0262', 'H': '\u029C',
             'I': '\u026A', 'J': '\u1D0A', 'K': '\u1D0B', 'L': '\u029F',
@@ -658,42 +655,183 @@ class YayTextMesslettersObfuscator:
             'U': '\u1D1C', 'V': '\u1D20', 'W': '\u1D21', 'X': '\uA78D',
             'Y': '\u028F', 'Z': '\u1D22',
         }
-        self.SMALL_CAPS_MAP = small_caps
-
+        
+        # ═══ Superscript (من fancy-fonts-generator) ═══
+        sup_lower = 'ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖqʳˢᵗᵘᵛʷˣʸᶻ'
+        sup_upper = 'ᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾQᴿˢᵀᵁⱽᵂˣʸᶻ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SUPERSCRIPT_MAP[c] = sup_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SUPERSCRIPT_MAP[c] = sup_upper[i]
+        sup_digits = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+        for i in range(10):
+            self.SUPERSCRIPT_MAP[str(i)] = sup_digits[i]
+            self.DIGIT_SUPERSCRIPT_MAP[str(i)] = sup_digits[i]
+        
+        # ═══ Bubbles / Circled (U+24D0) ═══
+        bub_lower = 'ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ'
+        bub_upper = 'ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BUBBLES_MAP[c] = bub_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BUBBLES_MAP[c] = bub_upper[i]
+        bub_digits = '⓪①②③④⑤⑥⑦⑧⑨'
+        for i in range(10):
+            self.BUBBLES_MAP[str(i)] = bub_digits[i]
+            self.DIGIT_BUBBLES_MAP[str(i)] = bub_digits[i]
+        
+        # ═══ Bubble Black / Negative Circled (U+1F150) ═══
+        bb_lower = '🅐🅑🅒🅓🅔🅕🅖🅗🅘🅙🅚🅛🅜🅝🅞🅟🅠🅡🅢🅣🅤🅥🅦🅧🅨🅩'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BUBBLE_BLACK_MAP[c] = bb_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BUBBLE_BLACK_MAP[c] = bb_lower[i]
+        
+        # ═══ Parenthesis (U+249C) ═══
+        par_lower = '⒜⒝⒞⒟⒠⒡⒢⒣⒤⒥⒦⒧⒨⒩⒪⒫⒬⒭⒮⒯⒰⒱⒲⒳⒴⒵'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.PARENTHESIS_MAP[c] = par_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.PARENTHESIS_MAP[c] = par_lower[i]
+        
+        # ═══ Squared (U+1F130) ═══
+        sq_chars = '🄰🄱🄲🄳🄴🄵🄶🄷🄸🄹🄺🄻🄼🄽🄾🄿🅀🅁🅂🅃🅄🅅🅆🅇🅈🅉'
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SQUARED_MAP[c] = sq_chars[i]
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SQUARED_MAP[c] = sq_chars[i]
+        
+        # ═══ Cross-Script: Russian (Cyrillic lookalikes) ═══
+        rus_lower = 'абcдёfgнїjкгѫпѳpфя$тцѵщжчз'
+        rus_upper = 'АБCДЄFGHЇJКГѪЙѲPФЯ$TЦѴШЖЧЗ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.RUSSIAN_MAP[c] = rus_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.RUSSIAN_MAP[c] = rus_upper[i]
+        
+        # ═══ Cross-Script: Japanese (CJK lookalikes) ═══
+        jap_chars = '卂乃匚ᗪ乇千Ꮆ卄丨ﾌҜㄥ爪几ㄖ卩Ɋ尺丂ㄒㄩᐯ山乂ㄚ乙'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.JAPANESE_MAP[c] = jap_chars[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.JAPANESE_MAP[c] = jap_chars[i]
+        
+        # ═══ Cross-Script: Arabic Style (Thai/Hebrew lookalikes) ═══
+        ar_chars = 'ค๒ς๔єŦﻮђเןкl๓ภ๏קợгรtยשฬץאz'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.ARABIC_STYLE_MAP[c] = ar_chars[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.ARABIC_STYLE_MAP[c] = ar_chars[i]
+        
+        # ═══ Cross-Script: Fairy (Cherokee) ═══
+        fairy_chars = 'ᏗᏰፈᎴᏋᎦᎶᏂᎥᏠᏦᏝᎷᏁᎧᎮᎤᏒᏕᏖᏬᏉᏇጀᎩፚ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FAIRY_MAP[c] = fairy_chars[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.FAIRY_MAP[c] = fairy_chars[i]
+        
+        # ═══ Cross-Script: Wizard (IPA/Armenian) ═══
+        wiz_chars = 'ǟɮƈɖɛʄɢɦɨʝӄʟʍռօքզʀֆȶʊʋաӼʏʐ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.WIZARD_MAP[c] = wiz_chars[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.WIZARD_MAP[c] = wiz_chars[i]
+        
+        # ═══ Cross-Script: Funky (Greek mix) ═══
+        funk_chars = 'αв¢∂єƒgнιנкℓмησρqяѕтυνωχуz'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FUNKY_MAP[c] = funk_chars[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.FUNKY_MAP[c] = funk_chars[i]
+        
+        # ═══ Diacritical: Acute ═══
+        acute_lower = 'ábćdéfǵhíjḱĺḿńőṕqŕśtúvẃxӳź'
+        acute_upper = 'ÁBĆDÉFǴHÍJḰĹḾŃŐṔQŔŚTŰVẂXӲŹ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.ACUTE_MAP[c] = acute_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.ACUTE_MAP[c] = acute_upper[i]
+        
+        # ═══ Diacritical: RockDots (Umlaut) ═══
+        rock_lower = 'äḅċḋëḟġḧïjḳḷṁṅöṗqṛṡẗüṿẅẍÿż'
+        rock_upper = 'ÄḄĊḊËḞĠḦÏJḲḶṀṄÖṖQṚṠṪÜṾẄẌŸŻ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.ROCK_DOTS_MAP[c] = rock_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.ROCK_DOTS_MAP[c] = rock_upper[i]
+        
+        # ═══ Diacritical: Stroked (Barred) ═══
+        stroke_lower = 'Ⱥƀȼđɇfǥħɨɉꝁłmnøᵽꝗɍsŧᵾvwxɏƶ'
+        stroke_upper = 'ȺɃȻĐɆFǤĦƗɈꝀŁMNØⱣꝖɌSŦᵾVWXɎƵ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.STROKED_MAP[c] = stroke_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.STROKED_MAP[c] = stroke_upper[i]
+        
+        # ═══ Inverted / Upside-down ═══
+        inv_lower = 'ɐqɔpǝɟƃɥıɾʞןɯuodbɹsʇnʌʍxʎz'
+        inv_upper = '∀ᗺƆᗡƎℲ⅁HIſꓘ˥WNOԀტᴚS⊥∩ΛMX⅄Z'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.INVERTED_MAP[c] = inv_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.INVERTED_MAP[c] = inv_upper[i]
+        inv_digits = '0ƖᘔƐ߈95ㄥ86'
+        for i in range(10):
+            self.INVERTED_MAP[str(i)] = inv_digits[i]
+            self.DIGIT_INVERTED_MAP[str(i)] = inv_digits[i]
+        
         # ═══ Homoglyphs (Cyrillic/Greek مشابهة) ═══
         self.HOMOGLYPH_MAP = {
-            'a': '\u0430', 'A': '\u0410',
-            'c': '\u0441', 'C': '\u0421',
-            'e': '\u0435', 'E': '\u0415',
-            'o': '\u043E', 'O': '\u041E',
-            'p': '\u0440', 'P': '\u0420',
-            'x': '\u0445', 'X': '\u0425',
-            'y': '\u0443', 'Y': '\u0423',
-            'i': '\u0456', 'I': '\u0406',
-            'j': '\u0458', 'J': '\u0408',
-            's': '\u0455', 'S': '\u0405',
-            'k': '\u043A', 'K': '\u041A',
-            'H': '\u041D', 'T': '\u0422',
-            'M': '\u041C', 'B': '\u0412',
+            'a': '\u0430', 'A': '\u0410', 'c': '\u0441', 'C': '\u0421',
+            'e': '\u0435', 'E': '\u0415', 'o': '\u043E', 'O': '\u041E',
+            'p': '\u0440', 'P': '\u0420', 'x': '\u0445', 'X': '\u0425',
+            'y': '\u0443', 'Y': '\u0423', 'i': '\u0456', 'I': '\u0406',
+            'j': '\u0458', 'J': '\u0408', 's': '\u0455', 'S': '\u0405',
+            'k': '\u043A', 'K': '\u041A', 'H': '\u041D', 'T': '\u0422',
+            'M': '\u041C', 'B': '\u0412', 'g': '\u0493', 'G': '\u0492',
+            'h': '\u04BB', 'b': '\u0431', 'd': '\u0501', 'u': '\u04AF',
+        }
+        
+        # ═══ Upside-down map (من text_unicoder) ═══
+        self.UPSIDE_DOWN_MAP = {
+            'a': 'ɐ', 'b': 'q', 'c': 'ɔ', 'd': 'p', 'e': 'ǝ',
+            'f': 'ɟ', 'g': 'ᵷ', 'h': 'ɥ', 'i': 'ᴉ', 'j': 'ɾ',
+            'k': 'ʞ', 'm': 'ɯ', 'n': 'u', 'r': 'ɹ', 't': 'ʇ',
+            'v': 'ʌ', 'w': 'ʍ', 'y': 'ʎ', '.': '˙', ',': 'ʻ',
+            '!': '¡', '?': '¿', '&': '⅋', 'A': '∀', 'C': 'Ɔ',
+            'E': 'Ǝ', 'F': 'Ⅎ', 'G': '⅍', 'J': 'ſ', 'L': '⅂',
+            'M': 'Ɯ', 'P': 'd', 'R': 'ᴚ', 'T': 'ꚱ', 'U': '∩',
+            'V': 'Λ', 'W': 'M', 'Y': '⅄', '1': 'ↂ', '3': 'Ɛ',
+        }
+        
+        # ═══ Greek phonemic map (من text_unicoder) ═══
+        self.GREEK_MAP = {
+            'a': 'α', 'A': 'Α', 'b': 'β', 'B': 'Β', 'g': 'γ', 'G': 'Γ',
+            'd': 'δ', 'D': 'Δ', 'e': 'ε', 'E': 'Ε', 'z': 'ζ', 'Z': 'Ζ',
+            'h': 'η', 'H': 'Η', 's': 'σ', 'S': 'Σ', 't': 'τ', 'T': 'Τ',
+            'y': 'υ', 'Y': 'Υ', 'f': 'φ', 'F': 'Φ', 'c': 'χ', 'C': 'Χ',
+            'w': 'ψ', 'W': 'Ψ', 'u': 'ω', 'U': 'Ω', 'i': 'ι', 'I': 'Ι',
+            'k': 'κ', 'K': 'Κ', 'l': 'λ', 'L': 'Λ', 'm': 'μ', 'M': 'Μ',
+            'n': 'ν', 'N': 'Ν', 'o': 'ο', 'O': 'Ο', 'p': 'π', 'P': 'Π',
+            'r': 'ρ', 'R': 'Ρ', 'q': 'κ', 'Q': 'Κ', 'j': 'ι', 'J': 'Ι',
+            'v': '∇', 'x': 'χ', 'X': 'Χ',
+        }
+        
+        # ═══ Rune map (Elder Futhark من text_unicoder) ═══
+        self.RUNE_MAP = {
+            'a': 'ᚨ', 'A': 'ᚨ', 'b': 'ᛒ', 'B': 'ᛒ', 'c': 'ᚲ', 'C': 'ᚲ',
+            'd': 'ᛞ', 'D': 'ᛞ', 'e': 'ᛖ', 'E': 'ᛖ', 'f': 'ᚠ', 'F': 'ᚠ',
+            'g': 'ᚷ', 'G': 'ᚷ', 'h': 'ᚺ', 'H': 'ᚺ', 'i': 'ᛁ', 'I': 'ᛁ',
+            'j': 'ᛃ', 'J': 'ᛃ', 'k': 'ᚲ', 'K': 'ᚲ', 'l': 'ᛚ', 'L': 'ᛚ',
+            'm': 'ᛗ', 'M': 'ᛗ', 'n': 'ᚾ', 'N': 'ᚾ', 'o': 'ᛟ', 'O': 'ᛟ',
+            'p': 'ᛈ', 'P': 'ᛈ', 'q': 'ᚲ', 'r': 'ᚱ', 'R': 'ᚱ',
+            's': 'ᛊ', 'S': 'ᛊ', 't': 'ᛏ', 'T': 'ᛏ', 'u': 'ᚢ', 'U': 'ᚢ',
+            'v': 'ᚹ', 'V': 'ᚹ', 'w': 'ᚹ', 'W': 'ᚹ', 'x': 'ᚲᛊ', 'X': 'ᚲᛊ',
+            'y': 'ᛁ', 'Y': 'ᛁ', 'z': 'ᛉ', 'Z': 'ᛉ',
         }
 
-        # ═══ الزخارف والرموز (Messletters) ═══
-        self.DECORATIONS = [
-            # حروف محاطة بدوائر (a-z)
-            ['\u24D0', '\u24D1', '\u24D2', '\u24D3', '\u24D4', '\u24D5',
-             '\u24D6', '\u24D7', '\u24D8', '\u24D9', '\u24DA', '\u24DB',
-             '\u24DC', '\u24DD', '\u24DE', '\u24DF', '\u24E0', '\u24E1',
-             '\u24E2', '\u24E3', '\u24E4', '\u24E5', '\u24E6', '\u24E7',
-             '\u24E8', '\u24E9'],
-            # حروف محاطة بدوائر كبيرة (A-Z)
-            ['\u24B6', '\u24B7', '\u24B8', '\u24B9', '\u24BA', '\u24BB',
-             '\u24BC', '\u24BD', '\u24BE', '\u24BF', '\u24C0', '\u24C1',
-             '\u24C2', '\u24C3', '\u24C4', '\u24C5', '\u24C6', '\u24C7',
-             '\u24C8', '\u24C9', '\u24CA', '\u24CB', '\u24CC', '\u24CD',
-             '\u24CE', '\u24CF'],
-        ]
-
-        # ═══ قائمة كل الأنماط المتاحة ═══
+    def _build_styles_list(self):
+        """بناء قائمة كل الأنماط المتاحة (45+ نمط)"""
         self.STYLES = [
             ('bold', self.BOLD_MAP),
             ('italic', self.ITALIC_MAP),
@@ -706,38 +844,40 @@ class YayTextMesslettersObfuscator:
             ('double_struck', self.DOUBLE_STRUCK_MAP),
             ('sans', self.SANS_MAP),
             ('sans_bold', self.SANS_BOLD_MAP),
+            ('bubbles', self.BUBBLES_MAP),
+            ('bubble_black', self.BUBBLE_BLACK_MAP),
+            ('parenthesis', self.PARENTHESIS_MAP),
+            ('squared', self.SQUARED_MAP),
+            ('superscript', self.SUPERSCRIPT_MAP),
+            ('fullwidth', self.FULLWIDTH_MAP),
+            ('russian', self.RUSSIAN_MAP),
+            ('japanese', self.JAPANESE_MAP),
+            ('arabic_style', self.ARABIC_STYLE_MAP),
+            ('fairy', self.FAIRY_MAP),
+            ('wizard', self.WIZARD_MAP),
+            ('funky', self.FUNKY_MAP),
+            ('acute', self.ACUTE_MAP),
+            ('rock_dots', self.ROCK_DOTS_MAP),
+            ('stroked', self.STROKED_MAP),
+            ('small_caps', self.SMALL_CAPS_MAP),
             ('sans_italic', self.SANS_ITALIC_MAP),
             ('sans_bold_italic', self.SANS_BOLD_ITALIC_MAP),
-            ('fullwidth', self.FULLWIDTH_MAP),
-            ('small_caps', self.SMALL_CAPS_MAP),
+            ('sans_mono', self.SANS_MONO_MAP),
         ]
-
-        # ═══ جداول تحويل الأرقام المتاحة ═══
-        self.DIGIT_STYLES = [
-            self.DIGIT_BOLD_MAP,
-            self.DIGIT_DOUBLE_STRUCK_MAP,
-            self.DIGIT_SANS_MAP,
-            self.DIGIT_SANS_BOLD_MAP,
-            self.DIGIT_MONO_MAP,
-            self.DIGIT_FULLWIDTH_MAP,
-        ]
+        # Special: -1 strikethrough, -2 underline, -3 inverted
+        # -4 zalgo, -5 homoglyphs, -6 greek, -7 rune, -8 upside_down, -9 random_combo
 
     def _apply_map(self, text, char_map):
-        """تطبيق جدول تحويل على النص"""
         result = []
         for c in text:
-            if c in char_map:
-                result.append(char_map[c])
-            else:
-                result.append(c)
+            result.append(char_map[c] if c in char_map else c)
         return ''.join(result)
 
     def _apply_map_preserve_digits(self, text, char_map):
-        """تطبيق جدول تحويل على النص مع الحفاظ على الأرقام كما هي"""
         result = []
         for c in text:
             if c.isdigit():
-                result.append(c)  # الأرقام تبقى أصلية
+                result.append(c)
             elif c in char_map:
                 result.append(char_map[c])
             else:
@@ -745,29 +885,52 @@ class YayTextMesslettersObfuscator:
         return ''.join(result)
 
     def _apply_strikethrough(self, text):
-        """خط يتوسطه خط: إضافة U+0336 بعد كل حرف (بدون الأرقام)"""
-        combining_long = '\u0336'
         result = []
         for c in text:
             if c.isalpha():
-                result.append(c + combining_long)
+                result.append(c + '\u0336')
             else:
                 result.append(c)
         return ''.join(result)
 
     def _apply_underline(self, text):
-        """خط مسطر: إضافة U+0332 بعد كل حرف (بدون الأرقام)"""
-        combining_low = '\u0332'
         result = []
         for c in text:
             if c.isalpha():
-                result.append(c + combining_low)
+                result.append(c + '\u0332')
             else:
                 result.append(c)
         return ''.join(result)
 
+    def _apply_zalgo(self, text, intensity=3):
+        combining_above = list(range(0x0300, 0x0315))
+        combining_below = list(range(0x0316, 0x0333))
+        all_combining = combining_above + combining_below
+        result = []
+        for c in text:
+            result.append(c)
+            if c.isalpha() or c.isdigit():
+                num_marks = random.randint(1, intensity)
+                for _ in range(num_marks):
+                    result.append(chr(random.choice(all_combining)))
+        return ''.join(result)
+
+    def _apply_inverted(self, text):
+        return self._apply_map(text, self.INVERTED_MAP)
+
+    def _apply_upside_down(self, text):
+        result = []
+        for c in reversed(text):
+            result.append(self.UPSIDE_DOWN_MAP.get(c, c))
+        return ''.join(result)
+
+    def _apply_greek(self, text):
+        return self._apply_map(text, self.GREEK_MAP)
+
+    def _apply_rune(self, text):
+        return self._apply_map(text, self.RUNE_MAP)
+
     def _apply_homoglyphs(self, text, intensity=0.35):
-        """استبدال أحرف بنظيراتها المتشابهة (Cyrillic/Greek)"""
         result = []
         for c in text:
             if c in self.HOMOGLYPH_MAP and random.random() < intensity:
@@ -776,31 +939,54 @@ class YayTextMesslettersObfuscator:
                 result.append(c)
         return ''.join(result)
 
-    def _apply_decorations(self, text, intensity=0.08):
-        """إضافة رموز زخرفية عشوائية (Messletters style)"""
-        words = text.split(' ')
-        decorated = []
-        for word in words:
-            if not word:
-                decorated.append(word)
-                continue
-            if word[0].isalpha() and random.random() < intensity:
-                first_upper = word[0].upper()
-                if first_upper >= 'A' and first_upper <= 'Z':
-                    idx = ord(first_upper) - ord('A')
-                    dec_set = random.choice(self.DECORATIONS)
-                    if idx < len(dec_set):
-                        word = dec_set[idx] + word[1:]
-            decorated.append(word)
-        return ' '.join(decorated)
+    def _apply_random_combo(self, text):
+        available = list(range(len(self.STYLES)))
+        num_styles = random.randint(2, 3)
+        chosen = random.sample(available, min(num_styles, len(available)))
+        result = text
+        for idx in chosen:
+            _, char_map = self.STYLES[idx]
+            chars = list(result)
+            for i, c in enumerate(chars):
+                if c in char_map and random.random() < 0.5:
+                    chars[i] = char_map[c]
+            result = ''.join(chars)
+        return result
+
+    def _escape_html(self, text):
+        if not text:
+            return text
+        text = text.replace('&', '&amp;')
+        text = text.replace('<', '&lt;')
+        text = text.replace('>', '&gt;')
+        return text
+
+    def _obfuscate_display_text(self, text, style_idx):
+        if not text or len(text) < 2:
+            return text
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061']
+        result = random.choice(inv_chars) + text
+        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2008']
+        chars = list(result)
+        for i, c in enumerate(chars):
+            if c == ' ' and random.random() < 0.4:
+                chars[i] = random.choice(alt_spaces)
+        result = ''.join(chars)
+        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F']]
+        for pos in space_positions:
+            if random.random() < 0.25:
+                result = result[:pos+1] + random.choice(inv_chars) + result[pos+1:]
+        arabic_variants = {'ي': '\u06CC', 'ك': '\u06A9', 'ه': '\u0647', 'ة': '\u0629'}
+        chars = list(result)
+        for i, c in enumerate(chars):
+            if c in arabic_variants and random.random() < 0.06:
+                chars[i] = arabic_variants[c]
+        result = ''.join(chars)
+        if random.random() < 0.2:
+            result = result + '\u200F'
+        return result
 
     def _create_url_display(self, url, style_idx):
-        """
-        إنشاء نص عرض متنوع وطبيعي للرابط - يخفيه تماماً من بوتات الحماية
-        النص متنوع جداً ولا يشبه نمط إعلاني محدد
-        كل رسالة تحصل على نص مختلف
-        """
-        # أنماط متنوعة جداً - بعضها يبدو كمحادثة عادية
         tme_displays = [
             'تابع القناة', 'انضم لنا', 'القناة هنا', 'زورنا',
             'ادخل القناة', 'اشترك معنا', 'تفضل بالدخول', 'الرابط',
@@ -815,261 +1001,168 @@ class YayTextMesslettersObfuscator:
             'شاهد', 'تابع', 'ادخل', 'هنا',
             'تفاصيل أكثر', 'المزيد', 'زورنا', 'اضغط',
             'معلومات إضافية', 'تفقد الرابط', 'انتقل', 'الموقع',
-            'رابط مباشر', 'اضغط للمتابعة', 'تصفح', 'الدخول',
         ]
         if 't.me/' in url:
             return random.choice(tme_displays)
-        else:
-            return random.choice(general_displays)
+        return random.choice(general_displays)
 
     def _create_mention_display(self, mention, style_idx):
-        """
-        إنشاء نص عرض متنوع وطبيعي للمعرف @username
-        يخفيه تماماً من بوتات الحماية
-        """
-        displays = [
-            'اضغط هنا', 'الملف الشخصي', 'هنا',
-            'تفضل', 'تابعنا', 'الرابط',
-            'من هنا', 'تعرف علينا', 'تواصل',
-            'ادخل', 'الصفحة', 'اضغط',
-        ]
+        displays = ['اضغط هنا', 'الملف الشخصي', 'هنا', 'تفضل', 'تابعنا', 'الرابط', 'من هنا', 'تعرف علينا', 'تواصل', 'ادخل', 'الصفحة', 'اضغط']
         return random.choice(displays)
 
-    def _escape_html(self, text):
-        """تهريب أحرف HTML الخاصة لمنع تضارب مع parse_mode='html'"""
-        if not text:
-            return text
-        text = text.replace('&', '&amp;')
-        text = text.replace('<', '&lt;')
-        text = text.replace('>', '&gt;')
-        return text
-
-    def _obfuscate_display_text(self, text, style_idx):
-        """
-        تشويش نص العرض (للروابط والمعرفات) بأحرف غير مرئية وتحويلات خفيفة
-        النص يبقى مقروءاً تماماً لكن يتغير لكل رسالة
-        """
-        if not text or len(text) < 2:
-            return text
-
-        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061']
-
-        # إضافة حرف غير مرئي في البداية (لتغيير البصمة)
-        result = random.choice(inv_chars) + text
-
-        # استبدال بعض المسافات بمسافات بديلة
-        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2008']
-        chars = list(result)
-        for i, c in enumerate(chars):
-            if c == ' ' and random.random() < 0.4:
-                chars[i] = random.choice(alt_spaces)
-        result = ''.join(chars)
-
-        # إضافة حرف غير مرئي عشوائي بين الكلمات
-        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F']]
-        for pos in space_positions:
-            if random.random() < 0.25:
-                result = result[:pos+1] + random.choice(inv_chars) + result[pos+1:]
-
-        # تحويلات عربية خفيفة لنص العرض
-        arabic_variants = {
-            'ي': '\u06CC',  # ي فارسية
-            'ك': '\u06A9',  # ك كردية
-            'ه': '\u0647',  # ه مختلفة
-            'ة': '\u0629',  # ة مفتوحة
-        }
-        chars = list(result)
-        for i, c in enumerate(chars):
-            if c in arabic_variants and random.random() < 0.06:
-                chars[i] = arabic_variants[c]
-        result = ''.join(chars)
-
-        # علامة RTL خفية أحياناً
-        if random.random() < 0.2:
-            result = result + '\u200F'
-
-        return result
-
     def _apply_style_to_text(self, text, style_idx):
-        """
-        تطبيق كامل لكل تقنيات مكافحة الكشف على النص العادي
-        الأرقام تبقى كما هي للحفاظ على وظيفتها (أرقام هواتف قابلة للنقر)
-        
-        الطبقات:
-        1. نمط YayText Unicode (خط عريض/مائل/زخرفي)
-        2. Homoglyphs إضافية (حروف سيريلية/يونانية متشابهة)
-        3. زخارف Messletters خفيفة
-        4. أحرف غير مرئية بين الكلمات
-        5. مسافات بديلة (Unicode alternate spaces)
-        6. تحويلات عربية خفيفة (ي→ى، ك→ڪ)
-        7. أحرف غير مرئية حول علامات الترقيم
-        8. علامة RTL خفية
-        9. أحرف غير مرئية كثيفة (إضافية لتغيير البصمة بقوة)
-        10. تشويش أنماط الكلمات العربية المتكررة
-        """
+        """12 طبقة تشويش متراكبة"""
         if not text:
             return text
 
-        # ═══ الطبقة 1: نمط YayText Unicode ═══
+        # الطبقة 1: نمط Unicode أساسي
         if style_idx >= 0:
-            style_name, char_map = self.STYLES[style_idx]
+            _, char_map = self.STYLES[style_idx]
             transformed = self._apply_map_preserve_digits(text, char_map)
         elif style_idx == -1:
             transformed = self._apply_strikethrough(text)
         elif style_idx == -2:
             transformed = self._apply_underline(text)
         elif style_idx == -3:
-            transformed = self._apply_homoglyphs(text, intensity=0.5)
+            transformed = self._apply_inverted(text)
         elif style_idx == -4:
-            transformed = self._apply_map_preserve_digits(text, self.FULLWIDTH_MAP)
-            transformed = self._apply_homoglyphs(transformed, intensity=0.2)
+            transformed = self._apply_zalgo(text, intensity=2)
+        elif style_idx == -5:
+            transformed = self._apply_homoglyphs(text, intensity=0.5)
+        elif style_idx == -6:
+            transformed = self._apply_greek(text)
+        elif style_idx == -7:
+            transformed = self._apply_rune(text)
+        elif style_idx == -8:
+            transformed = self._apply_upside_down(text)
+        elif style_idx == -9:
+            transformed = self._apply_random_combo(text)
         else:
             transformed = text
 
-        # ═══ الطبقة 2: Homoglyphs إضافية ═══
-        if style_idx >= 0 and style_idx != -3:
-            transformed = self._apply_homoglyphs(transformed, intensity=0.12)
+        # الطبقة 2: Homoglyphs إضافية
+        if style_idx not in (-5, -6, -7):
+            transformed = self._apply_homoglyphs(transformed, intensity=0.15)
 
-        # ═══ الطبقة 3: زخارف Messletters خفيفة ═══
-        if random.random() < 0.2:
-            transformed = self._apply_decorations(transformed, intensity=0.03)
-
-        # ═══ الطبقة 4: أحرف غير مرئية بين الكلمات ═══
+        # الطبقة 3: أحرف غير مرئية بين الكلمات
         inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061', '\u2062', '\u2063']
         words = transformed.split(' ')
         new_words = []
         for i, w in enumerate(words):
             new_words.append(w)
-            if i < len(words) - 1 and random.random() < 0.15:
+            if i < len(words) - 1 and random.random() < 0.2:
                 new_words.append(random.choice(inv_chars))
         transformed = ' '.join(new_words)
 
-        # ═══ الطبقة 5: مسافات بديلة ═══
+        # الطبقة 4: مسافات بديلة
         alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2008', '\u2007', '\u2006', '\u2005', '\u2004']
         result_list = list(transformed)
         for i, c in enumerate(result_list):
-            if c == ' ' and random.random() < 0.3:
+            if c == ' ' and random.random() < 0.35:
                 result_list[i] = random.choice(alt_spaces)
         transformed = ''.join(result_list)
 
-        # ═══ الطبقة 6: تحويلات عربية خفيفة ═══
-        arabic_variants = {
-            'ي': '\u06CC',  # ي فارسية
-            'ك': '\u06A9',  # ك كردية
-        }
+        # الطبقة 5: تحويلات عربية خفيفة
+        arabic_variants = {'ي': '\u06CC', 'ك': '\u06A9', 'ه': '\u0647', 'ة': '\u0629', 'أ': '\u0623', 'إ': '\u0625', 'آ': '\u0622'}
         result_list = list(transformed)
         for i, c in enumerate(result_list):
-            if c in arabic_variants and random.random() < 0.04:
+            if c in arabic_variants and random.random() < 0.05:
                 result_list[i] = arabic_variants[c]
         transformed = ''.join(result_list)
 
-        # ═══ الطبقة 7: أحرف غير مرئية حول علامات الترقيم العربية ═══
+        # الطبقة 6: أحرف غير مرئية حول علامات الترقيم
         if len(transformed) > 5:
             punctuation = '،.؛:!؟-'
             result_list = list(transformed)
             insert_positions = []
             for i, c in enumerate(result_list):
-                if c in punctuation and random.random() < 0.25:
-                    insert_positions.append((i + 1, random.choice(['\u200B', '\u200C'])))
+                if c in punctuation and random.random() < 0.3:
+                    insert_positions.append((i + 1, random.choice(inv_chars[:4])))
             for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
                 result_list.insert(pos, char)
             transformed = ''.join(result_list)
 
-        # ═══ الطبقة 8: علامة RTL خفية أحياناً ═══
-        if random.random() < 0.15:
+        # الطبقة 7: علامة RTL خفية
+        if random.random() < 0.2:
             transformed = transformed + '\u200F'
 
-        # ═══ الطبقة 9: أحرف غير مرئية كثيفة (إضافية لتغيير البصمة بقوة) ═══
-        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061', '\u2062', '\u2063']
-        # إضافة أحرف غير مرئية بين كل كلمتين عربيتين
+        # الطبقة 8: أحرف غير مرئية كثيفة
         words = transformed.split(' ')
         dense_words = []
         for i, w in enumerate(words):
             dense_words.append(w)
             if i < len(words) - 1:
-                # إضافة 0-2 أحرف غير مرئية بين الكلمات
                 num_inv = random.randint(0, 2)
                 for _ in range(num_inv):
                     dense_words.append(random.choice(inv_chars))
         transformed = ' '.join(dense_words)
 
-        # إضافة أحرف غير مرئية عشوائية في مواقع متنوعة
+        # الطبقة 9: أحرف غير مرئية بعد أحرف عربية
         if len(transformed) > 10:
             chars = list(transformed)
             insert_positions = []
             for i in range(len(chars)):
-                # إضافة أحرف غير مرئية بعد كل حرف عربي بنسبة 5%
-                if chars[i] >= '\u0600' and chars[i] <= '\u06FF' and random.random() < 0.05:
+                if '\u0600' <= chars[i] <= '\u06FF' and random.random() < 0.06:
                     insert_positions.append((i + 1, random.choice(inv_chars[:4])))
             for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
                 chars.insert(pos, char)
             transformed = ''.join(chars)
 
-        # ═══ الطبقة 10: تشويش أنماط الكلمات العربية المتكررة ═══
-        # تحويلات عربية إضافية أكثر تنوعاً لتغيير بصمة النص
-        arabic_dense_variants = {
-            'ي': '\u06CC',  # ي فارسية
-            'ك': '\u06A9',  # ك كردية
-            'ه': '\u0647',  # هاء فردية
-            'ة': '\u0629',  # تاء مفتوحة
-            'أ': '\u0623',  # ألف مقصورة مختلفة
-            'إ': '\u0625',  # ألف مكسورة مختلفة
-            'آ': '\u0622',  # ألف مد مختلفة
-            'و': '\u0648',  # واو مختلفة
-            'ن': '\u06BC',  # نون بنقطة مختلفة
-            'ل': '\u06B5',  # لام مختلفة
-            'ب': '\u067E',  # با مختلفة
-            'س': '\u0633',  # سين مختلفة
-            'ع': '\u0639',  # عين مختلفة
-            'ف': '\u0641',  # فاء مختلفة
-        }
-        result_list = list(transformed)
-        for i, c in enumerate(result_list):
-            if c in arabic_dense_variants and random.random() < 0.03:
-                result_list[i] = arabic_dense_variants[c]
-        transformed = ''.join(result_list)
+        # الطبقة 10: Zero-width joiner عشوائي
+        if random.random() < 0.15 and len(transformed) > 15:
+            pos = random.randint(5, len(transformed) - 5)
+            transformed = transformed[:pos] + '\u200D' + transformed[pos:]
 
-        # إضافة أحرف غير مرئية في البداية والنهاية (تغيير البصمة)
+        # الطبقة 11: تداخل نمط ثانوي
+        if style_idx >= 0 and random.random() < 0.3:
+            secondary = random.choice([-1, -2, -4, -5])
+            if secondary == -1:
+                chars = list(transformed)
+                for i, c in enumerate(chars):
+                    if c.isalpha() and random.random() < 0.08:
+                        chars[i] = c + '\u0336'
+                transformed = ''.join(chars)
+            elif secondary == -2:
+                chars = list(transformed)
+                for i, c in enumerate(chars):
+                    if c.isalpha() and random.random() < 0.06:
+                        chars[i] = c + '\u0332'
+                transformed = ''.join(chars)
+            elif secondary == -4:
+                transformed = self._apply_zalgo(transformed, intensity=1)
+            elif secondary == -5:
+                transformed = self._apply_homoglyphs(transformed, intensity=0.1)
+
+        # الطبقة 12: بصمة غير مرئية نهائية
         transformed = random.choice(inv_chars) + transformed + random.choice(inv_chars)
 
         return transformed
 
     def _get_random_style(self):
-        """اختيار نمط عشوائي مختلف عن السابق"""
         available = list(range(len(self.STYLES)))
         if self._last_style in available and len(available) > 1:
             available.remove(self._last_style)
-        # أضف أنماط Strikethrough و Underline و Homoglyphs كخيارات
-        available.append(-1)  # strikethrough
-        available.append(-2)  # underline
-        available.append(-3)  # homoglyphs only
-        available.append(-4)  # fullwidth + homoglyphs (Messletters combo)
+        available.extend([-1, -2, -3, -4, -5, -6, -7, -8, -9])
         chosen = random.choice(available)
         self._last_style = chosen
         return chosen
 
     def _extract_protected_segments(self, text):
-        """استخراج الروابط والمعرفات لحمايتها من تحويل الأنماط"""
         protected = []
-        # حماية الروابط الكاملة (https:// و http://)
         for match in re.finditer(r'https?://\S+', text):
             url = match.group().rstrip('\u200B\u200C\u200D\uFEFF\u2060\u2061\u2062\u2063\u00A0\u2009\u202F')
             end_pos = match.start() + len(url)
             protected.append((match.start(), end_pos, url, 'url'))
-        # حماية روابط t.me بدون بروتوكول
         for match in re.finditer(r'(?<![a-zA-Z0-9/:.])t\.me/[a-zA-Z0-9_]+', text):
             overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
             if not overlaps:
                 full_url = 'https://' + match.group()
                 protected.append((match.start(), match.end(), full_url, 'url'))
-        # حماية @username
         for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
             overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
             if not overlaps:
                 protected.append((match.start(), match.end(), match.group(), 'mention'))
-        # ترتيب حسب الموقع
         protected.sort(key=lambda x: x[0])
-        # إزالة الأجزاء المتداخلة
         clean = []
         for seg in protected:
             if not clean:
@@ -1079,31 +1172,13 @@ class YayTextMesslettersObfuscator:
         return clean
 
     def obfuscate(self, text):
-        """
-        التحويل الرئيسي - يختار نمطاً عشوائياً ويطبقه
-        
-        🔗 الروابط: تُستبدل بنص متنوع + رابط HTML <a href>
-           → المستخدم يضغط النص → يفتح الرابط الحقيقي ✅
-           → بوتات الحماية لا تجد أي نمط رابط في النص ✅
-           → لا حاجة لحساب إزاحات UTF-16 - HTML يتكفل بذلك ✅
-        
-        👤 المعرفات: تُستبدل بنص متنوع + رابط HTML
-           → الضغط يفتح الملف الشخصي الحقيقي ✅
-        
-        🔢 الأرقام: تبقى كما هي (قابلة للنقر كأرقام هواتف) ✅
-        
-        يُرجع: (النص المشوش, use_html) حيث use_html يحدد استخدام parse_mode='html'
-        """
+        """التحويل الرئيسي - 45+ نمط + 12 طبقة تشويش"""
         if not text or len(text) < 2:
             return text, False
 
-        # استخراج الروابط والمعرفات المحمية
         all_protected = self._extract_protected_segments(text)
-
-        # إذا لا توجد روابط أو معرفات، لا حاجة لـ HTML
         has_links = any(seg_type in ('url', 'mention') for _, _, _, seg_type in all_protected)
 
-        # تقسيم النص إلى أجزاء محمية وغير محمية
         segments = []
         last_end = 0
         for start, end, original, seg_type in all_protected:
@@ -1114,84 +1189,47 @@ class YayTextMesslettersObfuscator:
         if last_end < len(text):
             segments.append(('text', text[last_end:]))
 
-        # اختيار النمط
         style_idx = self._get_random_style()
-
-        # بناء النص المشوش تدريجياً
-        # باستخدام HTML <a href> للروابط بدلاً من MessageEntityTextUrl
         result_parts = []
 
         for seg_type, seg_text in segments:
             if seg_type == 'url':
-                # إنشاء نص عرض متنوع ومشوش للرابط
                 display = self._create_url_display(seg_text, style_idx)
                 display = self._obfuscate_display_text(display, style_idx)
-                # تهريب أي أحرف HTML في نص العرض
                 display = self._escape_html(display)
-                # استخدام HTML <a href> للرابط - أكثر موثوقية من MessageEntityTextUrl
                 result_parts.append(f'<a href="{seg_text}">{display}</a>')
-
             elif seg_type == 'mention':
-                # إنشاء نص عرض متنوع ومشوش للمعرف
                 display = self._create_mention_display(seg_text, style_idx)
                 display = self._obfuscate_display_text(display, style_idx)
                 display = self._escape_html(display)
-                username = seg_text[1:]  # إزالة @
+                username = seg_text[1:]
                 result_parts.append(f'<a href="tg://resolve?domain={username}">{display}</a>')
-
             else:
-                # نص عادي - تطبيق كل تقنيات مكافحة الكشف
                 transformed = self._apply_style_to_text(seg_text, style_idx)
-                # تهريب أحرف HTML في النص العادي
                 transformed = self._escape_html(transformed)
                 result_parts.append(transformed)
 
         final_text = ''.join(result_parts)
-
-        # إضافة حرف غير مرئي في البداية (لتغيير الهاش)
         inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
         final_text = inv_char + final_text
 
         return final_text, has_links
 
     def get_style_name(self, idx=None):
-        """اسم النمط الحالي"""
+        special_names = {
+            -1: 'strikethrough', -2: 'underline', -3: 'inverted',
+            -4: 'zalgo', -5: 'homoglyphs', -6: 'greek',
+            -7: 'rune', -8: 'upside_down', -9: 'random_combo',
+        }
         if idx is None:
             idx = self._last_style
         if idx >= 0 and idx < len(self.STYLES):
             return self.STYLES[idx][0]
-        elif idx == -1:
-            return 'strikethrough'
-        elif idx == -2:
-            return 'underline'
-        elif idx == -3:
-            return 'homoglyphs'
-        elif idx == -4:
-            return 'fullwidth_homoglyphs'
-        return 'unknown'
-
-    def get_all_style_names(self):
-        """أسماء كل الأنماط المتاحة"""
-        names = [s[0] for s in self.STYLES]
-        names.extend(['strikethrough', 'underline', 'homoglyphs_only', 'fullwidth_homoglyphs'])
-        return names
-
-    def preview_all(self, text):
-        """معاينة النص بكل الأنماط"""
-        if not text:
-            return {}
-        results = {}
-        for name, char_map in self.STYLES:
-            results[name] = self._apply_map(text, char_map)
-        results['strikethrough'] = self._apply_strikethrough(text)
-        results['underline'] = self._apply_underline(text)
-        results['homoglyphs'] = self._apply_homoglyphs(text, intensity=0.5)
-        results['fullwidth_homoglyphs'] = self._apply_homoglyphs(
-            self._apply_map(text, self.FULLWIDTH_MAP), intensity=0.2)
-        return results
+        return special_names.get(idx, 'unknown')
 
 
 yaytext_obfuscator = YayTextMesslettersObfuscator()
+
 
 
 # ═══════════════════════════════════════════════
@@ -1858,19 +1896,76 @@ async def send_contact_message(client, chat_id, contact_data, caption):
         raise
 
 # ═══════════════════════════════════════════════
-#  النشر السريع - ينشر بكل الحسابات لكل المجموعات
+#  نظام النشر الشبحي 👻 (انشر → انتظر → عدّل/احذف)
 # ═══════════════════════════════════════════════
-async def fast_post_to_all_groups(message):
-    """نشر سريع لكل المجموعات من كل الحسابات - كل حساب ينشر في كل مجموعاته"""
+async def ghost_post_worker(client, group_id, msg_id, original_msg, lifetime=20, mode='replace'):
+    """
+    نظام النشر الشبحي:
+    1. ينشر الرسالة الأصلية
+    2. ينتظر عدد الثواني المحدد (المستخدمون يقرؤون الرسالة)
+    3. يعدّل الرسالة بنص مختلف أو يحذفها
+    → بوتات الحماية تحلل الرسالة بعد التعديل = لا تجد الإعلان
+    → المستخدمون قرأوا الرسالة الأصلية بالفعل
+    """
+    try:
+        await asyncio.sleep(lifetime)
+        
+        if not is_posting_active:
+            return
+        
+        if mode == 'delete':
+            # حذف الرسالة تماماً
+            try:
+                await client.delete_messages(int(group_id), msg_id)
+                logger.info(f"👻 شبح: حذف رسالة في {group_id}")
+            except:
+                pass
+        elif mode == 'empty':
+            # تفريغ الرسالة (تبديل بنقطة أو رمز)
+            try:
+                replacements = ['.', '..', '...', '👋', '✅', '👍', 'تم', 'شكراً']
+                await client.edit_message(int(group_id), msg_id, random.choice(replacements))
+                logger.info(f"👻 شبح: تفريغ رسالة في {group_id}")
+            except:
+                pass
+        elif mode == 'replace':
+            # تعديل بنص عادي مختلف تماماً (أقوى طريقة)
+            try:
+                neutral_texts = [
+                    'شكراً للجميع 👍',
+                    'تم ✅',
+                    'شكراً',
+                    '👍',
+                    '✅',
+                    'تمام',
+                    'حسناً',
+                    '👌',
+                    'thanks',
+                    'ok',
+                    '.',
+                ]
+                await client.edit_message(int(group_id), msg_id, random.choice(neutral_texts))
+                logger.info(f"👻 شبح: تعديل رسالة في {group_id}")
+            except:
+                pass
+    except Exception as e:
+        logger.debug(f"👻 شبح: تخطي ({e})")
+
+# ═══════════════════════════════════════════════
+#  النشر السريع - ينشر بكل الحسابات لكل المجموعات + كل الرسائل + شبحي
+# ═══════════════════════════════════════════════
+async def fast_post_to_all_groups(messages):
+    """نشر سريع: كل حساب × كل مجموعة × كل رسالة + نظام شبحي"""
     global is_posting_active
 
-    msg_id = message[0]
-    content = message[1]
-    media_path = message[2]
-    msg_type = message[3]
-    media_data = message[4] if len(message) > 4 else None
+    if not isinstance(messages, list):
+        messages = [messages]
+
     fast_delay = max(2, int(get_setting('fast_post_delay', '3')))
     obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
+    ghost_enabled = get_setting('ghost_post_enabled', 'on') == 'on'
+    ghost_lifetime = max(10, int(get_setting('ghost_post_lifetime', '20')))
+    ghost_mode = get_setting('ghost_post_mode', 'replace')
     success_count = 0
     fail_count = 0
     total_posts = 0
@@ -1879,16 +1974,16 @@ async def fast_post_to_all_groups(message):
     for acc_id, client in list(user_clients.items()):
         try:
             groups = await get_account_groups(client)
-            total_posts += len(groups)
+            total_posts += len(groups) * len(messages)
         except:
             continue
 
     if total_posts == 0:
         return 0, 0, "لا توجد مجموعات"
 
-    logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × مجموعاتهم (إجمالي ~{total_posts} منشور)")
+    logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × {len(messages)} رسالة (إجمالي ~{total_posts} منشور) 👻شبحي={'✅' if ghost_enabled else '❌'}")
 
-    # كل حساب ينشر في كل مجموعاته الخاصة
+    # كل حساب ينشر في كل مجموعاته + كل الرسائل
     for acc_id, client in list(user_clients.items()):
         if not is_posting_active:
             break
@@ -1899,53 +1994,117 @@ async def fast_post_to_all_groups(message):
             logger.error(f"❌ فشل جلب مجموعات الحساب {acc_id}: {e}")
             continue
 
+        # تنويع ترتيب الرسائل لكل حساب
+        msg_order = list(messages)
+        if len(msg_order) > 1:
+            random.shuffle(msg_order)
+
         for gid, gname in acc_groups:
             if not is_posting_active:
                 break
 
-            # تخطي المجموعات المحظورة
             if is_group_blacklisted(gid):
                 continue
 
-            use_html = False
-            if content:
-                yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                if yaytext_on:
-                    encrypted_content, use_html = yaytext_obfuscate(content)
-                else:
-                    varied = vary_text(content)
-                    if obfuscation_on:
-                        varied = obfuscate_for_humans(varied)
-                    encrypted_content = encrypt_text(varied, gid)
-            else:
-                encrypted_content = ""
-
-            try:
-                await asyncio.sleep(fast_delay)
+            # نشر كل رسالة بالترتيب المتنوع
+            for msg in msg_order:
                 if not is_posting_active:
                     break
-                await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
-                success_count += 1
-                log_posting(acc_id, int(gid), msg_id, 'success')
-                logger.info(f"⚡ سريع ✅ {gname[:30]} (حساب {acc_id}) ({success_count}/{total_posts})")
-            except FloodWaitError as e:
-                logger.warning(f"⏸ FloodWait: {e.seconds}ث - انتظار ثم إعادة المحاولة")
+
+                msg_id = msg[0]
+                content = msg[1]
+                media_path = msg[2]
+                msg_type = msg[3]
+                media_data = msg[4] if len(msg) > 4 else None
+
+                use_html = False
+                if content:
+                    yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                    if yaytext_on:
+                        encrypted_content, use_html = yaytext_obfuscate(content)
+                    else:
+                        varied = vary_text(content)
+                        if obfuscation_on:
+                            varied = obfuscate_for_humans(varied)
+                        encrypted_content = encrypt_text(varied, gid)
+                else:
+                    encrypted_content = ""
+
                 try:
-                    await asyncio.sleep(e.seconds + 1)
+                    await asyncio.sleep(fast_delay)
                     if not is_posting_active:
                         break
-                    await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                    
+                    # إرسال الرسالة
+                    sent_msg = await _send_and_get_message(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
                     success_count += 1
-                    log_posting(acc_id, int(gid), msg_id, 'success (retry after flood)')
-                    logger.info(f"⚡ سريع ✅ (بعد FloodWait) {gname[:30]}")
-                except Exception as retry_e:
+                    log_posting(acc_id, int(gid), msg_id, 'success')
+                    logger.info(f"⚡ سريع ✅ {gname[:30]} (حساب {acc_id}) ({success_count}/{total_posts})")
+                    
+                    # 👻 تفعيل النشر الشبحي
+                    if ghost_enabled and sent_msg and msg_type == 'text':
+                        asyncio.create_task(ghost_post_worker(
+                            client, gid, sent_msg.id, encrypted_content,
+                            lifetime=ghost_lifetime, mode=ghost_mode
+                        ))
+                    
+                except FloodWaitError as e:
+                    logger.warning(f"⏸ FloodWait: {e.seconds}ث - انتظار ثم إعادة المحاولة")
+                    try:
+                        await asyncio.sleep(e.seconds + 1)
+                        if not is_posting_active:
+                            break
+                        sent_msg = await _send_and_get_message(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                        success_count += 1
+                        log_posting(acc_id, int(gid), msg_id, 'success (retry after flood)')
+                        logger.info(f"⚡ سريع ✅ (بعد FloodWait) {gname[:30]}")
+                        if ghost_enabled and sent_msg and msg_type == 'text':
+                            asyncio.create_task(ghost_post_worker(
+                                client, gid, sent_msg.id, encrypted_content,
+                                lifetime=ghost_lifetime, mode=ghost_mode
+                            ))
+                    except Exception as retry_e:
+                        fail_count += 1
+                        logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
+                except Exception as e:
                     fail_count += 1
-                    logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
-            except Exception as e:
-                fail_count += 1
-                logger.error(f"❌ فشل: {e}")
+                    logger.error(f"❌ فشل: {e}")
 
     return success_count, fail_count, total_posts
+
+async def _send_and_get_message(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False):
+    """إرسال رسالة وإرجاع الرسالة المرسلة (للنشر الشبحي)"""
+    parse_mode = 'html' if use_html else None
+    try:
+        if msg_type == 'text':
+            return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'photo' and media_path and os.path.exists(media_path):
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'video' and media_path and os.path.exists(media_path):
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'audio' and media_path and os.path.exists(media_path):
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'document' and media_path and os.path.exists(media_path):
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'contact' and media_data:
+            contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
+            return await send_contact_message(client, int(group_id), contact_data, encrypted_content)
+        else:
+            if media_path and os.path.exists(media_path):
+                return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            else:
+                return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+    except Exception as e:
+        if use_html:
+            clean_text = re.sub(r'<a href="[^"]*">([^<]*)</a>', r'\1', encrypted_content)
+            clean_text = clean_text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+            if msg_type == 'text':
+                return await client.send_message(int(group_id), clean_text)
+            elif media_path and os.path.exists(media_path):
+                return await client.send_file(int(group_id), media_path, caption=clean_text)
+            else:
+                return await client.send_message(int(group_id), clean_text)
+        raise
 
 # ═══════════════════════════════════════════════
 #  النشر العادي - ينشر بكل الحسابات لكل المجموعات
