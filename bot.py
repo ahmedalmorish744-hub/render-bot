@@ -298,12 +298,13 @@ async def keep_alive_ping():
 # ═══════════════════════════════════════════════
 class UltimateAntiDetection:
     """
-    نظام مكافحة الكشف - النص يبقى كما هو للمستخدم العادي
+    نظام مكافحة الكشف المتطور - النص يبقى كما هو للمستخدم العادي
+    الروابط والمعرفات تبقى قابلة للنقر تماماً
     التغييرات غير مرئية للعين المجردة فقط:
-    - أحرف غير مرئية بين الكلمات
-    - مسافات بديلة بدل المسافة العادية
-    - حروف لاتينية متشابهة (homoglyphs) بنسبة منخفضة
-    - تشويش الروابط بأحرف غير مرئية فقط
+    - أحرف غير مرئية بين الكلمات (ليس داخل الروابط)
+    - مسافات بديلة بدل المسافة العادية (ليس داخل الروابط)
+    - حروف لاتينية متشابهة (homoglyphs) بنسبة منخفضة (ليس داخل الروابط)
+    - الروابط والمعرفات تترك كما هي تماماً بدون أي تعديل
     """
     def __init__(self):
         self.invisible_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
@@ -314,51 +315,88 @@ class UltimateAntiDetection:
         }
         self.sent_messages_cache = deque(maxlen=500)
 
-    def obfuscate_links(self, text):
-        text = text.replace('t.me', 't\u200B.me')
-        text = text.replace('https://', 'https:\u200C//')
-        text = text.replace('http://', 'http:\u200D//')
-        return text
+    def _extract_protected_segments(self, text):
+        """استخراج الروابط والمعرفات لحمايتها من أي تعديل"""
+        protected = []
+        for match in re.finditer(r'https?://\S+', text):
+            protected.append((match.start(), match.end(), match.group()))
+        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+            if not overlaps:
+                protected.append((match.start(), match.end(), match.group()))
+        protected.sort(key=lambda x: x[0])
+        clean = []
+        for seg in protected:
+            if not clean:
+                clean.append(seg)
+            elif seg[0] >= clean[-1][1]:
+                clean.append(seg)
+        return clean
 
-    def obfuscate_mentions(self, text):
-        def replace_mention(match):
-            username = match.group(1)
-            return '@\u200B' + username
-        return re.sub(r'@([a-zA-Z0-9_]{3,})', replace_mention, text)
+    def _split_text_protected(self, text):
+        """تقسيم النص إلى أجزاء محمية (روابط/معرفات) وأجزاء عادية"""
+        protected = self._extract_protected_segments(text)
+        segments = []
+        last_end = 0
+        for start, end, original in protected:
+            if start > last_end:
+                segments.append(('text', text[last_end:start]))
+            segments.append(('protected', original))
+            last_end = end
+        if last_end < len(text):
+            segments.append(('text', text[last_end:]))
+        return segments
+
+    def _apply_to_text_only(self, text, func):
+        """تطبيق دالة تحويل على النص العادي فقط بدون الروابط والمعرفات"""
+        segments = self._split_text_protected(text)
+        result = []
+        for seg_type, seg_text in segments:
+            if seg_type == 'protected':
+                result.append(seg_text)  # لا نعدل الروابط والمعرفات أبداً
+            else:
+                result.append(func(seg_text))
+        return ''.join(result)
 
     def apply_homoglyphs(self, text, intensity=0.06):
-        result = []
-        for char in text:
-            if char in self.homoglyphs and random.random() < intensity:
-                result.append(self.homoglyphs[char])
-            else:
-                result.append(char)
-        return ''.join(result)
+        def _apply(seg):
+            result = []
+            for char in seg:
+                if char in self.homoglyphs and random.random() < intensity:
+                    result.append(self.homoglyphs[char])
+                else:
+                    result.append(char)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
 
     def add_invisible_between_words(self, text, intensity=0.15):
-        if not text or len(text) < 5:
-            return text
-        result = list(text)
-        space_positions = [i for i, c in enumerate(result) if c == ' ']
-        if not space_positions:
-            return text
-        insert_positions = []
-        for pos in space_positions:
-            if random.random() < intensity:
-                insert_positions.append(pos + 1)
-        for pos in reversed(insert_positions):
-            inv = random.choice(self.invisible_chars)
-            result.insert(pos, inv)
-        return ''.join(result)
+        def _apply(seg):
+            if not seg or len(seg) < 5:
+                return seg
+            result = list(seg)
+            space_positions = [i for i, c in enumerate(result) if c == ' ']
+            if not space_positions:
+                return seg
+            insert_positions = []
+            for pos in space_positions:
+                if random.random() < intensity:
+                    insert_positions.append(pos + 1)
+            for pos in reversed(insert_positions):
+                inv = random.choice(self.invisible_chars)
+                result.insert(pos, inv)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
 
     def replace_some_spaces(self, text, intensity=0.3):
-        result = list(text)
-        space_positions = [i for i, c in enumerate(result) if c == ' ']
-        for pos in space_positions:
-            if random.random() < intensity:
-                replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
-                result[pos] = replacement
-        return ''.join(result)
+        def _apply(seg):
+            result = list(seg)
+            space_positions = [i for i, c in enumerate(result) if c == ' ']
+            for pos in space_positions:
+                if random.random() < intensity:
+                    replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
+                    result[pos] = replacement
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
 
     def is_duplicate_message(self, text, group_id):
         cache_key = f"{group_id}:{hash(text)}"
@@ -373,8 +411,7 @@ class UltimateAntiDetection:
         if group_id and self.is_duplicate_message(text, group_id):
             text = '\u200B' + text
         result = text
-        result = self.obfuscate_links(result)
-        result = self.obfuscate_mentions(result)
+        # الروابط والمعرفات لا يتم تعديلها أبداً - تبقى قابلة للنقر
         result = self.apply_homoglyphs(result, intensity=0.06)
         result = self.replace_some_spaces(result, intensity=0.3)
         result = self.add_invisible_between_words(result, intensity=0.15)
@@ -747,63 +784,54 @@ class YayTextMesslettersObfuscator:
 
     def _obfuscate_link_segment(self, link_text):
         """
-        تشويش رابط مع الحفاظ على إمكانية النقر
-        إضافة أحرف غير مرئية في مواقع استراتيجية داخل الرابط
+        الروابط تترك كما هي تماماً بدون أي تعديل
+        تيليجرام يكتشف الروابط تلقائياً وأي تعديل يكسر الخاصية
+        التشويش يحدث عبر النص المحيط فقط
         """
-        result = link_text
-        # إضافة حرف غير مرئي بعد https://
-        if 'https://' in result:
-            result = result.replace('https://', 'https://\u200B', 1)
-        elif 'http://' in result:
-            result = result.replace('http://', 'http://\u200B', 1)
-        # إضافة حرف غير مرئي بعد النطاق (t.me/ أو wa.me/)
-        if 't.me/' in result:
-            result = result.replace('t.me/', 't\u200B.me/', 1)
-        if 'wa.me/' in result:
-            result = result.replace('wa.me/', 'wa\u200B.me/', 1)
-        # إضافة حرف غير مرئي قبل المسار بعد أول /
-        # مثال: https://t.me/username -> https://t.me/\u200Busername
-        match = re.search(r'(https?://[^/]+/)(.*)', result)
-        if match and match.group(2):
-            prefix = match.group(1)
-            path = match.group(2)
-            if '\u200B' not in path[:1]:
-                result = prefix + '\u200B' + path
-        return result
+        return link_text
 
     def _obfuscate_username_segment(self, username_text):
         """
-        تشويش معرف @username مع الحفاظ على إمكانية النقر
-        إضافة حرف غير مرئي بعد علامة @ مباشرة
+        المعرفات تترك كما هي تماماً بدون أي تعديل
+        تيليجرام يكتشف المعرفات تلقائياً وأي تعديل يكسر الخاصية
+        التشويش يحدث عبر النص المحيط فقط
         """
-        if username_text.startswith('@'):
-            return '@\u200B' + username_text[1:]
         return username_text
 
     def _obfuscate_numbers_in_text(self, text, intensity=0.5):
         """
-        تشويش الأرقام في النص باستخدام أنماط Unicode مختلفة
+        تشويش الأرقام المستقلة في النص باستخدام أنماط Unicode مختلفة
         يحافظ على قراءة الرقم ولكن يمنع بوتات الحماية من التعرف عليه
-        لا يتم تغيير الأرقام داخل الروابط
+        الأرقام داخل الروابط والمعرفات لا يتم تغييرها أبداً
         """
-        # اختيار نمط أرقام عشوائي
+        # حماية الروابط والمعرفات أولاً
+        protected = self._extract_protected_segments(text)
+        segments = []
+        last_end = 0
+        for start, end, original, seg_type in protected:
+            if start > last_end:
+                segments.append(('text', text[last_end:start]))
+            segments.append((seg_type, original))
+            last_end = end
+        if last_end < len(text):
+            segments.append(('text', text[last_end:]))
+
         chosen_digit_map = random.choice(self.DIGIT_STYLES)
-        result = []
-        i = 0
-        while i < len(text):
-            c = text[i]
-            if c.isdigit() and random.random() < intensity:
-                # تحقق أننا لسنا داخل رابط (لا نشوش أرقام الروابط)
-                before = text[:i]
-                # إذا كان قبل الرقم http أو :// أو جزء من رابط، لا نشوشه
-                if re.search(r'https?://\S*$', before) or re.search(r't\.me/\S*$', before) or re.search(r'wa\.me/\S*$', before):
-                    result.append(c)
-                else:
-                    result.append(chosen_digit_map.get(c, c))
+        result_parts = []
+        for seg_type, seg_text in segments:
+            if seg_type in ('link', 'username'):
+                # أرقام الروابط والمعرفات لا تتغير أبداً
+                result_parts.append(seg_text)
             else:
-                result.append(c)
-            i += 1
-        return ''.join(result)
+                # تشويش الأرقام في النص العادي فقط
+                result = []
+                for c in seg_text:
+                    if c.isdigit() and random.random() < intensity:
+                        result.append(chosen_digit_map.get(c, c))
+                    else:
+                        result.append(c)
+                result_parts.append(''.join(result))
+        return ''.join(result_parts)
 
     def _add_invisible_to_numbers(self, text, intensity=0.3):
         """
@@ -890,14 +918,13 @@ class YayTextMesslettersObfuscator:
     def obfuscate(self, text):
         """
         التحويل الرئيسي - يختار نمطاً عشوائياً ويطبقه
-        مع حماية الروابط والمعرفات من تحويل الأنماط
-        لكن يتم تشويشها بأحرف غير مرئية
-        ويتم تشويش الأرقام بأنماط Unicode مختلفة
+        الروابط والمعرفات تترك كما هي تماماً (قابلة للنقر)
+        الأرقام المستقلة يتم تشويشها بأنماط Unicode
         """
         if not text or len(text) < 2:
             return text
 
-        # حماية الروابط والمعرفات من تحويل الأنماط (لكن سيتم تشويشها لاحقاً)
+        # حماية الروابط والمعرفات - لا يتم تعديلها أبداً
         protected = self._extract_protected_segments(text)
 
         # تقسيم النص إلى أجزاء محمية وغير محمية
@@ -914,10 +941,8 @@ class YayTextMesslettersObfuscator:
         # إذا كل النص محمي (رابط فقط مثلاً)
         text_segments = [s for s in segments if s[0] == 'text']
         if not text_segments or all(len(s[1].strip()) < 2 for s in text_segments):
-            # لا يوجد نص كافٍ للتحويل، نطبق تشويش الروابط والمعرفات والأرقام فقط
+            # لا يوجد نص كافٍ للتحويل، نطبق تشويش الأرقام فقط
             result = text
-            result = self._obfuscate_link_segment(result)
-            result = self._obfuscate_username_segment(result)
             result = self._obfuscate_numbers_in_text(result, intensity=0.4)
             return result
 
@@ -927,14 +952,9 @@ class YayTextMesslettersObfuscator:
         # تطبيق النمط على كل جزء
         result_segments = []
         for seg_type, seg_text in segments:
-            if seg_type == 'link':
-                # الروابط: لا نطبق أنماط، فقط تشويش بأحرف غير مرئية
-                obfuscated = self._obfuscate_link_segment(seg_text)
-                result_segments.append(obfuscated)
-            elif seg_type == 'username':
-                # المعرفات: لا نطبق أنماط، فقط تشويش بأحرف غير مرئية
-                obfuscated = self._obfuscate_username_segment(seg_text)
-                result_segments.append(obfuscated)
+            if seg_type in ('link', 'username'):
+                # الروابط والمعرفات: تترك كما هي تماماً بدون أي تعديل
+                result_segments.append(seg_text)
             else:
                 # النص العادي: تطبيق النمط المختار
                 if style_idx >= 0:
@@ -957,10 +977,10 @@ class YayTextMesslettersObfuscator:
                 if style_idx >= 0 and style_idx != -3:
                     transformed = self._apply_homoglyphs(transformed, intensity=0.1)
 
-                # تشويش الأرقام في النص العادي
+                # تشويش الأرقام المستقلة في النص العادي فقط
                 transformed = self._obfuscate_numbers_in_text(transformed, intensity=0.4)
 
-                # إضافة زخرفة خفيفة (5%)
+                # إضافة زخرفة خفيفة
                 if random.random() < 0.25:
                     transformed = self._apply_decorations(transformed, intensity=0.04)
 
@@ -1044,17 +1064,33 @@ def vary_text(text):
     """
     تطبيق اختلافات غير مرئية - النص يبقى كما هو للقارئ
     فقط الآلات تستطيع اكتشاف التغيير
+    الروابط والمعرفات لا يتم تعديلها أبداً
     """
     if not text:
         return text
+
+    # حماية الروابط والمعرفات
+    protected_segments = []
+    for match in re.finditer(r'https?://\S+', text):
+        protected_segments.append((match.start(), match.end()))
+    for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+        overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected_segments)
+        if not overlaps:
+            protected_segments.append((match.start(), match.end()))
+
+    def _is_protected(pos):
+        return any(pos >= s and pos < e for s, e in protected_segments)
+
     result = text
 
     # أحرف غير مرئية في البداية
     inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
     result = inv_char + result
+    # تحديث المواقع المحمية بسبب الإضافة في البداية
+    protected_segments = [(s+1, e+1) for s, e in protected_segments]
 
-    # استبدال 1-2 مسافات بمسافات بديلة (غير مرئي)
-    spaces = [i for i, c in enumerate(result) if c == ' ']
+    # استبدال 1-2 مسافات بمسافات بديلة (غير مرئي) - ليس داخل الروابط
+    spaces = [i for i, c in enumerate(result) if c == ' ' and not _is_protected(i)]
     if spaces:
         num_replace = min(random.randint(1, 2), len(spaces))
         chosen = random.sample(spaces, num_replace)
@@ -1062,15 +1098,15 @@ def vary_text(text):
             replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
             result = result[:pos] + replacement + result[pos+1:]
 
-    # أحرف غير مرئية بين كلمتين عشوائيتين
-    space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F']]
+    # أحرف غير مرئية بين كلمتين عشوائيتين - ليس داخل الروابط
+    space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F'] and not _is_protected(i)]
     if space_positions and random.random() > 0.4:
         pos = random.choice(space_positions)
         inv = random.choice(['\u200B', '\u200C'])
         result = result[:pos+1] + inv + result[pos+1:]
 
-    # استبدال حرف لاتيني بنظيره (غير مرئي)
-    latin_chars = [i for i, c in enumerate(result) if c.isascii() and c.isalpha() and c.lower() in 'aecpxio']
+    # استبدال حرف لاتيني بنظيره (غير مرئي) - ليس داخل الروابط
+    latin_chars = [i for i, c in enumerate(result) if c.isascii() and c.isalpha() and c.lower() in 'aecpxio' and not _is_protected(i)]
     if latin_chars and random.random() > 0.5:
         pos = random.choice(latin_chars)
         c = result[pos]
@@ -1089,12 +1125,26 @@ def vary_text(text):
 def obfuscate_for_humans(text):
     """
     تشويش غير مرئي للمستخدم - النص يبقى مفهوماً تماماً
+    الروابط والمعرفات لا يتم تعديلها أبداً - تبقى قابلة للنقر
     """
     if not text:
         return text
+
+    # حماية الروابط والمعرفات
+    protected_segments = []
+    for match in re.finditer(r'https?://\S+', text):
+        protected_segments.append((match.start(), match.end()))
+    for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+        overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected_segments)
+        if not overlaps:
+            protected_segments.append((match.start(), match.end()))
+
+    def _is_protected(pos):
+        return any(pos >= s and pos < e for s, e in protected_segments)
+
     result = text
 
-    # استبدال حروف لاتينية بنظيراتها السيريلية (تبدو متطابقة)
+    # استبدال حروف لاتينية بنظيراتها السيريلية (تبدو متطابقة) - ليس داخل الروابط
     if random.random() > 0.3:
         homoglyph_map = {
             'a': '\u0430', 'o': '\u043E', 'c': '\u0441',
@@ -1102,21 +1152,21 @@ def obfuscate_for_humans(text):
         }
         chars = list(result)
         for i, c in enumerate(chars):
-            if c in homoglyph_map and random.random() > 0.6:
+            if c in homoglyph_map and random.random() > 0.6 and not _is_protected(i):
                 chars[i] = homoglyph_map[c]
         result = ''.join(chars)
 
-    # استبدال بعض المسافات بمسافات بديلة
+    # استبدال بعض المسافات بمسافات بديلة - ليس داخل الروابط
     if random.random() > 0.3:
-        spaces = [i for i, c in enumerate(result) if c == ' ']
+        spaces = [i for i, c in enumerate(result) if c == ' ' and not _is_protected(i)]
         for pos in spaces:
             if random.random() > 0.5:
                 replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
                 result = result[:pos] + replacement + result[pos+1:]
 
-    # أحرف غير مرئية بين الكلمات فقط
+    # أحرف غير مرئية بين الكلمات فقط - ليس داخل الروابط
     if random.random() > 0.4 and len(result) > 5:
-        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F']]
+        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F'] and not _is_protected(i)]
         insert_positions = []
         for pos in space_positions:
             if random.random() > 0.75:
@@ -1166,12 +1216,11 @@ def set_account_status(acc_id, status):
     conn.close()
 
 async def fetch_all_groups_for_account(acc_id, client):
+    """جلب كل المجموعات والقنوات من الحساب بدون أي استثناء"""
     count = 0
     try:
         async for dialog in client.iter_dialogs():
             if dialog.is_group or dialog.is_channel:
-                if getattr(dialog.entity, 'username', None) == "join":
-                    continue
                 group_id = dialog.id
                 group_name = dialog.name or "بدون اسم"
                 member_count = getattr(dialog.entity, 'participants_count', 0)
@@ -1189,7 +1238,7 @@ async def fetch_all_groups_for_account(acc_id, client):
     return count
 
 async def get_account_groups(client):
-    """جلب كل المجموعات/القنوات ديناميكياً مع استثناء القائمة السوداء"""
+    """جلب كل المجموعات/القنوات ديناميكياً بدون أي استثناء"""
     groups = []
     try:
         async for dialog in client.iter_dialogs():
@@ -1197,8 +1246,6 @@ async def get_account_groups(client):
             if isinstance(entity, (Chat, Channel)):
                 group_id = dialog.id
                 group_name = dialog.name or "بدون اسم"
-                if is_group_blacklisted(group_id):
-                    continue
                 groups.append((group_id, group_name))
     except Exception as e:
         logger.error(f"❌ فشل جلب المجموعات من الحساب: {e}")
@@ -1818,8 +1865,11 @@ async def main():
             "🛡 **بوت النشر - الجدولة المتقدمة + النشر السريع**\n\n"
             "✨ **تقنيات تجاوز الحماية (تحافظ على المحتوى):**\n"
             "• أحرف غير مرئية بين الكلمات\n• مسافات بديلة (غير مرئية)\n"
-            "• حروف لاتينية متشابهة (homoglyphs)\n• تشويش الروابط\n"
-            "• النص يبقى كما هو للمستخدم العادي!\n\n"
+            "• حروف لاتينية متشابهة (homoglyphs)\n"
+            "• أنماط Unicode مزخرفة (YayText & Messletters)\n"
+            "• تشويش الأرقام بأنماط Unicode مختلفة\n"
+            "• 🔗 الروابط تبقى قابلة للنقر!\n"
+            "• 👤 المعرفات تبقى قابلة للنقر!\n\n"
             f"📅 **الجدولة المتقدمة:**\n"
             "• مرة واحدة في وقت محدد\n• تكرار كل X دقيقة/ساعة\n"
             "• يومياً في وقت محدد\n• أسبوعياً\n\n"
@@ -2373,6 +2423,7 @@ async def main():
                 set_setting('encryption', 'on')
                 set_setting('anti_detect', 'on')
                 set_setting('obfuscation_enabled', 'on')
+                set_setting('yaytext_messletters_obfuscation', 'on')
                 await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب",
                                buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
             except Exception as e:
