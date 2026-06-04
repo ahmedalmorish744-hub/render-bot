@@ -26,7 +26,7 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import InputMediaContact, Chat, Channel, User, MessageEntityTextUrl
+from telethon.tl.types import InputMediaContact, Chat, Channel, User
 from telethon.tl.functions.channels import GetParticipantsRequest
 from telethon.tl.types import ChannelParticipantsSearch
 from flask import Flask, jsonify
@@ -796,47 +796,99 @@ class YayTextMesslettersObfuscator:
 
     def _create_url_display(self, url, style_idx):
         """
-        إنشاء نص عرض طبيعي للرابط - يخفيه تماماً من بوتات الحماية
-        الرابط الحقيقي يُخزن في كيان MessageEntityTextUrl
-        بوتات الحماية لا ترى أي نمط رابط في النص
-        المستخدم يضغط النص الطبيعي فيفتح الرابط الحقيقي
+        إنشاء نص عرض متنوع وطبيعي للرابط - يخفيه تماماً من بوتات الحماية
+        النص متنوع جداً ولا يشبه نمط إعلاني محدد
+        كل رسالة تحصل على نص مختلف
         """
-        # اختيار نص طبيعي لا يحتوي على أي نمط رابط
+        # أنماط متنوعة جداً - بعضها يبدو كمحادثة عادية
+        tme_displays = [
+            'تابع القناة', 'انضم لنا', 'القناة هنا', 'زورنا',
+            'ادخل القناة', 'اشترك معنا', 'تفضل بالدخول', 'الرابط',
+            'من هنا', 'اضغط', 'تابعنا', 'قناتنا',
+            'انضم الآن', 'هنا', 'ادخل هنا', 'شاهد',
+            'تفضل', 'تابع التحديثات', 'آخر الأخبار هنا', 'صحبتنا',
+            'محتوى مميز', 'تواصل معنا', 'تعرف علينا', 'انضمام',
+            'القناة الرسمية', 'متابعة', 'دخول', 'رابط القناة',
+        ]
+        general_displays = [
+            'اضغط هنا', 'الرابط', 'من هنا', 'تفضل',
+            'شاهد', 'تابع', 'ادخل', 'هنا',
+            'تفاصيل أكثر', 'المزيد', 'زورنا', 'اضغط',
+            'معلومات إضافية', 'تفقد الرابط', 'انتقل', 'الموقع',
+            'رابط مباشر', 'اضغط للمتابعة', 'تصفح', 'الدخول',
+        ]
         if 't.me/' in url:
-            displays = [
-                '📎 اضغط هنا',
-                '✨ انضم الآن',
-                '🔗 تابعنا',
-                '👇 الرابط',
-                '📌 قناتنا',
-                '💫 اضغط',
-                '🌟 هنا',
-                '🎯 انضم',
-            ]
+            return random.choice(tme_displays)
         else:
-            displays = [
-                '📎 اضغط هنا',
-                '🔗 الرابط',
-                '👇 اضغط',
-                '📌 هنا',
-                '✨ اضغط هنا',
-            ]
-        return random.choice(displays)
+            return random.choice(general_displays)
 
     def _create_mention_display(self, mention, style_idx):
         """
-        إنشاء نص عرض طبيعي للمعرف @username - يخفيه تماماً من بوتات الحماية
-        المعرف الحقيقي يُخزن في كيان MessageEntityTextUrl
-        الضغط على النص الطبيعي يفتح الملف الشخصي الحقيقي
+        إنشاء نص عرض متنوع وطبيعي للمعرف @username
+        يخفيه تماماً من بوتات الحماية
         """
         displays = [
-            '👤 اضغط هنا',
-            '📎 اضغط',
-            '🔗 هنا',
-            '📌 اضغط هنا',
-            '✨ هنا',
+            'اضغط هنا', 'الملف الشخصي', 'هنا',
+            'تفضل', 'تابعنا', 'الرابط',
+            'من هنا', 'تعرف علينا', 'تواصل',
+            'ادخل', 'الصفحة', 'اضغط',
         ]
         return random.choice(displays)
+
+    def _escape_html(self, text):
+        """تهريب أحرف HTML الخاصة لمنع تضارب مع parse_mode='html'"""
+        if not text:
+            return text
+        text = text.replace('&', '&amp;')
+        text = text.replace('<', '&lt;')
+        text = text.replace('>', '&gt;')
+        return text
+
+    def _obfuscate_display_text(self, text, style_idx):
+        """
+        تشويش نص العرض (للروابط والمعرفات) بأحرف غير مرئية وتحويلات خفيفة
+        النص يبقى مقروءاً تماماً لكن يتغير لكل رسالة
+        """
+        if not text or len(text) < 2:
+            return text
+
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061']
+
+        # إضافة حرف غير مرئي في البداية (لتغيير البصمة)
+        result = random.choice(inv_chars) + text
+
+        # استبدال بعض المسافات بمسافات بديلة
+        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2008']
+        chars = list(result)
+        for i, c in enumerate(chars):
+            if c == ' ' and random.random() < 0.4:
+                chars[i] = random.choice(alt_spaces)
+        result = ''.join(chars)
+
+        # إضافة حرف غير مرئي عشوائي بين الكلمات
+        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F']]
+        for pos in space_positions:
+            if random.random() < 0.25:
+                result = result[:pos+1] + random.choice(inv_chars) + result[pos+1:]
+
+        # تحويلات عربية خفيفة لنص العرض
+        arabic_variants = {
+            'ي': '\u06CC',  # ي فارسية
+            'ك': '\u06A9',  # ك كردية
+            'ه': '\u0647',  # ه مختلفة
+            'ة': '\u0629',  # ة مفتوحة
+        }
+        chars = list(result)
+        for i, c in enumerate(chars):
+            if c in arabic_variants and random.random() < 0.06:
+                chars[i] = arabic_variants[c]
+        result = ''.join(chars)
+
+        # علامة RTL خفية أحياناً
+        if random.random() < 0.2:
+            result = result + '\u200F'
+
+        return result
 
     def _apply_style_to_text(self, text, style_idx):
         """
@@ -852,6 +904,8 @@ class YayTextMesslettersObfuscator:
         6. تحويلات عربية خفيفة (ي→ى، ك→ڪ)
         7. أحرف غير مرئية حول علامات الترقيم
         8. علامة RTL خفية
+        9. أحرف غير مرئية كثيفة (إضافية لتغيير البصمة بقوة)
+        10. تشويش أنماط الكلمات العربية المتكررة
         """
         if not text:
             return text
@@ -925,6 +979,59 @@ class YayTextMesslettersObfuscator:
         if random.random() < 0.15:
             transformed = transformed + '\u200F'
 
+        # ═══ الطبقة 9: أحرف غير مرئية كثيفة (إضافية لتغيير البصمة بقوة) ═══
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061', '\u2062', '\u2063']
+        # إضافة أحرف غير مرئية بين كل كلمتين عربيتين
+        words = transformed.split(' ')
+        dense_words = []
+        for i, w in enumerate(words):
+            dense_words.append(w)
+            if i < len(words) - 1:
+                # إضافة 0-2 أحرف غير مرئية بين الكلمات
+                num_inv = random.randint(0, 2)
+                for _ in range(num_inv):
+                    dense_words.append(random.choice(inv_chars))
+        transformed = ' '.join(dense_words)
+
+        # إضافة أحرف غير مرئية عشوائية في مواقع متنوعة
+        if len(transformed) > 10:
+            chars = list(transformed)
+            insert_positions = []
+            for i in range(len(chars)):
+                # إضافة أحرف غير مرئية بعد كل حرف عربي بنسبة 5%
+                if chars[i] >= '\u0600' and chars[i] <= '\u06FF' and random.random() < 0.05:
+                    insert_positions.append((i + 1, random.choice(inv_chars[:4])))
+            for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
+                chars.insert(pos, char)
+            transformed = ''.join(chars)
+
+        # ═══ الطبقة 10: تشويش أنماط الكلمات العربية المتكررة ═══
+        # تحويلات عربية إضافية أكثر تنوعاً لتغيير بصمة النص
+        arabic_dense_variants = {
+            'ي': '\u06CC',  # ي فارسية
+            'ك': '\u06A9',  # ك كردية
+            'ه': '\u0647',  # هاء فردية
+            'ة': '\u0629',  # تاء مفتوحة
+            'أ': '\u0623',  # ألف مقصورة مختلفة
+            'إ': '\u0625',  # ألف مكسورة مختلفة
+            'آ': '\u0622',  # ألف مد مختلفة
+            'و': '\u0648',  # واو مختلفة
+            'ن': '\u06BC',  # نون بنقطة مختلفة
+            'ل': '\u06B5',  # لام مختلفة
+            'ب': '\u067E',  # با مختلفة
+            'س': '\u0633',  # سين مختلفة
+            'ع': '\u0639',  # عين مختلفة
+            'ف': '\u0641',  # فاء مختلفة
+        }
+        result_list = list(transformed)
+        for i, c in enumerate(result_list):
+            if c in arabic_dense_variants and random.random() < 0.03:
+                result_list[i] = arabic_dense_variants[c]
+        transformed = ''.join(result_list)
+
+        # إضافة أحرف غير مرئية في البداية والنهاية (تغيير البصمة)
+        transformed = random.choice(inv_chars) + transformed + random.choice(inv_chars)
+
         return transformed
 
     def _get_random_style(self):
@@ -975,22 +1082,26 @@ class YayTextMesslettersObfuscator:
         """
         التحويل الرئيسي - يختار نمطاً عشوائياً ويطبقه
         
-        🔗 الروابط: تُستبدل بنص طبيعي (مثل "📎 اضغط هنا") + كيان MessageEntityTextUrl
-           → المستخدم يضغط النص الطبيعي → يفتح الرابط الحقيقي ✅
+        🔗 الروابط: تُستبدل بنص متنوع + رابط HTML <a href>
+           → المستخدم يضغط النص → يفتح الرابط الحقيقي ✅
            → بوتات الحماية لا تجد أي نمط رابط في النص ✅
+           → لا حاجة لحساب إزاحات UTF-16 - HTML يتكفل بذلك ✅
         
-        👤 المعرفات: تُستبدل بنص طبيعي + كيان MessageEntityTextUrl
+        👤 المعرفات: تُستبدل بنص متنوع + رابط HTML
            → الضغط يفتح الملف الشخصي الحقيقي ✅
         
         🔢 الأرقام: تبقى كما هي (قابلة للنقر كأرقام هواتف) ✅
         
-        يُرجع: (النص المشوش, قائمة الكيانات)
+        يُرجع: (النص المشوش, use_html) حيث use_html يحدد استخدام parse_mode='html'
         """
         if not text or len(text) < 2:
-            return text, []
+            return text, False
 
         # استخراج الروابط والمعرفات المحمية
         all_protected = self._extract_protected_segments(text)
+
+        # إذا لا توجد روابط أو معرفات، لا حاجة لـ HTML
+        has_links = any(seg_type in ('url', 'mention') for _, _, _, seg_type in all_protected)
 
         # تقسيم النص إلى أجزاء محمية وغير محمية
         segments = []
@@ -1006,48 +1117,33 @@ class YayTextMesslettersObfuscator:
         # اختيار النمط
         style_idx = self._get_random_style()
 
-        # بناء النص المشوش والكيانات تدريجياً
-        # جميع التحولات تُطبق هنا فقط - لا تعديلات بعد حساب الكيانات
+        # بناء النص المشوش تدريجياً
+        # باستخدام HTML <a href> للروابط بدلاً من MessageEntityTextUrl
         result_parts = []
-        entities = []
 
         for seg_type, seg_text in segments:
             if seg_type == 'url':
-                # إنشاء نص عرض طبيعي للرابط (بدون أي نمط URL)
+                # إنشاء نص عرض متنوع ومشوش للرابط
                 display = self._create_url_display(seg_text, style_idx)
-
-                # حساب الموضع في النص النهائي بوحدة UTF-16
-                text_before = ''.join(result_parts)
-                utf16_offset = len(text_before.encode('utf-16-le')) // 2
-                utf16_length = len(display.encode('utf-16-le')) // 2
-
-                # إنشاء كيان الرابط المخفي
-                entities.append(MessageEntityTextUrl(
-                    offset=utf16_offset,
-                    length=utf16_length,
-                    url=seg_text  # الرابط الحقيقي مخفي في الكيان
-                ))
-                result_parts.append(display)
+                display = self._obfuscate_display_text(display, style_idx)
+                # تهريب أي أحرف HTML في نص العرض
+                display = self._escape_html(display)
+                # استخدام HTML <a href> للرابط - أكثر موثوقية من MessageEntityTextUrl
+                result_parts.append(f'<a href="{seg_text}">{display}</a>')
 
             elif seg_type == 'mention':
-                # إنشاء نص عرض طبيعي للمعرف
+                # إنشاء نص عرض متنوع ومشوش للمعرف
                 display = self._create_mention_display(seg_text, style_idx)
-
-                text_before = ''.join(result_parts)
-                utf16_offset = len(text_before.encode('utf-16-le')) // 2
-                utf16_length = len(display.encode('utf-16-le')) // 2
-
+                display = self._obfuscate_display_text(display, style_idx)
+                display = self._escape_html(display)
                 username = seg_text[1:]  # إزالة @
-                entities.append(MessageEntityTextUrl(
-                    offset=utf16_offset,
-                    length=utf16_length,
-                    url=f'tg://resolve?domain={username}'
-                ))
-                result_parts.append(display)
+                result_parts.append(f'<a href="tg://resolve?domain={username}">{display}</a>')
 
             else:
                 # نص عادي - تطبيق كل تقنيات مكافحة الكشف
                 transformed = self._apply_style_to_text(seg_text, style_idx)
+                # تهريب أحرف HTML في النص العادي
+                transformed = self._escape_html(transformed)
                 result_parts.append(transformed)
 
         final_text = ''.join(result_parts)
@@ -1056,11 +1152,7 @@ class YayTextMesslettersObfuscator:
         inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
         final_text = inv_char + final_text
 
-        # تعديل مواقع الكيانات (+1 وحدة UTF-16 للحرف غير المرئي المضاف)
-        for entity in entities:
-            entity.offset += 1
-
-        return final_text, entities
+        return final_text, has_links
 
     def get_style_name(self, idx=None):
         """اسم النمط الحالي"""
@@ -1311,13 +1403,14 @@ class AdvancedMessageEncoder:
     def encode_message(self, text, group_id=None):
         """
         تطبيق كل طبقات التشفير والتكويد على الرسالة
-        يُرجع: (النص المشفر, قائمة الكيانات)
+        يُرجع: (النص المشفر, use_html) حيث use_html يحدد استخدام parse_mode='html'
         """
         if not text or len(text) < 2:
-            return text, []
+            return text, False
         
         # تطبيق YayText/Messletters (الطبقة 1+2)
-        obfuscated_text, entities = yaytext_obfuscator.obfuscate(text)
+        # الآن يُرجع (نص مع أكواد HTML, use_html)
+        obfuscated_text, use_html = yaytext_obfuscator.obfuscate(text)
         
         # الطبقة 3: أحرف غير مرئية استراتيجية
         obfuscated_text = self.apply_strategic_invisibles(obfuscated_text, intensity=0.15)
@@ -1334,13 +1427,7 @@ class AdvancedMessageEncoder:
         # الطبقة 7: تحويلات Unicode عربية
         obfuscated_text = self.apply_unicode_normalization_trick(obfuscated_text, intensity=0.03)
         
-        # تعديل مواقع الكيانات لأن الأحرف غير المرئية تغير الأطوال
-        # حساب الفرق في الطول بين النص الأصلي والنص المشفر
-        # هذا ضروري لأن الأحرف المضافة تغير مواقع الكيانات
-        if entities:
-            entities = self._recalculate_entity_offsets(text, obfuscated_text, entities)
-        
-        return obfuscated_text, entities
+        return obfuscated_text, use_html
     
     def _recalculate_entity_offsets(self, original_text, obfuscated_text, entities):
         """
@@ -1379,21 +1466,20 @@ def yaytext_obfuscate(text):
     تطبيق تشويش YayText & Messletters على النص - تُستدعى قبل الإرسال مباشرة
     يتم اختيار نمط عشوائي مختلف لكل رسالة
     
-    🔗 الروابط: نص طبيعي (مثل "📎 اضغط هنا") + كيان MessageEntityTextUrl
-       → الضغط على النص الطبيعي يفتح الرابط الحقيقي ✅
+    🔗 الروابط: نص متنوع + رابط HTML <a href>
+       → الضغط على النص يفتح الرابط الحقيقي ✅
        → بوتات الحماية لا ترى أي نمط رابط ✅
+       → لا مشاكل في حساب الإزاحات ✅
     
-    👤 المعرفات: نص طبيعي + كيان مخفي (قابل للضغط ✅)
+    👤 المعرفات: نص متنوع + رابط مخفي (قابل للضغط ✅)
     🔢 الأرقام: تبقى أصلية (قابلة للنقر كأرقام هواتف ✅)
     
-    يُرجع: (النص المشوش, قائمة الكيانات)
+    يُرجع: (النص المشوش, use_html) حيث use_html يحدد استخدام parse_mode='html'
     """
     if get_setting('yaytext_messletters_obfuscation', 'on') != 'on':
-        return text, []
+        return text, False
     if not text:
-        return text, []
-    # استدعاء مباشر بدون AdvancedMessageEncoder
-    # لأن AdvancedMessageEncoder يضيف أحرفاً بعد حساب الكيانات فيكسر الإزاحات
+        return text, False
     return yaytext_obfuscator.obfuscate(text)
 
 
@@ -1720,27 +1806,43 @@ def get_join_history(limit=30):
 # ═══════════════════════════════════════════════
 #  إرسال رسالة لمجموعة
 # ═══════════════════════════════════════════════
-async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities=None):
-    """إرسال رسالة لمجموعة مع دعم كيانات الروابط المخفية (MessageEntityTextUrl)"""
-    fmt_entities = entities if entities else []
-    if msg_type == 'text':
-        await client.send_message(int(group_id), encrypted_content, formatting_entities=fmt_entities)
-    elif msg_type == 'photo' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
-    elif msg_type == 'video' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
-    elif msg_type == 'audio' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
-    elif msg_type == 'document' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
-    elif msg_type == 'contact' and media_data:
-        contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
-        await send_contact_message(client, int(group_id), contact_data, encrypted_content)
-    else:
-        if media_path and os.path.exists(media_path):
-            await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
+async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False):
+    """إرسال رسالة لمجموعة مع دعم HTML للروابط المخفية"""
+    parse_mode = 'html' if use_html else None
+    try:
+        if msg_type == 'text':
+            await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'photo' and media_path and os.path.exists(media_path):
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'video' and media_path and os.path.exists(media_path):
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'audio' and media_path and os.path.exists(media_path):
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'document' and media_path and os.path.exists(media_path):
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+        elif msg_type == 'contact' and media_data:
+            contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
+            await send_contact_message(client, int(group_id), contact_data, encrypted_content)
         else:
-            await client.send_message(int(group_id), encrypted_content, formatting_entities=fmt_entities)
+            if media_path and os.path.exists(media_path):
+                await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            else:
+                await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+    except Exception as e:
+        # إذا فشل الإرسال بـ HTML، حاول بدونه
+        if use_html:
+            logger.warning(f"⚠️ فشل HTML، إعادة المحاولة بدون HTML: {e}")
+            # إزالة أكواد HTML من النص
+            clean_text = re.sub(r'<a href="[^"]*">([^<]*)</a>', r'\1', encrypted_content)
+            clean_text = clean_text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+            if msg_type == 'text':
+                await client.send_message(int(group_id), clean_text)
+            elif media_path and os.path.exists(media_path):
+                await client.send_file(int(group_id), media_path, caption=clean_text)
+            else:
+                await client.send_message(int(group_id), clean_text)
+        else:
+            raise
 
 async def send_contact_message(client, chat_id, contact_data, caption):
     try:
@@ -1756,26 +1858,11 @@ async def send_contact_message(client, chat_id, contact_data, caption):
         raise
 
 # ═══════════════════════════════════════════════
-#  النشر السريع - ينشر بكل القروبات المتاحة
+#  النشر السريع - ينشر بكل الحسابات لكل المجموعات
 # ═══════════════════════════════════════════════
 async def fast_post_to_all_groups(message):
-    """نشر سريع لكل المجموعات المتاحة من كل الحسابات"""
+    """نشر سريع لكل المجموعات من كل الحسابات - كل حساب ينشر في كل مجموعاته"""
     global is_posting_active
-    all_groups = []
-    seen_ids = set()
-    for acc_id, client in list(user_clients.items()):
-        try:
-            acc_groups = await get_account_groups(client)
-            for gid, gname in acc_groups:
-                if gid not in seen_ids:
-                    seen_ids.add(gid)
-                    all_groups.append((gid, gname, acc_id))
-        except Exception as e:
-            logger.error(f"❌ فشل جلب مجموعات الحساب {acc_id}: {e}")
-            continue
-
-    if not all_groups:
-        return 0, 0, "لا توجد مجموعات"
 
     msg_id = message[0]
     content = message[1]
@@ -1786,87 +1873,86 @@ async def fast_post_to_all_groups(message):
     obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
     success_count = 0
     fail_count = 0
-    total_groups = len(all_groups)
+    total_posts = 0
 
-    logger.info(f"⚡ بدء النشر السريع إلى {total_groups} مجموعة")
-
-    for group_id, group_name, acc_id in all_groups:
-        if not is_posting_active:
-            break
-        entities = []
-        if content:
-            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-            if yaytext_on:
-                # YayText يتولى كل التحويلات بما فيها الروابط والكيانات
-                # نمرر النص الأصلي مباشرة لضمان اكتشاف الروابط وحساب الكيانات بشكل صحيح
-                encrypted_content, entities = yaytext_obfuscate(content)
-            else:
-                # التدفق العادي بدون YayText
-                varied = vary_text(content)
-                if obfuscation_on:
-                    varied = obfuscate_for_humans(varied)
-                encrypted_content = encrypt_text(varied, group_id)
-        else:
-            encrypted_content = ""
-
-        client = user_clients.get(acc_id)
-        if not client:
-            available_accs = await get_all_accounts()
-            if not available_accs:
-                await asyncio.sleep(5)
-                continue
-            fallback_acc = random.choice(available_accs)
-            client = user_clients.get(fallback_acc)
-            if not client:
-                continue
-            acc_id = fallback_acc
-
-        try:
-            await asyncio.sleep(fast_delay)
-            if not is_posting_active:
-                break
-            await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
-            success_count += 1
-            log_posting(acc_id, int(group_id), msg_id, 'success')
-            logger.info(f"⚡ سريع ✅ {group_name[:30]} ({success_count}/{total_groups})")
-        except FloodWaitError as e:
-            logger.warning(f"⏸ FloodWait: {e.seconds}ث - انتظار ثم إعادة المحاولة")
-            try:
-                await asyncio.sleep(e.seconds + 1)
-                if not is_posting_active:
-                    break
-                await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
-                success_count += 1
-                log_posting(acc_id, int(group_id), msg_id, 'success (retry after flood)')
-                logger.info(f"⚡ سريع ✅ (بعد FloodWait) {group_name[:30]}")
-            except Exception as retry_e:
-                fail_count += 1
-                logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
-        except Exception as e:
-            fail_count += 1
-            logger.error(f"❌ فشل: {e}")
-    return success_count, fail_count, total_groups
-
-# ═══════════════════════════════════════════════
-#  النشر العادي
-# ═══════════════════════════════════════════════
-async def post_to_all_groups(message):
-    global is_posting_active
-    all_groups = []
-    seen_ids = set()
+    # حساب إجمالي المجموعات عبر كل الحسابات
     for acc_id, client in list(user_clients.items()):
         try:
+            groups = await get_account_groups(client)
+            total_posts += len(groups)
+        except:
+            continue
+
+    if total_posts == 0:
+        return 0, 0, "لا توجد مجموعات"
+
+    logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × مجموعاتهم (إجمالي ~{total_posts} منشور)")
+
+    # كل حساب ينشر في كل مجموعاته الخاصة
+    for acc_id, client in list(user_clients.items()):
+        if not is_posting_active:
+            break
+
+        try:
             acc_groups = await get_account_groups(client)
-            for gid, gname in acc_groups:
-                if gid not in seen_ids:
-                    seen_ids.add(gid)
-                    all_groups.append((gid, gname, acc_id))
         except Exception as e:
             logger.error(f"❌ فشل جلب مجموعات الحساب {acc_id}: {e}")
             continue
 
-    if not all_groups:
-        return 0, 0, "لا توجد مجموعات"
+        for gid, gname in acc_groups:
+            if not is_posting_active:
+                break
+
+            # تخطي المجموعات المحظورة
+            if is_group_blacklisted(gid):
+                continue
+
+            use_html = False
+            if content:
+                yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                if yaytext_on:
+                    encrypted_content, use_html = yaytext_obfuscate(content)
+                else:
+                    varied = vary_text(content)
+                    if obfuscation_on:
+                        varied = obfuscate_for_humans(varied)
+                    encrypted_content = encrypt_text(varied, gid)
+            else:
+                encrypted_content = ""
+
+            try:
+                await asyncio.sleep(fast_delay)
+                if not is_posting_active:
+                    break
+                await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                success_count += 1
+                log_posting(acc_id, int(gid), msg_id, 'success')
+                logger.info(f"⚡ سريع ✅ {gname[:30]} (حساب {acc_id}) ({success_count}/{total_posts})")
+            except FloodWaitError as e:
+                logger.warning(f"⏸ FloodWait: {e.seconds}ث - انتظار ثم إعادة المحاولة")
+                try:
+                    await asyncio.sleep(e.seconds + 1)
+                    if not is_posting_active:
+                        break
+                    await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                    success_count += 1
+                    log_posting(acc_id, int(gid), msg_id, 'success (retry after flood)')
+                    logger.info(f"⚡ سريع ✅ (بعد FloodWait) {gname[:30]}")
+                except Exception as retry_e:
+                    fail_count += 1
+                    logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
+            except Exception as e:
+                fail_count += 1
+                logger.error(f"❌ فشل: {e}")
+
+    return success_count, fail_count, total_posts
+
+# ═══════════════════════════════════════════════
+#  النشر العادي - ينشر بكل الحسابات لكل المجموعات
+# ═══════════════════════════════════════════════
+async def post_to_all_groups(message):
+    """نشر عادي لكل المجموعات من كل الحسابات - كل حساب ينشر في كل مجموعاته"""
+    global is_posting_active
 
     msg_id = message[0]
     content = message[1]
@@ -1878,73 +1964,86 @@ async def post_to_all_groups(message):
     obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
     success_count = 0
     fail_count = 0
-    total_groups = len(all_groups)
+    total_posts = 0
 
-    for group_id, group_name, acc_id in all_groups:
+    # حساب إجمالي المجموعات عبر كل الحسابات
+    for acc_id, client in list(user_clients.items()):
+        try:
+            groups = await get_account_groups(client)
+            total_posts += len(groups)
+        except:
+            continue
+
+    if total_posts == 0:
+        return 0, 0, "لا توجد مجموعات"
+
+    # كل حساب ينشر في كل مجموعاته الخاصة
+    for acc_id, client in list(user_clients.items()):
         if not is_posting_active:
             break
-        entities = []
-        if content:
-            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-            if yaytext_on:
-                # YayText يتولى كل التحويلات بما فيها الروابط والكيانات
-                # نمرر النص الأصلي مباشرة لضمان اكتشاف الروابط وحساب الكيانات بشكل صحيح
-                encrypted_content, entities = yaytext_obfuscate(content)
-            else:
-                # التدفق العادي بدون YayText
-                varied = vary_text(content)
-                if obfuscation_on:
-                    varied = obfuscate_for_humans(varied)
-                encrypted_content = encrypt_text(varied, group_id)
-        else:
-            encrypted_content = ""
-
-        client = user_clients.get(acc_id)
-        if not client:
-            available_accs = await get_all_accounts()
-            if not available_accs:
-                await asyncio.sleep(30)
-                continue
-            fallback_acc = random.choice(available_accs)
-            client = user_clients.get(fallback_acc)
-            if not client:
-                continue
-            acc_id = fallback_acc
 
         try:
-            if use_jitter:
-                jitter = random.randint(-1, 2)
-                actual_delay = max(2, base_interval + jitter)
-            else:
-                actual_delay = base_interval
-            for _ in range(actual_delay):
-                if not is_posting_active:
-                    break
-                await asyncio.sleep(1)
+            acc_groups = await get_account_groups(client)
+        except Exception as e:
+            logger.error(f"❌ فشل جلب مجموعات الحساب {acc_id}: {e}")
+            continue
+
+        for gid, gname in acc_groups:
             if not is_posting_active:
                 break
-            await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
-            success_count += 1
-            log_posting(acc_id, int(group_id), msg_id, 'success')
-            logger.info(f"✅ [{msg_type}] {group_name[:30]} (حساب {acc_id})")
-        except FloodWaitError as e:
-            wait_time = e.seconds
-            logger.warning(f"⏸ حساب {acc_id} FloodWait: {wait_time}ث")
+
+            # تخطي المجموعات المحظورة
+            if is_group_blacklisted(gid):
+                continue
+
+            use_html = False
+            if content:
+                yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                if yaytext_on:
+                    encrypted_content, use_html = yaytext_obfuscate(content)
+                else:
+                    varied = vary_text(content)
+                    if obfuscation_on:
+                        varied = obfuscate_for_humans(varied)
+                    encrypted_content = encrypt_text(varied, gid)
+            else:
+                encrypted_content = ""
+
             try:
-                await asyncio.sleep(wait_time + 1)
+                if use_jitter:
+                    jitter = random.randint(-1, 2)
+                    actual_delay = max(2, base_interval + jitter)
+                else:
+                    actual_delay = base_interval
+                for _ in range(actual_delay):
+                    if not is_posting_active:
+                        break
+                    await asyncio.sleep(1)
                 if not is_posting_active:
                     break
-                await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
+                await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
                 success_count += 1
-                log_posting(acc_id, int(group_id), msg_id, 'success (retry after flood)')
-            except Exception as retry_e:
+                log_posting(acc_id, int(gid), msg_id, 'success')
+                logger.info(f"✅ [{msg_type}] {gname[:30]} (حساب {acc_id})")
+            except FloodWaitError as e:
+                wait_time = e.seconds
+                logger.warning(f"⏸ حساب {acc_id} FloodWait: {wait_time}ث")
+                try:
+                    await asyncio.sleep(wait_time + 1)
+                    if not is_posting_active:
+                        break
+                    await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                    success_count += 1
+                    log_posting(acc_id, int(gid), msg_id, 'success (retry after flood)')
+                except Exception as retry_e:
+                    fail_count += 1
+                    logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
+            except Exception as e:
                 fail_count += 1
-                logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
-        except Exception as e:
-            fail_count += 1
-            log_posting(acc_id, int(group_id), msg_id, f'failed: {str(e)[:50]}')
-            logger.error(f"❌ فشل النشر: {e}")
-    return success_count, fail_count, total_groups
+                log_posting(acc_id, int(gid), msg_id, f'failed: {str(e)[:50]}')
+                logger.error(f"❌ فشل النشر: {e}")
+
+    return success_count, fail_count, total_posts
 
 def log_posting(account_id, group_id, message_id, status):
     conn = sqlite3.connect(DB_PATH)
