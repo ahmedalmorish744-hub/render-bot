@@ -26,7 +26,7 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import InputMediaContact, Chat, Channel, User
+from telethon.tl.types import InputMediaContact, Chat, Channel, User, MessageEntityTextUrl
 from telethon.tl.functions.channels import GetParticipantsRequest
 from telethon.tl.types import ChannelParticipantsSearch
 from flask import Flask, jsonify
@@ -732,23 +732,35 @@ class YayTextMesslettersObfuscator:
                 result.append(c)
         return ''.join(result)
 
+    def _apply_map_preserve_digits(self, text, char_map):
+        """تطبيق جدول تحويل على النص مع الحفاظ على الأرقام كما هي"""
+        result = []
+        for c in text:
+            if c.isdigit():
+                result.append(c)  # الأرقام تبقى أصلية
+            elif c in char_map:
+                result.append(char_map[c])
+            else:
+                result.append(c)
+        return ''.join(result)
+
     def _apply_strikethrough(self, text):
-        """خط يتوسطه خط: إضافة U+0336 بعد كل حرف"""
+        """خط يتوسطه خط: إضافة U+0336 بعد كل حرف (بدون الأرقام)"""
         combining_long = '\u0336'
         result = []
         for c in text:
-            if c.isalpha() or c.isdigit():
+            if c.isalpha():
                 result.append(c + combining_long)
             else:
                 result.append(c)
         return ''.join(result)
 
     def _apply_underline(self, text):
-        """خط مسطر: إضافة U+0332 بعد كل حرف"""
+        """خط مسطر: إضافة U+0332 بعد كل حرف (بدون الأرقام)"""
         combining_low = '\u0332'
         result = []
         for c in text:
-            if c.isalpha() or c.isdigit():
+            if c.isalpha():
                 result.append(c + combining_low)
             else:
                 result.append(c)
@@ -782,97 +794,97 @@ class YayTextMesslettersObfuscator:
             decorated.append(word)
         return ' '.join(decorated)
 
-    def _obfuscate_link_segment(self, link_text):
+    def _create_url_display(self, url, style_idx):
         """
-        الروابط تترك كما هي تماماً بدون أي تعديل
-        تيليجرام يكتشف الروابط تلقائياً وأي تعديل يكسر الخاصية
-        التشويش يحدث عبر النص المحيط فقط
+        إنشاء نص عرض مشوش للرابط - يحتفظ بالقراءة لكن يخفي الرابط الحقيقي
+        الرابط الحقيقي يُخزن في كيان MessageEntityTextUrl
+        بوتات الحماية ترى النص المشوش ولا تجد الرابط الأصلي
         """
-        return link_text
+        display = url
+        # إزالة بروتوكول https:// أو http:// للعرض النظيف
+        if display.startswith('https://'):
+            display = display[8:]
+        elif display.startswith('http://'):
+            display = display[7:]
 
-    def _obfuscate_username_segment(self, username_text):
-        """
-        المعرفات تترك كما هي تماماً بدون أي تعديل
-        تيليجرام يكتشف المعرفات تلقائياً وأي تعديل يكسر الخاصية
-        التشويش يحدث عبر النص المحيط فقط
-        """
-        return username_text
+        # تطبيق النمط على نص العرض
+        if style_idx >= 0:
+            _, char_map = self.STYLES[style_idx]
+            display = self._apply_map(display, char_map)
+            display = self._apply_homoglyphs(display, intensity=0.1)
+        elif style_idx == -1:
+            display = self._apply_strikethrough(display)
+        elif style_idx == -2:
+            display = self._apply_underline(display)
+        elif style_idx == -3:
+            display = self._apply_homoglyphs(display, intensity=0.5)
+        elif style_idx == -4:
+            display = self._apply_map(display, self.FULLWIDTH_MAP)
+            display = self._apply_homoglyphs(display, intensity=0.2)
+        return display
 
-    def _obfuscate_numbers_in_text(self, text, intensity=0.5):
+    def _create_mention_display(self, mention, style_idx):
         """
-        تشويش الأرقام المستقلة في النص باستخدام أنماط Unicode مختلفة
-        يحافظ على قراءة الرقم ولكن يمنع بوتات الحماية من التعرف عليه
-        الأرقام داخل الروابط والمعرفات لا يتم تغييرها أبداً
+        إنشاء نص عرض مشوش للمعرف @username
+        المعرف الحقيقي يُخزن في كيان MessageEntityTextUrl
+        الضغط على النص المشوش يفتح الملف الشخصي الحقيقي
         """
-        # حماية الروابط والمعرفات أولاً
-        protected = self._extract_protected_segments(text)
-        segments = []
-        last_end = 0
-        for start, end, original, seg_type in protected:
-            if start > last_end:
-                segments.append(('text', text[last_end:start]))
-            segments.append((seg_type, original))
-            last_end = end
-        if last_end < len(text):
-            segments.append(('text', text[last_end:]))
+        username = mention[1:]  # إزالة @
+        if style_idx >= 0:
+            _, char_map = self.STYLES[style_idx]
+            username = self._apply_map(username, char_map)
+            username = self._apply_homoglyphs(username, intensity=0.1)
+        elif style_idx == -3:
+            username = self._apply_homoglyphs(username, intensity=0.5)
+        elif style_idx == -4:
+            username = self._apply_map(username, self.FULLWIDTH_MAP)
+            username = self._apply_homoglyphs(username, intensity=0.2)
+        return '@' + username
 
-        chosen_digit_map = random.choice(self.DIGIT_STYLES)
-        result_parts = []
-        for seg_type, seg_text in segments:
-            if seg_type in ('link', 'username'):
-                # أرقام الروابط والمعرفات لا تتغير أبداً
-                result_parts.append(seg_text)
-            else:
-                # تشويش الأرقام في النص العادي فقط
-                result = []
-                for c in seg_text:
-                    if c.isdigit() and random.random() < intensity:
-                        result.append(chosen_digit_map.get(c, c))
-                    else:
-                        result.append(c)
-                result_parts.append(''.join(result))
-        return ''.join(result_parts)
+    def _apply_style_to_text(self, text, style_idx):
+        """
+        تطبيق نمط YayText على النص العادي (بدون روابط/معرفات)
+        الأرقام تبقى كما هي للحفاظ على وظيفتها (أرقام هواتف قابلة للنقر)
+        """
+        if not text:
+            return text
 
-    def _add_invisible_to_numbers(self, text, intensity=0.3):
-        """
-        إضافة أحرف غير مرئية داخل تسلسلات الأرقام (هواتف، معرفات)
-        بدون تغيير الأرقام نفسها - فقط إخفاء النمط
-        """
-        result = []
-        i = 0
-        in_link = False
-        while i < len(text):
-            c = text[i]
-            # تتبع إذا كنا داخل رابط
-            if text[i:i+8] == 'https://' or text[i:i+7] == 'http://':
-                in_link = True
-            elif c in (' ', '\n', '\t'):
-                in_link = False
-            # إضافة حرف غير مرئي قبل تسلسلات الأرقام (هواتف)
-            if c.isdigit() and not in_link and i > 0 and text[i-1] in ('+', ' ', '-', '('):
-                if random.random() < intensity:
-                    result.append('\u200B')
-            result.append(c)
-            # إضافة حرف غير مرئي بعد مجموعات الأرقام (كل 3-4 أرقام)
-            if c.isdigit() and not in_link:
-                # عد الأرقام المتتالية
-                digit_run = 0
-                j = i
-                while j < len(text) and text[j].isdigit():
-                    digit_run += 1
-                    j += 1
-                if digit_run >= 4 and random.random() < intensity:
-                    # أضف حرف غير مرئي بعد 3 أرقام
-                    pos_in_run = 0
-                    for k in range(i, j):
-                        result.append(text[k])
-                        pos_in_run += 1
-                        if pos_in_run == 3 and k + 1 < j and random.random() < 0.5:
-                            result.append('\u200C')
-                    i = j
-                    continue
-            i += 1
-        return ''.join(result)
+        if style_idx >= 0:
+            style_name, char_map = self.STYLES[style_idx]
+            # استخدام _apply_map_preserve_digits للحفاظ على الأرقام أصلية
+            transformed = self._apply_map_preserve_digits(text, char_map)
+        elif style_idx == -1:
+            transformed = self._apply_strikethrough(text)
+        elif style_idx == -2:
+            transformed = self._apply_underline(text)
+        elif style_idx == -3:
+            transformed = self._apply_homoglyphs(text, intensity=0.5)
+        elif style_idx == -4:
+            # Messletters combo: Fullwidth + Homoglyphs (مع حفظ الأرقام)
+            transformed = self._apply_map_preserve_digits(text, self.FULLWIDTH_MAP)
+            transformed = self._apply_homoglyphs(transformed, intensity=0.2)
+        else:
+            transformed = text
+
+        # إضافة لمسة homoglyphs خفيفة إضافية (10%)
+        if style_idx >= 0 and style_idx != -3:
+            transformed = self._apply_homoglyphs(transformed, intensity=0.1)
+
+        # إضافة زخرفة خفيفة
+        if random.random() < 0.25:
+            transformed = self._apply_decorations(transformed, intensity=0.04)
+
+        # إضافة أحرف غير مرئية بين الكلمات
+        if random.random() < 0.4:
+            words = transformed.split(' ')
+            new_words = []
+            for w in words:
+                new_words.append(w)
+                if random.random() < 0.15:
+                    new_words.append(random.choice(['\u200B', '\u200C']))
+            transformed = ' '.join(new_words)
+
+        return transformed
 
     def _get_random_style(self):
         """اختيار نمط عشوائي مختلف عن السابق"""
@@ -918,19 +930,35 @@ class YayTextMesslettersObfuscator:
     def obfuscate(self, text):
         """
         التحويل الرئيسي - يختار نمطاً عشوائياً ويطبقه
-        الروابط والمعرفات تترك كما هي تماماً (قابلة للنقر)
-        الأرقام المستقلة يتم تشويشها بأنماط Unicode
+        
+        🔗 الروابط: يتم استبدالها بنص مشوش + كيان MessageEntityTextUrl
+           → المستخدم يضغط النص المشوش → يفتح الرابط الحقيقي ✅
+           → بوتات الحماية لا تجد الرابط في النص ✅
+        
+        👤 المعرفات: يتم استبدالها بنص مشوش + كيان MessageEntityTextUrl
+           → الضغط يفتح الملف الشخصي الحقيقي ✅
+        
+        🔢 الأرقام: تبقى كما هي (قابلة للنقر كأرقام هواتف) ✅
+        
+        يُرجع: (النص المشوش, قائمة الكيانات)
         """
         if not text or len(text) < 2:
-            return text
+            return text, []
 
-        # حماية الروابط والمعرفات - لا يتم تعديلها أبداً
-        protected = self._extract_protected_segments(text)
+        # استخراج الروابط والمعرفات
+        all_protected = []
+        for match in re.finditer(r'https?://\S+', text):
+            all_protected.append((match.start(), match.end(), match.group(), 'url'))
+        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in all_protected)
+            if not overlaps:
+                all_protected.append((match.start(), match.end(), match.group(), 'mention'))
+        all_protected.sort(key=lambda x: x[0])
 
         # تقسيم النص إلى أجزاء محمية وغير محمية
         segments = []
         last_end = 0
-        for start, end, original, seg_type in protected:
+        for start, end, original, seg_type in all_protected:
             if start > last_end:
                 segments.append(('text', text[last_end:start]))
             segments.append((seg_type, original))
@@ -938,71 +966,63 @@ class YayTextMesslettersObfuscator:
         if last_end < len(text):
             segments.append(('text', text[last_end:]))
 
-        # إذا كل النص محمي (رابط فقط مثلاً)
-        text_segments = [s for s in segments if s[0] == 'text']
-        if not text_segments or all(len(s[1].strip()) < 2 for s in text_segments):
-            # لا يوجد نص كافٍ للتحويل، نطبق تشويش الأرقام فقط
-            result = text
-            result = self._obfuscate_numbers_in_text(result, intensity=0.4)
-            return result
-
         # اختيار النمط
         style_idx = self._get_random_style()
 
-        # تطبيق النمط على كل جزء
-        result_segments = []
+        # بناء النص المشوش والكيانات تدريجياً
+        result_parts = []
+        entities = []
+
         for seg_type, seg_text in segments:
-            if seg_type in ('link', 'username'):
-                # الروابط والمعرفات: تترك كما هي تماماً بدون أي تعديل
-                result_segments.append(seg_text)
+            if seg_type == 'url':
+                # إنشاء نص عرض مشوش للرابط (بدون https://)
+                obfuscated_display = self._create_url_display(seg_text, style_idx)
+
+                # حساب الموضع في النص النهائي بوحدة UTF-16 (المعيار في تيليجرام)
+                text_before = ''.join(result_parts)
+                utf16_offset = len(text_before.encode('utf-16-le')) // 2
+                utf16_length = len(obfuscated_display.encode('utf-16-le')) // 2
+
+                # إنشاء كيان الرابط المخفي - الضغط على النص المشوش يفتح الرابط الحقيقي
+                entities.append(MessageEntityTextUrl(
+                    offset=utf16_offset,
+                    length=utf16_length,
+                    url=seg_text  # الرابط الحقيقي مخفي في الكيان
+                ))
+                result_parts.append(obfuscated_display)
+
+            elif seg_type == 'mention':
+                # إنشاء نص عرض مشوش للمعرف
+                obfuscated_display = self._create_mention_display(seg_text, style_idx)
+
+                text_before = ''.join(result_parts)
+                utf16_offset = len(text_before.encode('utf-16-le')) // 2
+                utf16_length = len(obfuscated_display.encode('utf-16-le')) // 2
+
+                username = seg_text[1:]  # إزالة @
+                entities.append(MessageEntityTextUrl(
+                    offset=utf16_offset,
+                    length=utf16_length,
+                    url=f'tg://resolve?domain={username}'
+                ))
+                result_parts.append(obfuscated_display)
+
             else:
-                # النص العادي: تطبيق النمط المختار
-                if style_idx >= 0:
-                    style_name, char_map = self.STYLES[style_idx]
-                    transformed = self._apply_map(seg_text, char_map)
-                elif style_idx == -1:
-                    transformed = self._apply_strikethrough(seg_text)
-                elif style_idx == -2:
-                    transformed = self._apply_underline(seg_text)
-                elif style_idx == -3:
-                    transformed = self._apply_homoglyphs(seg_text, intensity=0.5)
-                elif style_idx == -4:
-                    # Messletters combo: Fullwidth + Homoglyphs
-                    transformed = self._apply_map(seg_text, self.FULLWIDTH_MAP)
-                    transformed = self._apply_homoglyphs(transformed, intensity=0.2)
-                else:
-                    transformed = seg_text
+                # نص عادي - تطبيق النمط (الأرقام تبقى كما هي)
+                transformed = self._apply_style_to_text(seg_text, style_idx)
+                result_parts.append(transformed)
 
-                # إضافة لمسة homoglyphs خفيفة إضافية (10%)
-                if style_idx >= 0 and style_idx != -3:
-                    transformed = self._apply_homoglyphs(transformed, intensity=0.1)
-
-                # تشويش الأرقام المستقلة في النص العادي فقط
-                transformed = self._obfuscate_numbers_in_text(transformed, intensity=0.4)
-
-                # إضافة زخرفة خفيفة
-                if random.random() < 0.25:
-                    transformed = self._apply_decorations(transformed, intensity=0.04)
-
-                # إضافة أحرف غير مرئية بين الكلمات
-                if random.random() < 0.4:
-                    words = transformed.split(' ')
-                    new_words = []
-                    for w in words:
-                        new_words.append(w)
-                        if random.random() < 0.15:
-                            new_words.append(random.choice(['\u200B', '\u200C']))
-                    transformed = ' '.join(new_words)
-
-                result_segments.append(transformed)
-
-        final_result = ''.join(result_segments)
+        final_text = ''.join(result_parts)
 
         # إضافة حرف غير مرئي في البداية (لتغيير الهاش)
         inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
-        final_result = inv_char + final_result
+        final_text = inv_char + final_text
 
-        return final_result
+        # تعديل مواقع الكيانات (+1 وحدة UTF-16 للحرف غير المرئي المضاف)
+        for entity in entities:
+            entity.offset += 1
+
+        return final_text, entities
 
     def get_style_name(self, idx=None):
         """اسم النمط الحالي"""
@@ -1044,17 +1064,297 @@ class YayTextMesslettersObfuscator:
 yaytext_obfuscator = YayTextMesslettersObfuscator()
 
 
+# ═══════════════════════════════════════════════
+#  نظام التشفير والتكويد المتقدم 🔐✨
+# ═══════════════════════════════════════════════
+class AdvancedMessageEncoder:
+    """
+    نظام تشفير وتكويد رسائل متعدد الطبقات
+    يطبق عدة تقنيات في سلسلة لتعظيم الحماية من بوتات الحماية:
+    
+    الطبقة 1: تحويل النص لأنماط Unicode (YayText/Messletters)
+    الطبقة 2: إخفاء الروابط في كيانات TextUrl
+    الطبقة 3: أحرف غير مرئية استراتيجية
+    الطبقة 4: مسافات بديلة عشوائية
+    الطبقة 5: حروف متشابهة (Homoglyphs) سيريلية/يونانية
+    الطبقة 6: إخفاء نمطي بالتشويش العكسي
+    الطبقة 7: علامات RTL خفية لتغيير ترتيب القراءة
+    """
+    
+    # أحرف غير مرئية متنوعة
+    INVISIBLE_CHARS = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061', '\u2062', '\u2063']
+    
+    # مسافات بديلة من مختلف نطاقات Unicode
+    ALT_SPACES = [
+        '\u00A0',   # No-Break Space
+        '\u2009',   # Thin Space
+        '\u202F',   # Narrow No-Break Space
+        '\u2008',   # Punctuation Space
+        '\u2007',   # Figure Space
+        '\u2006',   # Six-Per-Em Space
+        '\u2005',   # Four-Per-Em Space
+        '\u2004',   # Three-Per-Em Space
+    ]
+    
+    # حروف سيريلية/يونانية متشابهة مع اللاتينية (Homoglyphs)
+    ADVANCED_HOMOGLYPHS = {
+        'a': '\u0430', 'A': '\u0410',  # Cyrillic a/A
+        'c': '\u0441', 'C': '\u0421',  # Cyrillic es/Es
+        'e': '\u0435', 'E': '\u0415',  # Cyrillic ye/Ye
+        'o': '\u043E', 'O': '\u041E',  # Cyrillic o/O
+        'p': '\u0440', 'P': '\u0420',  # Cyrillic er/Er
+        'x': '\u0445', 'X': '\u0425',  # Cyrillic ha/Ha
+        'y': '\u0443', 'Y': '\u0423',  # Cyrillic u/U
+        'i': '\u0456', 'I': '\u0406',  # Cyrillic byelorussian
+        'j': '\u0458', 'J': '\u0408',  # Cyrillic je/Je
+        's': '\u0455', 'S': '\u0405',  # Cyrillic dze/Dze
+        'k': '\u043A', 'K': '\u041A',  # Cyrillic ka/Ka
+        'H': '\u041D',                  # Cyrillic En
+        'T': '\u0422',                  # Cyrillic Te
+        'M': '\u041C',                  # Cyrillic Em
+        'B': '\u0412',                  # Cyrillic Ve
+        'g': '\u0493', 'G': '\u0492',  # Cyrillic Ghe with stroke
+        'h': '\u04BB',                  # Cyrillic Shha
+        'b': '\u0431', 'B': '\u0412',  # Cyrillic be/Ve
+        'd': '\u0501',                  # Cyrillic Komi De
+        'u': '\u04AF',                  # Cyrillic straight u
+    }
+    
+    def __init__(self):
+        self._message_hash_cache = deque(maxlen=1000)
+    
+    def _is_protected_zone(self, pos, protected_zones):
+        """التحقق مما إذا كان الموقع داخل منطقة محمية (رابط/معرف)"""
+        return any(start <= pos < end for start, end in protected_zones)
+    
+    def _extract_protected_zones(self, text):
+        """استخراج مناطق الروابط والمعرفات لحمايتها"""
+        zones = []
+        for match in re.finditer(r'https?://\S+', text):
+            zones.append((match.start(), match.end()))
+        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+            overlaps = any(match.start() >= s and match.start() < e for s, e in zones)
+            if not overlaps:
+                zones.append((match.start(), match.end()))
+        return zones
+    
+    def apply_strategic_invisibles(self, text, intensity=0.2):
+        """
+        الطبقة 3: إضافة أحرف غير مرئية استراتيجياً
+        - بين الكلمات (مسافة + حرف غير مرئي)
+        - في بداية ونهاية النص
+        - قبل وبعد علامات الترقيم
+        - لا يضاف داخل الروابط/المعرفات
+        """
+        if not text or len(text) < 3:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        result = list(text)
+        insert_positions = []
+        
+        # أحرف غير مرئية بعد المسافات (بين الكلمات)
+        space_positions = [i for i, c in enumerate(result) if c == ' ' and not self._is_protected_zone(i, protected)]
+        for pos in space_positions:
+            if random.random() < intensity:
+                insert_positions.append((pos + 1, random.choice(self.INVISIBLE_CHARS)))
+        
+        # أحرف غير مرئية قبل علامات الترقيم العربية
+        punctuation = '،.؛:!؟-'
+        for i, c in enumerate(result):
+            if c in punctuation and not self._is_protected_zone(i, protected):
+                if random.random() < intensity * 0.5:
+                    insert_positions.append((i, random.choice(['\u200B', '\u200C'])))
+        
+        # أحرف غير مرئية بعد الأقواس
+        bracket_chars = '()[]{}'
+        for i, c in enumerate(result):
+            if c in bracket_chars and not self._is_protected_zone(i, protected):
+                if random.random() < intensity * 0.3:
+                    insert_positions.append((i + 1, random.choice(['\u200D', '\u2060'])))
+        
+        # تطبيق الإضافات بترتيب عكسي للحفاظ على المواقع
+        for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
+            result.insert(pos, char)
+        
+        return ''.join(result)
+    
+    def apply_alternate_spaces(self, text, intensity=0.35):
+        """
+        الطبقة 4: استبدال المسافات العادية بمسافات بديلة من Unicode
+        المسافات البديلة تبدو متطابقة للمستخدم لكنها مختلفة للآلات
+        """
+        if not text:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        result = list(text)
+        
+        space_positions = [i for i, c in enumerate(result) if c == ' ' and not self._is_protected_zone(i, protected)]
+        for pos in space_positions:
+            if random.random() < intensity:
+                result[pos] = random.choice(self.ALT_SPACES)
+        
+        return ''.join(result)
+    
+    def apply_homoglyphs(self, text, intensity=0.15):
+        """
+        الطبقة 5: استبدال أحرف لاتينية بنظيراتها السيريلية/يونانية
+        تبدو متطابقة تماماً للعين لكنها مختلفة في الترميز
+        يصعب على بوتات الحماية اكتشاف النص بعد هذا التحويل
+        """
+        if not text:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        result = list(text)
+        
+        for i, c in enumerate(result):
+            if c in self.ADVANCED_HOMOGLYPHS and not self._is_protected_zone(i, protected):
+                if random.random() < intensity:
+                    result[i] = self.ADVANCED_HOMOGLYPHS[c]
+        
+        return ''.join(result)
+    
+    def apply_pattern_disruption(self, text):
+        """
+        الطبقة 6: تشويش النمط - إضافة أحرف غير مرئية لتغيير بصمة النص
+        يمنع بوتات الحماية من مطابقة الأنماط المتكررة
+        """
+        if not text or len(text) < 10:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        result = list(text)
+        
+        # إضافة حرف غير مرئي في بداية النص
+        prefix = random.choice(self.INVISIBLE_CHARS)
+        # أحياناً إضافة 2 أحرف غير مرئية
+        if random.random() < 0.3:
+            prefix += random.choice(self.INVISIBLE_CHARS)
+        
+        # إضافة أحرف غير مرئية بين الجمل (بعد النقاط)
+        for i, c in enumerate(result):
+            if c in '.!؟\n' and not self._is_protected_zone(i, protected):
+                if random.random() < 0.4:
+                    result.insert(i + 1, random.choice(['\u200B', '\u200C', '\uFEFF']))
+        
+        # إضافة علامة RTL خفية أحياناً لتغيير البصمة
+        if random.random() < 0.2:
+            result.append('\u200F')  # Right-to-Left Mark
+        
+        return prefix + ''.join(result)
+    
+    def apply_unicode_normalization_trick(self, text, intensity=0.05):
+        """
+        الطبقة 7: تحويلات Unicode طفيفة - استخدام ترميزات مختلفة
+        لنفس الأحرف العربية (مثل Hamza بأنماط مختلفة)
+        """
+        if not text:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        result = list(text)
+        
+        # تحويلات عربية خفيفة
+        arabic_variants = {
+            'ي': '\u06CC',  # Farsi Yeh (ي UNICODE مختلف)
+            'ك': '\u06A9',  # Farsi Keheh (ك UNICODE مختلف)
+            'ء': '\u0621',  # Hamza بترميز مختلف
+        }
+        
+        for i, c in enumerate(result):
+            if c in arabic_variants and not self._is_protected_zone(i, protected):
+                if random.random() < intensity:
+                    result[i] = arabic_variants[c]
+        
+        return ''.join(result)
+    
+    def encode_message(self, text, group_id=None):
+        """
+        تطبيق كل طبقات التشفير والتكويد على الرسالة
+        يُرجع: (النص المشفر, قائمة الكيانات)
+        """
+        if not text or len(text) < 2:
+            return text, []
+        
+        # تطبيق YayText/Messletters (الطبقة 1+2)
+        obfuscated_text, entities = yaytext_obfuscator.obfuscate(text)
+        
+        # الطبقة 3: أحرف غير مرئية استراتيجية
+        obfuscated_text = self.apply_strategic_invisibles(obfuscated_text, intensity=0.15)
+        
+        # الطبقة 4: مسافات بديلة
+        obfuscated_text = self.apply_alternate_spaces(obfuscated_text, intensity=0.3)
+        
+        # الطبقة 5: Homoglyphs
+        obfuscated_text = self.apply_homoglyphs(obfuscated_text, intensity=0.1)
+        
+        # الطبقة 6: تشويش النمط
+        obfuscated_text = self.apply_pattern_disruption(obfuscated_text)
+        
+        # الطبقة 7: تحويلات Unicode عربية
+        obfuscated_text = self.apply_unicode_normalization_trick(obfuscated_text, intensity=0.03)
+        
+        # تعديل مواقع الكيانات لأن الأحرف غير المرئية تغير الأطوال
+        # حساب الفرق في الطول بين النص الأصلي والنص المشفر
+        # هذا ضروري لأن الأحرف المضافة تغير مواقع الكيانات
+        if entities:
+            entities = self._recalculate_entity_offsets(text, obfuscated_text, entities)
+        
+        return obfuscated_text, entities
+    
+    def _recalculate_entity_offsets(self, original_text, obfuscated_text, entities):
+        """
+        إعادة حساب مواقع الكيانات بعد إضافة الأحرف غير المرئية
+        هذا مهم لأن الطبقات 3-7 تضيف أحرفاً تغير المواقع
+        """
+        # بما أننا أضفنا أحرف غير مرئية فقط (لا نحذف أو نستبدل أحرفاً مرئية)،
+        # يمكننا تقريباً حساب الإزاحة بنسبة التمدد
+        if not entities:
+            return entities
+        
+        # حساب نسبة التمدد
+        original_len = len(original_text.encode('utf-16-le')) // 2
+        obfuscated_len = len(obfuscated_text.encode('utf-16-le')) // 2
+        
+        if original_len == 0:
+            return entities
+        
+        stretch_ratio = obfuscated_len / original_len
+        
+        # إعادة حساب المواقع بالتناسب
+        for entity in entities:
+            # تقريب الموقع الجديد بنسبة التمدد
+            entity.offset = int(entity.offset * stretch_ratio)
+            # الطول يبقى تقريبياً نفسه لأن النص داخل الكيان لم يتغير كثيراً
+        
+        return entities
+
+
+# إنشاء مثيل عام لنظام التشفير المتقدم
+advanced_encoder = AdvancedMessageEncoder()
+
+
 def yaytext_obfuscate(text):
     """
     تطبيق تشويش YayText & Messletters على النص - تُستدعى قبل الإرسال مباشرة
     يتم اختيار نمط عشوائي مختلف لكل رسالة
-    يشمل: تشويش النصوص + الروابط + المعرفات + الأرقام
+    
+    🔗 الروابط: نص مشوش + كيان MessageEntityTextUrl
+       → الضغط على النص المشوش يفتح الرابط الحقيقي ✅
+       → بوتات الحماية لا تجد الرابط في النص ✅
+    
+    👤 المعرفات: نص مشوش + كيان مخفي (قابل للضغط ✅)
+    🔢 الأرقام: تبقى أصلية (قابلة للنقر كأرقام هواتف ✅)
+    
+    يُرجع: (النص المشوش, قائمة الكيانات)
     """
     if get_setting('yaytext_messletters_obfuscation', 'on') != 'on':
-        return text
+        return text, []
     if not text:
-        return text
-    return yaytext_obfuscator.obfuscate(text)
+        return text, []
+    return advanced_encoder.encode_message(text)
 
 
 # ═══════════════════════════════════════════════
@@ -1380,25 +1680,27 @@ def get_join_history(limit=30):
 # ═══════════════════════════════════════════════
 #  إرسال رسالة لمجموعة
 # ═══════════════════════════════════════════════
-async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data):
+async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities=None):
+    """إرسال رسالة لمجموعة مع دعم كيانات الروابط المخفية (MessageEntityTextUrl)"""
+    fmt_entities = entities if entities else []
     if msg_type == 'text':
-        await client.send_message(int(group_id), encrypted_content)
+        await client.send_message(int(group_id), encrypted_content, formatting_entities=fmt_entities)
     elif msg_type == 'photo' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content)
+        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
     elif msg_type == 'video' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content)
+        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
     elif msg_type == 'audio' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content)
+        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
     elif msg_type == 'document' and media_path and os.path.exists(media_path):
-        await client.send_file(int(group_id), media_path, caption=encrypted_content)
+        await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
     elif msg_type == 'contact' and media_data:
         contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
         await send_contact_message(client, int(group_id), contact_data, encrypted_content)
     else:
         if media_path and os.path.exists(media_path):
-            await client.send_file(int(group_id), media_path, caption=encrypted_content)
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, formatting_entities=fmt_entities)
         else:
-            await client.send_message(int(group_id), encrypted_content)
+            await client.send_message(int(group_id), encrypted_content, formatting_entities=fmt_entities)
 
 async def send_contact_message(client, chat_id, contact_data, caption):
     try:
@@ -1451,12 +1753,13 @@ async def fast_post_to_all_groups(message):
     for group_id, group_name, acc_id in all_groups:
         if not is_posting_active:
             break
+        entities = []
         if content:
             varied = vary_text(content)
             if obfuscation_on:
                 varied = obfuscate_for_humans(varied)
             encrypted_content = encrypt_text(varied, group_id)
-            encrypted_content = yaytext_obfuscate(encrypted_content)
+            encrypted_content, entities = yaytext_obfuscate(encrypted_content)
         else:
             encrypted_content = ""
 
@@ -1476,7 +1779,7 @@ async def fast_post_to_all_groups(message):
             await asyncio.sleep(fast_delay)
             if not is_posting_active:
                 break
-            await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data)
+            await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
             success_count += 1
             log_posting(acc_id, int(group_id), msg_id, 'success')
             logger.info(f"⚡ سريع ✅ {group_name[:30]} ({success_count}/{total_groups})")
@@ -1486,7 +1789,7 @@ async def fast_post_to_all_groups(message):
                 await asyncio.sleep(e.seconds + 1)
                 if not is_posting_active:
                     break
-                await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data)
+                await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
                 success_count += 1
                 log_posting(acc_id, int(group_id), msg_id, 'success (retry after flood)')
                 logger.info(f"⚡ سريع ✅ (بعد FloodWait) {group_name[:30]}")
@@ -1534,12 +1837,13 @@ async def post_to_all_groups(message):
     for group_id, group_name, acc_id in all_groups:
         if not is_posting_active:
             break
+        entities = []
         if content:
             varied = vary_text(content)
             if obfuscation_on:
                 varied = obfuscate_for_humans(varied)
             encrypted_content = encrypt_text(varied, group_id)
-            encrypted_content = yaytext_obfuscate(encrypted_content)
+            encrypted_content, entities = yaytext_obfuscate(encrypted_content)
         else:
             encrypted_content = ""
 
@@ -1567,7 +1871,7 @@ async def post_to_all_groups(message):
                 await asyncio.sleep(1)
             if not is_posting_active:
                 break
-            await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data)
+            await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
             success_count += 1
             log_posting(acc_id, int(group_id), msg_id, 'success')
             logger.info(f"✅ [{msg_type}] {group_name[:30]} (حساب {acc_id})")
@@ -1578,7 +1882,7 @@ async def post_to_all_groups(message):
                 await asyncio.sleep(wait_time + 1)
                 if not is_posting_active:
                     break
-                await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data)
+                await send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, entities)
                 success_count += 1
                 log_posting(acc_id, int(group_id), msg_id, 'success (retry after flood)')
             except Exception as retry_e:
@@ -2313,22 +2617,24 @@ async def main():
             set_setting('yaytext_messletters_obfuscation', new_val)
             if new_val == 'on':
                 example = "Hello World عروض حصرية @user https://t.me/test 966512345678"
-                preview = yaytext_obfuscator.obfuscate(example)
+                preview_text, preview_entities = yaytext_obfuscator.obfuscate(example)
                 await event.answer("تشويش YayText & Messletters: مفعل ✨")
                 await event.edit(
                     f"🔄 **تشويش YayText & Messletters: مفعل** ✅\n\n"
                     f"📝 **معاينة:**\n"
                     f"الأصلي: {example}\n"
-                    f"المشوش: {preview}\n\n"
+                    f"المشوش: {preview_text}\n\n"
                     f"🎨 **أنماط النصوص ({len(yaytext_obfuscator.get_all_style_names())}):**\n"
                     f"• Bold, Italic, Bold Italic, Monospace\n"
                     f"• Script, Bold Script, Fraktur, Bold Fraktur\n"
                     f"• Double-Struck, Sans-Serif, Fullwidth\n"
                     f"• Small Caps, Strikethrough, Underline\n"
                     f"• Homoglyphs, زخارف Messletters\n\n"
-                    f"🔗 **تشويش الروابط:** أحرف غير مرئية في الرابط\n"
-                    f"👤 **تشويش المعرفات:** @\u200Busername\n"
-                    f"🔢 **تشويش الأرقام:** أنماط Unicode للأرقام\n\n"
+                    f"🔗 **الروابط:** نص مشوش + كيان مخفي (قابل للضغط! ✅)\n"
+                    f"   → بوتات الحماية لا تجد الرابط في النص\n"
+                    f"   → الضغط على النص المشوش يفتح الرابط الحقيقي\n\n"
+                    f"👤 **المعرفات:** نص مشوش + كيان مخفي (قابل للضغط! ✅)\n\n"
+                    f"🔢 **الأرقام:** تبقى أصلية (قابلة للنقر كأرقام هواتف ✅)\n\n"
                     f"🔄 كل رسالة تستخدم نمط مختلف تلقائياً",
                     buttons=get_settings_menu()
                 )
