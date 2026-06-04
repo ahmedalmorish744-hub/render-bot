@@ -483,7 +483,7 @@ class YayTextMesslettersObfuscator:
     # ─── أنماط Cross-Script (من telegram-fancy-fonts-bot) ───
     RUSSIAN_MAP = {}
     JAPANESE_MAP = {}
-    ARABIC_STYLE_MAP = {}
+    ARABIC_STYLE_MAP = {}  # الآن تستخدم Latin Extended آمنة (بدون Thai/Hebrew)
     FAIRY_MAP = {}
     WIZARD_MAP = {}
     FUNKY_MAP = {}
@@ -493,6 +493,12 @@ class YayTextMesslettersObfuscator:
     ROCK_DOTS_MAP = {}
     STROKED_MAP = {}
     INVERTED_MAP = {}
+    
+    # ─── أنماط آمنة جديدة (لا تكتشفها بوتات الحماية) ───
+    LATIN_EXTENDED_MAP = {}     # Latin Extended-A/B - تبدو طبيعية تماماً
+    ENCLOSED_MAP = {}           # Enclosed Alphanumerics
+    MEDIEVAL_MAP = {}           # Latin Extended-D Medieval
+    DOUBLE_STRUCK_DIGIT_MAP = {} # أرقام مزدوجة
     
     # ─── جداول أرقام Unicode ───
     DIGIT_BOLD_MAP = {}
@@ -505,8 +511,10 @@ class YayTextMesslettersObfuscator:
     DIGIT_BUBBLES_MAP = {}
     DIGIT_INVERTED_MAP = {}
     
-    # ─── Homoglyphs سيريلية/يونانية ───
-    HOMOGLYPH_MAP = {}
+    # ─── أنماط آمنة إضافية ضد بوتات الحماية ───
+    MEDIEVAL_LATIN_MAP = {}     # Latin Extended-D (أحرف قديمة آمنة)
+    PHONETIC_MAP = {}           # IPA Phonetic (آمنة ومتنوعة)
+    REGIONAL_MAP = {}           # Regional Indicator Symbols
     
     # ─── خريطة المقلوب (Upside-down) من text_unicoder ───
     UPSIDE_DOWN_MAP = {}
@@ -716,12 +724,14 @@ class YayTextMesslettersObfuscator:
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
             self.JAPANESE_MAP[c] = jap_chars[i]
         
-        # ═══ Cross-Script: Arabic Style (Thai/Hebrew lookalikes) ═══
-        ar_chars = 'ค๒ς๔єŦﻮђเןкl๓ภ๏קợгรtยשฬץאz'
+        # ═══ Cross-Script: Safe Mixed (Latin Extended + IPA + Latin Extended-B) ═══
+        # أنماط آمنة لا تكتشفها بوتات الحماية - بدون Thai/Hebrew/Persian
+        safe_mixed_lower = 'ąƀčđḗᵮḡḩḭɉꝁḹḿƞǿᵽɋřşŧṵṽẇẋẏž'
+        safe_mixed_upper = 'ȺɃȻĐḔᵮḠḨḬɈꝀḺḾȠǾṔɊŘŞŦṲṼẄẌỲŽ'
         for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
-            self.ARABIC_STYLE_MAP[c] = ar_chars[i]
+            self.ARABIC_STYLE_MAP[c] = safe_mixed_lower[i]
         for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-            self.ARABIC_STYLE_MAP[c] = ar_chars[i]
+            self.ARABIC_STYLE_MAP[c] = safe_mixed_upper[i]
         
         # ═══ Cross-Script: Fairy (Cherokee) ═══
         fairy_chars = 'ᏗᏰፈᎴᏋᎦᎶᏂᎥᏠᏦᏝᎷᏁᎧᎮᎤᏒᏕᏖᏬᏉᏇጀᎩፚ'
@@ -829,9 +839,62 @@ class YayTextMesslettersObfuscator:
             'v': 'ᚹ', 'V': 'ᚹ', 'w': 'ᚹ', 'W': 'ᚹ', 'x': 'ᚲᛊ', 'X': 'ᚲᛊ',
             'y': 'ᛁ', 'Y': 'ᛁ', 'z': 'ᛉ', 'Z': 'ᛉ',
         }
+        
+        # ═══ Latin Extended-A/B (آمنة تماماً - تبدو لاتينية عادية) ═══
+        # هذه الأحرف من نطاق Latin Extended ولا تراقبها أي بوت حماية
+        ext_lower = 'āƀčḋēḟḡħīĵķĺṁņōṗɋŗşţūṽẁẋȳż'
+        ext_upper = 'ĀɃČḊĒḞḠĦĪĴĶĹṀŅŌṖɊŖŞŢŪṼẀẊȲŻ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.LATIN_EXTENDED_MAP[c] = ext_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.LATIN_EXTENDED_MAP[c] = ext_upper[i]
+        for i in range(10):
+            self.LATIN_EXTENDED_MAP[str(i)] = chr(0xFF10 + i)
+        
+        # ═══ Enclosed Alphanumerics (U+2460) ═══
+        enc_digits = '⓪①②③④⑤⑥⑦⑧⑨'
+        enc_upper = 'ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ'
+        enc_lower = 'ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ'
+        for i in range(10):
+            self.ENCLOSED_MAP[str(i)] = enc_digits[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.ENCLOSED_MAP[c] = enc_upper[i]
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.ENCLOSED_MAP[c] = enc_lower[i]
+        
+        # ═══ Medieval Latin (Latin Extended-D) - آمن ومتنوع ═══
+        med_lower = 'ꜳƀꜵꜷꜹꜻꜽꜿꝁꝃꝅꝇꝉꝋꝍꝏꝑꝓꝕꝗꝙꝛꝝꝟꝡꝣ'
+        med_upper = 'ꜲɃꜴꜶꜸꜺꜼꜾꝀꝂꝄꝆꝈꝊꝌꝎꝐꝒꝔꝖꝘꝚꝜꝞꝠꝢ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.MEDIEVAL_MAP[c] = med_lower[i] if i < len(med_lower) else c
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.MEDIEVAL_MAP[c] = med_upper[i] if i < len(med_upper) else c
+        
+        # ═══ Latin Extended-B/C/D Mixed (آمن تماماً - بناء برمجي) ═══
+        ml_lower_codes = [0x2C7F, 0x0180, 0x0292, 0x0256, 0x0117, 0x0192, 0x0260, 0x0127, 0x026A, 0x0135, 0x0137, 0x013A, 0x1E3F, 0x0144, 0x01A1, 0x1E57, 0x02A0, 0x0159, 0x015F, 0x0163, 0x01B4, 0x1E7D, 0x1E8B, 0x028F, 0x1E91, 0x017C]
+        ml_upper_codes = [0x2C7E, 0x0243, 0x0186, 0x018A, 0x0116, 0x0191, 0x0193, 0x0126, 0x0197, 0x0134, 0x0136, 0x0139, 0x1E3E, 0x0143, 0x01A0, 0x1E56, 0x02A0, 0x0158, 0x015E, 0x0162, 0x01B3, 0x1E7C, 0x1E8A, 0x028E, 0x1E90, 0x017B]
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.MEDIEVAL_LATIN_MAP[c] = chr(ml_lower_codes[i])
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.MEDIEVAL_LATIN_MAP[c] = chr(ml_upper_codes[i])
+        
+        # ═══ IPA Phonetic (مناطق آمنة بالكامل) ═══
+        phon_lower = 'ɐʙɔɖɛƒɢɥɪʝʞʟɱɲɵɸʔɾʃʇʊvʍχʎʑ'
+        phon_upper = 'ⱯƁƆƊƐƑƓĦƗɈĶⱠⱮƝØƤɊɌƧƮɄɅⱲӾɎƵ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.PHONETIC_MAP[c] = phon_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.PHONETIC_MAP[c] = phon_upper[i]
+        
+        # ═══ Regional Indicator Symbols (🇦🇧🇨...) ═══
+        # كل حرف = حرفين Regional Indicator - تبدو كأحرف علم
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.REGIONAL_MAP[c] = chr(0x1F1E6 + i) + chr(0x1F1E6 + (i + 5) % 26)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.REGIONAL_MAP[c] = chr(0x1F1E6 + i) + chr(0x1F1E6 + (i + 5) % 26)
 
     def _build_styles_list(self):
-        """بناء قائمة كل الأنماط المتاحة (45+ نمط)"""
+        """بناء قائمة كل الأنماط المتاحة (50+ نمط)"""
         self.STYLES = [
             ('bold', self.BOLD_MAP),
             ('italic', self.ITALIC_MAP),
@@ -852,7 +915,7 @@ class YayTextMesslettersObfuscator:
             ('fullwidth', self.FULLWIDTH_MAP),
             ('russian', self.RUSSIAN_MAP),
             ('japanese', self.JAPANESE_MAP),
-            ('arabic_style', self.ARABIC_STYLE_MAP),
+            ('arabic_style', self.ARABIC_STYLE_MAP),  # الآن آمنة - Latin Extended
             ('fairy', self.FAIRY_MAP),
             ('wizard', self.WIZARD_MAP),
             ('funky', self.FUNKY_MAP),
@@ -863,6 +926,13 @@ class YayTextMesslettersObfuscator:
             ('sans_italic', self.SANS_ITALIC_MAP),
             ('sans_bold_italic', self.SANS_BOLD_ITALIC_MAP),
             ('sans_mono', self.SANS_MONO_MAP),
+            # ─── أنماط آمنة جديدة (لا تكتشفها بوتات الحماية) ───
+            ('latin_extended', self.LATIN_EXTENDED_MAP),
+            ('enclosed', self.ENCLOSED_MAP),
+            ('medieval', self.MEDIEVAL_MAP),
+            ('medieval_latin', self.MEDIEVAL_LATIN_MAP),
+            ('phonetic', self.PHONETIC_MAP),
+            ('regional', self.REGIONAL_MAP),
         ]
         # Special: -1 strikethrough, -2 underline, -3 inverted
         # -4 zalgo, -5 homoglyphs, -6 greek, -7 rune, -8 upside_down, -9 random_combo
@@ -976,11 +1046,12 @@ class YayTextMesslettersObfuscator:
         for pos in space_positions:
             if random.random() < 0.25:
                 result = result[:pos+1] + random.choice(inv_chars) + result[pos+1:]
-        arabic_variants = {'ي': '\u06CC', 'ك': '\u06A9', 'ه': '\u0647', 'ة': '\u0629'}
+        # تحويلات عربية آمنة (بدون أحرف فارسية)
+        safe_arabic_variants = {'ه': '\u0647', 'ة': '\u0629', 'أ': '\u0623'}
         chars = list(result)
         for i, c in enumerate(chars):
-            if c in arabic_variants and random.random() < 0.06:
-                chars[i] = arabic_variants[c]
+            if c in safe_arabic_variants and random.random() < 0.06:
+                chars[i] = safe_arabic_variants[c]
         result = ''.join(chars)
         if random.random() < 0.2:
             result = result + '\u200F'
@@ -1062,12 +1133,23 @@ class YayTextMesslettersObfuscator:
                 result_list[i] = random.choice(alt_spaces)
         transformed = ''.join(result_list)
 
-        # الطبقة 5: تحويلات عربية خفيفة
-        arabic_variants = {'ي': '\u06CC', 'ك': '\u06A9', 'ه': '\u0647', 'ة': '\u0629', 'أ': '\u0623', 'إ': '\u0625', 'آ': '\u0622'}
+        # الطبقة 5: تحويلات عربية آمنة (بدون أحرف فارسية تكتشفها بوتات الحماية)
+        # استخدام أشكال عربية بديلة من نفس نطاق العربية لكن غير فارسية
+        safe_arabic_variants = {
+            'أ': '\u0623',  # أ → أ (همزة قطع فوق ألف - آمن)
+            'إ': '\u0625',  # إ → إ (همزة قطع تحت ألف - آمن)
+            'آ': '\u0622',  # آ → آ (ألف مدة - آمن)
+            'ة': '\u0629',  # ة → ة (تاء مربوطة - آمن)
+            'ه': '\u0647',  # ه → ه (هاء منفصلة - آمن)
+            # تم إزالة ياء فارسية U+06CC وكاف فارسية U+06A9 لأن بوتات الحماية تكتشفها
+            # بدلاً منها نستخدم أشكال عرض عربية آمنة:
+            'ي': '\u064A',  # ي → ي عربية عادية (ليست فارسية)
+            'ك': '\u0643',  # ك → ك عربية عادية (ليست فارسية)
+        }
         result_list = list(transformed)
         for i, c in enumerate(result_list):
-            if c in arabic_variants and random.random() < 0.05:
-                result_list[i] = arabic_variants[c]
+            if c in safe_arabic_variants and random.random() < 0.05:
+                result_list[i] = safe_arabic_variants[c]
         transformed = ''.join(result_list)
 
         # الطبقة 6: أحرف غير مرئية حول علامات الترقيم
@@ -1979,7 +2061,7 @@ async def fast_post_to_all_groups(messages):
             continue
 
     if total_posts == 0:
-        return 0, 0, "لا توجد مجموعات"
+        return 0, 0, 0
 
     logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × {len(messages)} رسالة (إجمالي ~{total_posts} منشور) 👻شبحي={'✅' if ghost_enabled else '❌'}")
 
@@ -2134,7 +2216,7 @@ async def post_to_all_groups(message):
             continue
 
     if total_posts == 0:
-        return 0, 0, "لا توجد مجموعات"
+        return 0, 0, 0
 
     # كل حساب ينشر في كل مجموعاته الخاصة
     for acc_id, client in list(user_clients.items()):
@@ -2588,10 +2670,10 @@ async def main():
             return
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages LIMIT 1")
-        msg = c.fetchone()
+        c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages")
+        msgs = c.fetchall()
         conn.close()
-        if not msg:
+        if not msgs:
             await event.respond("⚠️ لا توجد رسائل! أضف رسالة أولاً")
             return
         if is_posting_active:
@@ -2599,10 +2681,11 @@ async def main():
             return
         is_posting_active = True
         fast_delay = get_setting('fast_post_delay', '3')
-        await event.respond(f"⚡ بدء النشر السريع لكل المجموعات (كل {fast_delay} ثانية)...")
-        success, fails, total = await fast_post_to_all_groups(msg)
+        await event.respond(f"⚡ بدء النشر السريع لكل المجموعات وكل الرسائل ({len(msgs)} رسالة) (كل {fast_delay} ثانية)...")
+        # نمرر كل الرسائل دفعة واحدة - الدالة ستخلط ترتيبها لكل حساب
+        success, fails, total = await fast_post_to_all_groups(msgs)
         is_posting_active = False
-        await event.respond(f"✅ اكتمل النشر السريع!\n✅ نجاح: {success}\n❌ فشل: {fails}\n📢 من أصل {total} مجموعة")
+        await event.respond(f"✅ اكتمل النشر السريع!\n✅ نجاح: {success}\n❌ فشل: {fails}\n📢 من أصل {total} مجموعة\n📝 عدد الرسائل: {len(msgs)}")
 
     @bot.on(events.NewMessage(pattern='/stop_posting'))
     async def stop_posting_command(event):
@@ -2683,13 +2766,11 @@ async def main():
             total_success = 0
             total_fails = 0
             total_groups = 0
-            for msg in msgs:
-                if not is_posting_active:
-                    break
-                success, fails, total = await fast_post_to_all_groups(msg)
-                total_success += success
-                total_fails += fails
-                total_groups = max(total_groups, total)
+            # نمرر كل الرسائل دفعة واحدة - الدالة ستخلط ترتيبها لكل حساب
+            success, fails, total = await fast_post_to_all_groups(msgs)
+            total_success += success
+            total_fails += fails
+            total_groups = max(total_groups, total)
             is_posting_active = False
             await event.edit(
                 f"✅ **اكتمل النشر السريع!**\n\n✅ نجاح: {total_success}\n❌ فشل: {total_fails}\n📢 من أصل {total_groups} مجموعة\n📝 عدد الرسائل: {len(msgs)}\n⚡ تم النشر بمعدل {fast_delay} ثانية",
