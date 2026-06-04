@@ -135,6 +135,8 @@ def init_db():
         set_setting('use_jitter', 'on')
     if get_setting('obfuscation_enabled') is None:
         set_setting('obfuscation_enabled', 'on')
+    if get_setting('yaytext_enabled') is None:
+        set_setting('yaytext_enabled', 'on')
 
     conn.commit()
     conn.close()
@@ -382,6 +384,468 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+# ═══════════════════════════════════════════════
+#  نظام أنماط YayText المتقدم 🔄✨
+# ═══════════════════════════════════════════════
+class YayTextObfuscator:
+    """
+    نظام تحويل النصوص إلى أنماط Unicode مزخرفة ومشوشة
+    مستوحى من YayText - يحول النص لأشكال يونيكود مختلفة
+    بحيث يصبح غير قابل للتعرف من بوتات الحماية
+    مع بقائه مقروءاً تماماً للمستخدمين
+    """
+
+    # ─── خط عريض (Math Bold) ───
+    BOLD_MAP = {}
+    # ─── خط مائل (Math Italic) ───
+    ITALIC_MAP = {}
+    # ─── خط عريض مائل (Math Bold Italic) ───
+    BOLD_ITALIC_MAP = {}
+    # ─── خط Monospace ───
+    MONOSPACE_MAP = {}
+    # ─── خط Cursive / Script ───
+    SCRIPT_MAP = {}
+    # ─── خط Cursive عريض ───
+    BOLD_SCRIPT_MAP = {}
+    # ─── خط Fraktur (قوطي) ───
+    FRAKTUR_MAP = {}
+    # ─── خط Fraktur عريض ───
+    BOLD_FRAKTUR_MAP = {}
+    # ─── خط Double-Struck ───
+    DOUBLE_STRUCK_MAP = {}
+    # ─── خط Sans-Serif ───
+    SANS_MAP = {}
+    # ─── خط Sans-Serif عريض ───
+    SANS_BOLD_MAP = {}
+    # ─── خط Sans-Serif مائل ───
+    SANS_ITALIC_MAP = {}
+    # ─── خط Sans-Serif عريض مائل ───
+    SANS_BOLD_ITALIC_MAP = {}
+    # ─── خط Monospace Sans ───
+    SANS_MONO_MAP = {}
+    # ─── خط Small Caps ───
+    SMALL_CAPS_MAP = {}
+
+    # ─── Homoglyphs متشابهة ───
+    HOMOGLYPH_MAP = {}
+
+    # ─── زخارف ورموز ───
+    DECORATIONS = []
+
+    def __init__(self):
+        self._build_maps()
+        self._last_style = -1
+
+    def _build_maps(self):
+        """بناء جداول التحويل لكل نمط"""
+        # الأحرف اللاتينية الكبيرة A-Z (ASCII 65-90)
+        # Bold: U+1D400 - U+1D419
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_MAP[c] = chr(0x1D400 + i)
+        # Italic: U+1D434 - U+1D44D
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.ITALIC_MAP[c] = chr(0x1D434 + i)
+            # استثناء: h = U+210E (Planck)
+            if c == 'H':
+                self.ITALIC_MAP['H'] = '\u210E'
+        # Bold Italic: U+1D468 - U+1D481
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_ITALIC_MAP[c] = chr(0x1D468 + i)
+        # Monospace: U+1D670 - U+1D689
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.MONOSPACE_MAP[c] = chr(0x1D670 + i)
+        # Script: U+1D49C - U+1D4B5
+        script_upper = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+        script_exceptions = {'B': '\u212C', 'E': '\u2130', 'F': '\u2131',
+                            'H': '\u210B', 'I': '\u2110', 'L': '\u2112',
+                            'M': '\u2133', 'R': '\u211B'}
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            if c in script_exceptions:
+                self.SCRIPT_MAP[c] = script_exceptions[c]
+            else:
+                self.SCRIPT_MAP[c] = chr(0x1D49C + i)
+        # Bold Script: U+1D4D0 - U+1D4E9
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4D0 + i)
+        # Fraktur: U+1D504 - U+1D51D
+        fraktur_exceptions = {'C': '\u212D', 'H': '\u210C', 'I': '\u2111',
+                              'R': '\u211C', 'Z': '\u2128'}
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            if c in fraktur_exceptions:
+                self.FRAKTUR_MAP[c] = fraktur_exceptions[c]
+            else:
+                self.FRAKTUR_MAP[c] = chr(0x1D504 + i)
+        # Bold Fraktur: U+1D56C - U+1D585
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D56C + i)
+        # Double-Struck: U+1D538 - U+1D551
+        ds_exceptions = {'C': '\u2102', 'H': '\u210D', 'N': '\u2115',
+                         'P': '\u2119', 'Q': '\u211A', 'R': '\u211D', 'Z': '\u2124'}
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            if c in ds_exceptions:
+                self.DOUBLE_STRUCK_MAP[c] = ds_exceptions[c]
+            else:
+                self.DOUBLE_STRUCK_MAP[c] = chr(0x1D538 + i)
+        # Sans-Serif: U+1D5A0 - U+1D5B9
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_MAP[c] = chr(0x1D5A0 + i)
+        # Sans-Serif Bold: U+1D5D4 - U+1D5ED
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_BOLD_MAP[c] = chr(0x1D5D4 + i)
+        # Sans-Serif Italic: U+1D608 - U+1D621
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_ITALIC_MAP[c] = chr(0x1D608 + i)
+        # Sans-Serif Bold Italic: U+1D63C - U+1D655
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D63C + i)
+        # Sans-Serif Monospace: U+1D6A8 - U+1D6C1 (هذه فعلياً Math Mono)
+        # لكن النطاق الصحيح هو U+1D6A8 لـ Mathematical Sans-Serif
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.SANS_MONO_MAP[c] = chr(0x1D6A8 + i)
+
+        # ─── الأحرف اللاتينية الصغيرة a-z ───
+        # Bold: U+1D41A - U+1D433
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_MAP[c] = chr(0x1D41A + i)
+        # Italic: U+1D44E - U+1D467
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.ITALIC_MAP[c] = chr(0x1D44E + i)
+            if c == 'h':
+                self.ITALIC_MAP['h'] = '\u210F'
+        # Bold Italic: U+1D482 - U+1D49B
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_ITALIC_MAP[c] = chr(0x1D482 + i)
+        # Monospace: U+1D68A - U+1D6A3
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.MONOSPACE_MAP[c] = chr(0x1D68A + i)
+        # Script: U+1D4B6 - U+1D4CF
+        script_lower_exceptions = {'e': '\u212F', 'g': '\u210A', 'o': '\u2134'}
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            if c in script_lower_exceptions:
+                self.SCRIPT_MAP[c] = script_lower_exceptions[c]
+            else:
+                self.SCRIPT_MAP[c] = chr(0x1D4B6 + i)
+        # Bold Script: U+1D4EA - U+1D503
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4EA + i)
+        # Fraktur: U+1D51E - U+1D537
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FRAKTUR_MAP[c] = chr(0x1D51E + i)
+        # Bold Fraktur: U+1D586 - U+1D59F
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D586 + i)
+        # Double-Struck: U+1D552 - U+1D56B
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.DOUBLE_STRUCK_MAP[c] = chr(0x1D552 + i)
+        # Sans-Serif: U+1D5BA - U+1D5D3
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_MAP[c] = chr(0x1D5BA + i)
+        # Sans-Serif Bold: U+1D5EE - U+1D607
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_BOLD_MAP[c] = chr(0x1D5EE + i)
+        # Sans-Serif Italic: U+1D622 - U+1D63B
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_ITALIC_MAP[c] = chr(0x1D622 + i)
+        # Sans-Serif Bold Italic: U+1D656 - U+1D66F
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D656 + i)
+        # Sans-Serif Monospace: U+1D6C2 - U+1D6DB
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.SANS_MONO_MAP[c] = chr(0x1D6C2 + i)
+
+        # ─── الأرقام 0-9 ───
+        # Bold: U+1D7CE - U+1D7D7
+        for i in range(10):
+            self.BOLD_MAP[str(i)] = chr(0x1D7CE + i)
+        # Double-Struck: أرقام بخط مزدوج
+        ds_digits = {'0': '\U0001D7D8', '1': '\U0001D7D9', '2': '\U0001D7DA',
+                     '3': '\U0001D7DB', '4': '\U0001D7DC', '5': '\U0001D7DD',
+                     '6': '\U0001D7DE', '7': '\U0001D7DF', '8': '\U0001D7E0',
+                     '9': '\U0001D7E1'}
+        self.DOUBLE_STRUCK_MAP.update(ds_digits)
+        # Sans: U+1D7E2 - U+1D7EB
+        for i in range(10):
+            self.SANS_MAP[str(i)] = chr(0x1D7E2 + i)
+        # Sans Bold: U+1D7EC - U+1D7F5
+        for i in range(10):
+            self.SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
+        # Monospace: U+1D7F6 - U+1D7FF
+        for i in range(10):
+            self.MONOSPACE_MAP[str(i)] = chr(0x1D7F6 + i)
+
+        # ─── Small Caps ───
+        small_caps = {
+            'A': '\u1D00', 'B': '\u0299', 'C': '\u1D04', 'D': '\u1D05',
+            'E': '\u1D07', 'F': '\uA730', 'G': '\u0262', 'H': '\u029C',
+            'I': '\u026A', 'J': '\u1D0A', 'K': '\u1D0B', 'L': '\u029F',
+            'M': '\u1D0D', 'N': '\u0274', 'O': '\u1D0F', 'P': '\u1D18',
+            'Q': '\u01EB', 'R': '\u0280', 'S': '\uA731', 'T': '\u1D1B',
+            'U': '\u1D1C', 'V': '\u1D20', 'W': '\u1D21', 'X': '\uA78D',
+            'Y': '\u028F', 'Z': '\u1D22',
+        }
+        self.SMALL_CAPS_MAP = small_caps
+
+        # ─── Homoglyphs ───
+        self.HOMOGLYPH_MAP = {
+            'a': '\u0430', 'A': '\u0410',  # Cyrillic
+            'c': '\u0441', 'C': '\u0421',
+            'e': '\u0435', 'E': '\u0415',
+            'o': '\u043E', 'O': '\u041E',
+            'p': '\u0440', 'P': '\u0420',
+            'x': '\u0445', 'X': '\u0425',
+            'y': '\u0443', 'Y': '\u0423',
+            'i': '\u0456', 'I': '\u0406',
+            'j': '\u0458', 'J': '\u0408',
+            's': '\u0455', 'S': '\u0405',
+            'k': '\u043A', 'K': '\u041A',
+            'H': '\u041D', 'T': '\u0422',
+            'M': '\u041C', 'B': '\u0412',
+        }
+
+        # ─── الزخارف والرموز ───
+        self.DECORATIONS = [
+            # حروف محاطة بدوائر
+            ['\u24D0', '\u24D1', '\u24D2', '\u24D3', '\u24D4', '\u24D5',
+             '\u24D6', '\u24D7', '\u24D8', '\u24D9', '\u24DA', '\u24DB',
+             '\u24DC', '\u24DD', '\u24DE', '\u24DF', '\u24E0', '\u24E1',
+             '\u24E2', '\u24E3', '\u24E4', '\u24E5', '\u24E6', '\u24E7',
+             '\u24E8', '\u24E9'],
+            # حروف محاطة بدوائر مملوءة
+            ['\u1F150', '\u1F151', '\u1F152', '\u1F153', '\u1F154',
+             '\u1F155', '\u1F156', '\u1F157', '\u1F158', '\u1F159',
+             '\u1F15A', '\u1F15B', '\u1F15C', '\u1F15D', '\u1F15E',
+             '\u1F15F', '\u1F160', '\u1F161', '\u1F162', '\u1F163'],
+            # حروف مربعة مملوءة
+            ['\u1F170', '\u1F171', '\u1F172', '\u1F173', '\u1F174',
+             '\u1F175', '\u1F176', '\u1F177', '\u1F178', '\u1F179',
+             '\u1F17A', '\u1F17B', '\u1F17C', '\u1F17D', '\u1F17E',
+             '\u1F17F', '\u1F180', '\u1F181', '\u1F182', '\u1F183'],
+        ]
+
+        # قائمة كل الأنماط المتاحة
+        self.STYLES = [
+            ('bold', self.BOLD_MAP),
+            ('italic', self.ITALIC_MAP),
+            ('bold_italic', self.BOLD_ITALIC_MAP),
+            ('monospace', self.MONOSPACE_MAP),
+            ('script', self.SCRIPT_MAP),
+            ('bold_script', self.BOLD_SCRIPT_MAP),
+            ('fraktur', self.FRAKTUR_MAP),
+            ('bold_fraktur', self.BOLD_FRAKTUR_MAP),
+            ('double_struck', self.DOUBLE_STRUCK_MAP),
+            ('sans', self.SANS_MAP),
+            ('sans_bold', self.SANS_BOLD_MAP),
+            ('sans_italic', self.SANS_ITALIC_MAP),
+            ('sans_bold_italic', self.SANS_BOLD_ITALIC_MAP),
+            ('small_caps', self.SMALL_CAPS_MAP),
+        ]
+
+    def _apply_map(self, text, char_map):
+        """تطبيق جدول تحويل على النص"""
+        result = []
+        for c in text:
+            if c in char_map:
+                result.append(char_map[c])
+            else:
+                result.append(c)
+        return ''.join(result)
+
+    def _apply_strikethrough(self, text):
+        """خط يتوسطه خط: إضافة U+0336 بعد كل حرف"""
+        combining_long = '\u0336'
+        result = []
+        for c in text:
+            if c.isalpha() or c.isdigit():
+                result.append(c + combining_long)
+            else:
+                result.append(c)
+        return ''.join(result)
+
+    def _apply_underline(self, text):
+        """خط مسطر: إضافة U+0332 بعد كل حرف"""
+        combining_low = '\u0332'
+        result = []
+        for c in text:
+            if c.isalpha() or c.isdigit():
+                result.append(c + combining_low)
+            else:
+                result.append(c)
+        return ''.join(result)
+
+    def _apply_homoglyphs(self, text, intensity=0.35):
+        """استبدال أحرف بنظيراتها المتشابهة (Cyrillic etc)"""
+        result = []
+        for c in text:
+            if c in self.HOMOGLYPH_MAP and random.random() < intensity:
+                result.append(self.HOMOGLYPH_MAP[c])
+            else:
+                result.append(c)
+        return ''.join(result)
+
+    def _apply_decorations(self, text, intensity=0.08):
+        """إضافة رموز زخرفية عشوائية قبل/بعد كلمات"""
+        words = text.split(' ')
+        decorated = []
+        for word in words:
+            if not word:
+                decorated.append(word)
+                continue
+            # تطبيق زخرفة على الحرف الأول أحياناً
+            if word[0].isalpha() and random.random() < intensity:
+                first_upper = word[0].upper()
+                if first_upper >= 'A' and first_upper <= 'Z':
+                    idx = ord(first_upper) - ord('A')
+                    dec_set = random.choice(self.DECORATIONS)
+                    if idx < len(dec_set):
+                        word = dec_set[idx] + word[1:]
+            decorated.append(word)
+        return ' '.join(decorated)
+
+    def _get_random_style(self):
+        """اختيار نمط عشوائي مختلف عن السابق"""
+        available = list(range(len(self.STYLES)))
+        if self._last_style in available and len(available) > 1:
+            available.remove(self._last_style)
+        # أضف أنماط Strikethrough و Underline كخيارات
+        available.append(-1)  # strikethrough
+        available.append(-2)  # underline
+        available.append(-3)  # homoglyphs only
+        chosen = random.choice(available)
+        self._last_style = chosen
+        return chosen
+
+    def _extract_protected_segments(self, text):
+        """استخراج الروابط والمعرفات لحمايتها من التحويل"""
+        protected = []
+        # حماية الروابط الكاملة (https:// و http://)
+        for match in re.finditer(r'https?://\S+', text):
+            protected.append((match.start(), match.end(), match.group()))
+        # حماية @username
+        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+            protected.append((match.start(), match.end(), match.group()))
+        # ترتيب حسب الموقع وإزالة التداخلات
+        protected.sort(key=lambda x: x[0])
+        # إزالة الأجزاء المتداخلة
+        clean = []
+        for seg in protected:
+            if not clean:
+                clean.append(seg)
+            elif seg[0] >= clean[-1][1]:
+                clean.append(seg)
+        return clean
+
+    def obfuscate(self, text):
+        """
+        التحويل الرئيسي - يختار نمطاً عشوائياً ويطبقه
+        مع حماية الروابط والمعرفات
+        """
+        if not text or len(text) < 2:
+            return text
+
+        # حماية الروابط والمعرفات
+        protected = self._extract_protected_segments(text)
+
+        # تقسيم النص إلى أجزاء محمية وغير محمية
+        segments = []
+        last_end = 0
+        for start, end, original in protected:
+            if start > last_end:
+                segments.append(('text', text[last_end:start]))
+            segments.append(('protected', original))
+            last_end = end
+        if last_end < len(text):
+            segments.append(('text', text[last_end:]))
+
+        # إذا كل النص محمي (رابط فقط مثلاً)
+        text_segments = [s for s in segments if s[0] == 'text']
+        if not text_segments or all(len(s[1].strip()) < 2 for s in text_segments):
+            # لا يوجد نص كافٍ للتحويل، نطبق homoglyphs فقط
+            return self._apply_homoglyphs(text, intensity=0.2)
+
+        # اختيار النمط
+        style_idx = self._get_random_style()
+
+        # تطبيق النمط على الأجزاء غير المحمية
+        result_segments = []
+        for seg_type, seg_text in segments:
+            if seg_type == 'protected':
+                result_segments.append(seg_text)
+            else:
+                if style_idx >= 0:
+                    style_name, char_map = self.STYLES[style_idx]
+                    transformed = self._apply_map(seg_text, char_map)
+                elif style_idx == -1:
+                    # Strikethrough
+                    transformed = self._apply_strikethrough(seg_text)
+                elif style_idx == -2:
+                    # Underline
+                    transformed = self._apply_underline(seg_text)
+                elif style_idx == -3:
+                    # Homoglyphs فقط
+                    transformed = self._apply_homoglyphs(seg_text, intensity=0.5)
+                else:
+                    transformed = seg_text
+
+                # إضافة لمسة homoglyphs خفيفة إضافية (10%)
+                if style_idx >= 0 and style_idx != -3:
+                    transformed = self._apply_homoglyphs(transformed, intensity=0.1)
+
+                # إضافة زخرفة خفيفة (5%)
+                if random.random() < 0.3:
+                    transformed = self._apply_decorations(transformed, intensity=0.05)
+
+                result_segments.append(transformed)
+
+        return ''.join(result_segments)
+
+    def get_style_name(self, idx=None):
+        """اسم النمط الحالي"""
+        if idx is None:
+            idx = self._last_style
+        if idx >= 0 and idx < len(self.STYLES):
+            return self.STYLES[idx][0]
+        elif idx == -1:
+            return 'strikethrough'
+        elif idx == -2:
+            return 'underline'
+        elif idx == -3:
+            return 'homoglyphs'
+        return 'unknown'
+
+    def get_all_style_names(self):
+        """أسماء كل الأنماط المتاحة"""
+        names = [s[0] for s in self.STYLES]
+        names.extend(['strikethrough', 'underline', 'homoglyphs_only'])
+        return names
+
+    def preview_all(self, text):
+        """معاينة النص بكل الأنماط"""
+        if not text:
+            return {}
+        results = {}
+        for name, char_map in self.STYLES:
+            results[name] = self._apply_map(text, char_map)
+        results['strikethrough'] = self._apply_strikethrough(text)
+        results['underline'] = self._apply_underline(text)
+        results['homoglyphs'] = self._apply_homoglyphs(text, intensity=0.5)
+        return results
+
+
+yaytext_obfuscator = YayTextObfuscator()
+
+
+def yaytext_obfuscate(text):
+    """
+    تطبيق أنماط YayText على النص - تُستدعى قبل الإرسال مباشرة
+    يتم اختيار نمط عشوائي مختلف لكل رسالة
+    """
+    if get_setting('yaytext_enabled', 'on') != 'on':
+        return text
+    if not text:
+        return text
+    return yaytext_obfuscator.obfuscate(text)
+
 
 # ═══════════════════════════════════════════════
 #  Text variation (غير مرئي للمستخدم)
@@ -755,6 +1219,7 @@ async def fast_post_to_all_groups(message):
             if obfuscation_on:
                 varied = obfuscate_for_humans(varied)
             encrypted_content = encrypt_text(varied, group_id)
+            encrypted_content = yaytext_obfuscate(encrypted_content)
         else:
             encrypted_content = ""
 
@@ -837,6 +1302,7 @@ async def post_to_all_groups(message):
             if obfuscation_on:
                 varied = obfuscate_for_humans(varied)
             encrypted_content = encrypt_text(varied, group_id)
+            encrypted_content = yaytext_obfuscate(encrypted_content)
         else:
             encrypted_content = ""
 
@@ -1056,6 +1522,7 @@ def get_main_menu():
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
+    yt_status = "✅" if get_setting('yaytext_enabled', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '100')
     fast_delay = get_setting('fast_post_delay', '3')
@@ -1071,6 +1538,7 @@ def get_main_menu():
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
          Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"🔄 أنماط YayText {yt_status}", b"toggle_yaytext")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
@@ -1106,11 +1574,13 @@ def get_settings_menu():
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
+    yt_status = "✅" if get_setting('yaytext_enabled', 'on') == 'on' else "❌"
     return [
         [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
         [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
         [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"🔄 أنماط YayText {yt_status}", b"toggle_yaytext")],
         [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
         [Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
         [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
@@ -1596,6 +2066,33 @@ async def main():
             set_setting('use_jitter', new_val)
             await event.answer(f"Jitter: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+        elif data == 'toggle_yaytext':
+            current = get_setting('yaytext_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('yaytext_enabled', new_val)
+            if new_val == 'on':
+                example = "Hello World عروض حصرية"
+                preview = yaytext_obfuscator.obfuscate(example)
+                await event.answer("أنماط YayText: مفعلة ✨")
+                await event.edit(
+                    f"🔄 **أنماط YayText: مفعلة** ✅\n\n"
+                    f"📝 **معاينة:**\n"
+                    f"الأصلي: {example}\n"
+                    f"المحول: {preview}\n\n"
+                    f"🎨 **الأنماط المتاحة ({len(yaytext_obfuscator.get_all_style_names())}):**\n"
+                    f"• Bold, Italic, Bold Italic\n"
+                    f"• Monospace, Script, Bold Script\n"
+                    f"• Fraktur, Bold Fraktur\n"
+                    f"• Double-Struck, Sans-Serif\n"
+                    f"• Small Caps, Strikethrough\n"
+                    f"• Underline, Homoglyphs\n"
+                    f"• زخارف ورموز\n\n"
+                    f"🔄 كل رسالة تستخدم نمط مختلف تلقائياً",
+                    buttons=get_settings_menu()
+                )
+            else:
+                await event.answer("أنماط YayText: معطلة")
+                await event.edit("🔄 **أنماط YayText: معطلة** ❌", buttons=get_settings_menu())
 
         elif data == 'blacklist':
             bl_count = len(get_blacklisted_groups())
