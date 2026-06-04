@@ -1032,28 +1032,28 @@ class YayTextMesslettersObfuscator:
         return text
 
     def _obfuscate_display_text(self, text, style_idx):
+        """تشويش نص العرض للروابط - خفيف للحفاظ على المقروئية"""
         if not text or len(text) < 2:
             return text
-        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061']
+        # أحرف غير مرئية في البداية فقط
+        inv_chars = ['\u200B', '\u200C', '\uFEFF']
         result = random.choice(inv_chars) + text
-        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2008']
+        # مسافات بديلة خفيفة
+        alt_spaces = ['\u00A0', '\u2009', '\u202F']
         chars = list(result)
         for i, c in enumerate(chars):
-            if c == ' ' and random.random() < 0.4:
+            if c == ' ' and random.random() < 0.25:
                 chars[i] = random.choice(alt_spaces)
         result = ''.join(chars)
-        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F']]
-        for pos in space_positions:
-            if random.random() < 0.25:
-                result = result[:pos+1] + random.choice(inv_chars) + result[pos+1:]
-        # تحويلات عربية آمنة (بدون أحرف فارسية)
-        safe_arabic_variants = {'ه': '\u0647', 'ة': '\u0629', 'أ': '\u0623'}
+        # تحويلات عربية آمنة (خفيفة جداً)
+        safe_arabic_variants = {'ه': '\u0647', 'ة': '\u0629'}
         chars = list(result)
         for i, c in enumerate(chars):
-            if c in safe_arabic_variants and random.random() < 0.06:
+            if c in safe_arabic_variants and random.random() < 0.04:
                 chars[i] = safe_arabic_variants[c]
         result = ''.join(chars)
-        if random.random() < 0.2:
+        # علامة RTL خفية
+        if random.random() < 0.15:
             result = result + '\u200F'
         return result
 
@@ -1082,143 +1082,187 @@ class YayTextMesslettersObfuscator:
         return random.choice(displays)
 
     def _apply_style_to_text(self, text, style_idx):
-        """12 طبقة تشويش متراكبة"""
+        """نظام تشويش ذكي - يحافظ على المقروئية العربية مع تشويش البوتات
+        
+        الاستراتيجية الجديدة:
+        1. النص العربي: تشويش خفيف فقط (أحرف غير مرئية + مسافات بديلة) - لا يُمسّ
+        2. الأحرف اللاتينية: تحويل لنمط Unicode مختلف
+        3. الأرقام: تحويل لأرقام Unicode مختلفة
+        4. الروابط والمعرفات: تُعالج بشكل منفصل في obfuscate()
+        """
         if not text:
             return text
 
-        # الطبقة 1: نمط Unicode أساسي
-        if style_idx >= 0:
-            _, char_map = self.STYLES[style_idx]
-            transformed = self._apply_map_preserve_digits(text, char_map)
-        elif style_idx == -1:
-            transformed = self._apply_strikethrough(text)
-        elif style_idx == -2:
-            transformed = self._apply_underline(text)
-        elif style_idx == -3:
-            transformed = self._apply_inverted(text)
-        elif style_idx == -4:
-            transformed = self._apply_zalgo(text, intensity=2)
-        elif style_idx == -5:
-            transformed = self._apply_homoglyphs(text, intensity=0.5)
-        elif style_idx == -6:
-            transformed = self._apply_greek(text)
-        elif style_idx == -7:
-            transformed = self._apply_rune(text)
-        elif style_idx == -8:
-            transformed = self._apply_upside_down(text)
-        elif style_idx == -9:
-            transformed = self._apply_random_combo(text)
-        else:
+        # ═══ تحليل النص: هل هو عربي بالأساس؟ ═══
+        arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF' or '\u0750' <= c <= '\u077F' or '\uFB50' <= c <= '\uFDFF' or '\uFE70' <= c <= '\uFEFF')
+        latin_chars = sum(1 for c in text if ('a' <= c <= 'z') or ('A' <= c <= 'Z'))
+        total_alpha = arabic_chars + latin_chars
+        is_mostly_arabic = total_alpha > 0 and arabic_chars > latin_chars
+        
+        # ═══ الطبقة 1: تحويل ذكي حسب نوع النص ═══
+        if is_mostly_arabic:
+            # نص عربي: تحويلات آمنة تحافظ على المقروئية
             transformed = text
+            if latin_chars > 0 and style_idx >= 0:
+                _, char_map = self.STYLES[style_idx]
+                result = []
+                for c in transformed:
+                    if c in char_map:
+                        result.append(char_map[c])
+                    else:
+                        result.append(c)
+                transformed = ''.join(result)
+            # تشويش عربي ذكي: أشكال عرض مختلفة لنفس الحرف
+            # هذه الأحرف تبدو متطابقة مرئياً لكن لها كود Unicode مختلف
+            arabic_display_variants = [
+                # مجموعة 1: أشكال عربية مختلفة التمثيل
+                {'ا': '\u0627', 'أ': '\u0623', 'إ': '\u0625', 'آ': '\u0622',
+                 'ة': '\u0629', 'ه': '\u0647', 'و': '\u0648', 'ى': '\u0649'},
+                # مجموعة 2: ألف ممدودة + تاء مربوطة مفتوحة
+                {'ا': '\u0627', 'أ': '\u0623', 'ة': '\u0629', 'ه': '\u0647',
+                 'ل': '\u0644', 'لا': '\uFEFB', 'لام': '\uFEFD'},
+                # مجموعة 3: أشكال العرض العربية (Presentation Forms-B)
+                # هذه تبدو نفس الشيء مرئياً لكن كود مختلف
+                {},
+            ]
+            # اختيار عشوائي لمجموعة التحويل
+            chosen_variants = random.choice(arabic_display_variants)
+            result = []
+            i = 0
+            while i < len(transformed):
+                # تحقق من الأحرف المركبة أولاً (مثل "لا")
+                if i < len(transformed) - 1:
+                    two_chars = transformed[i:i+2]
+                    if two_chars == 'لا' and 'لا' in chosen_variants and random.random() < 0.3:
+                        result.append(chosen_variants['لا'])
+                        i += 2
+                        continue
+                c = transformed[i]
+                if c in chosen_variants and random.random() < 0.3:
+                    result.append(chosen_variants[c])
+                else:
+                    result.append(c)
+                i += 1
+            transformed = ''.join(result)
+        else:
+            # نص لاتيني: تحويل كامل بالنمط المختار
+            if style_idx >= 0:
+                _, char_map = self.STYLES[style_idx]
+                transformed = self._apply_map_preserve_digits(text, char_map)
+            elif style_idx == -1:
+                transformed = self._apply_strikethrough(text)
+            elif style_idx == -2:
+                transformed = self._apply_underline(text)
+            elif style_idx == -3:
+                transformed = self._apply_inverted(text)
+            elif style_idx == -4:
+                transformed = self._apply_zalgo(text, intensity=2)
+            elif style_idx == -5:
+                transformed = self._apply_homoglyphs(text, intensity=0.5)
+            elif style_idx == -6:
+                transformed = self._apply_greek(text)
+            elif style_idx == -7:
+                transformed = self._apply_rune(text)
+            elif style_idx == -8:
+                transformed = self._apply_upside_down(text)
+            elif style_idx == -9:
+                transformed = self._apply_random_combo(text)
+            else:
+                transformed = text
 
-        # الطبقة 2: Homoglyphs إضافية
-        if style_idx not in (-5, -6, -7):
-            transformed = self._apply_homoglyphs(transformed, intensity=0.15)
+        # ═══ الطبقة 2: Homoglyphs خفيفة على اللاتينية فقط ═══
+        if style_idx not in (-5, -6, -7) and latin_chars > 0:
+            transformed = self._apply_homoglyphs_latin_only(transformed, intensity=0.2)
 
-        # الطبقة 3: أحرف غير مرئية بين الكلمات
-        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061', '\u2062', '\u2063']
-        words = transformed.split(' ')
-        new_words = []
-        for i, w in enumerate(words):
-            new_words.append(w)
-            if i < len(words) - 1 and random.random() < 0.2:
-                new_words.append(random.choice(inv_chars))
-        transformed = ' '.join(new_words)
-
-        # الطبقة 4: مسافات بديلة
-        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2008', '\u2007', '\u2006', '\u2005', '\u2004']
+        # ═══ الطبقة 3: أحرف غير مرئية استراتيجية ═══
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060']
+        
+        # إضافة حرف غير مرئي في البداية
+        transformed = random.choice(inv_chars[:3]) + transformed
+        
+        # أحرف غير مرئية بين الكلمات العربية (خفيف - 15% احتمال)
+        if is_mostly_arabic and len(transformed) > 10:
+            words = transformed.split(' ')
+            new_words = []
+            for i, w in enumerate(words):
+                new_words.append(w)
+                if i < len(words) - 1 and random.random() < 0.15:
+                    new_words.append(random.choice(inv_chars[:3]))
+            transformed = ' '.join(new_words)
+        
+        # ═══ الطبقة 4: مسافات بديلة (خفيفة) + تحويل أرقام (خفيف) ═══
+        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007']
+        # خرائط أرقام متنوعة - نستخدم فقط الأنماط الواضحة
+        safe_digit_maps = [
+            self.DIGIT_SANS_MAP, self.DIGIT_SANS_BOLD_MAP,
+            self.DIGIT_MONO_MAP, self.DIGIT_FULLWIDTH_MAP,
+        ]
+        chosen_digit_map = random.choice([m for m in safe_digit_maps if m])
         result_list = list(transformed)
+        # لا نحوّل الأرقام إذا كانت متتالية (رقم هاتف) - فقط الأرقام المفردة
+        prev_was_digit = False
         for i, c in enumerate(result_list):
-            if c == ' ' and random.random() < 0.35:
+            if c == ' ' and random.random() < 0.2:
                 result_list[i] = random.choice(alt_spaces)
+            elif c.isdigit() and c in chosen_digit_map:
+                # إذا الرقم السابق كان رقم (رقم هاتف/سعر) لا نحوّله
+                if prev_was_digit:
+                    prev_was_digit = True
+                    continue
+                # أرقام مفردة: 30% احتمال التحويل
+                if random.random() < 0.3:
+                    result_list[i] = chosen_digit_map[c]
+                prev_was_digit = True
+            else:
+                prev_was_digit = False
         transformed = ''.join(result_list)
 
-        # الطبقة 5: تحويلات عربية آمنة (بدون أحرف فارسية تكتشفها بوتات الحماية)
-        # استخدام أشكال عربية بديلة من نفس نطاق العربية لكن غير فارسية
-        safe_arabic_variants = {
-            'أ': '\u0623',  # أ → أ (همزة قطع فوق ألف - آمن)
-            'إ': '\u0625',  # إ → إ (همزة قطع تحت ألف - آمن)
-            'آ': '\u0622',  # آ → آ (ألف مدة - آمن)
-            'ة': '\u0629',  # ة → ة (تاء مربوطة - آمن)
-            'ه': '\u0647',  # ه → ه (هاء منفصلة - آمن)
-            # تم إزالة ياء فارسية U+06CC وكاف فارسية U+06A9 لأن بوتات الحماية تكتشفها
-            # بدلاً منها نستخدم أشكال عرض عربية آمنة:
-            'ي': '\u064A',  # ي → ي عربية عادية (ليست فارسية)
-            'ك': '\u0643',  # ك → ك عربية عادية (ليست فارسية)
-        }
-        result_list = list(transformed)
-        for i, c in enumerate(result_list):
-            if c in safe_arabic_variants and random.random() < 0.05:
-                result_list[i] = safe_arabic_variants[c]
-        transformed = ''.join(result_list)
+        # ═══ الطبقة 5: تحويلات عربية آمنة خفيفة جداً ═══
+        if is_mostly_arabic:
+            # تحويلات تظهر بشكل مختلف للبوتات لكن نفس الشكل للمستخدم
+            safe_arabic_variants = {
+                'أ': '\u0623', 'إ': '\u0625', 'آ': '\u0622',
+                'ة': '\u0629', 'ه': '\u0647',
+            }
+            result_list = list(transformed)
+            for i, c in enumerate(result_list):
+                if c in safe_arabic_variants and random.random() < 0.03:
+                    result_list[i] = safe_arabic_variants[c]
+            transformed = ''.join(result_list)
 
-        # الطبقة 6: أحرف غير مرئية حول علامات الترقيم
+        # ═══ الطبقة 6: أحرف غير مرئية بعد علامات الترقيم (خفيف) ═══
         if len(transformed) > 5:
             punctuation = '،.؛:!؟-'
             result_list = list(transformed)
             insert_positions = []
             for i, c in enumerate(result_list):
-                if c in punctuation and random.random() < 0.3:
-                    insert_positions.append((i + 1, random.choice(inv_chars[:4])))
+                if c in punctuation and random.random() < 0.2:
+                    insert_positions.append((i + 1, random.choice(inv_chars[:3])))
             for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
                 result_list.insert(pos, char)
             transformed = ''.join(result_list)
 
-        # الطبقة 7: علامة RTL خفية
-        if random.random() < 0.2:
+        # ═══ الطبقة 7: علامة RTL خفية ═══
+        if random.random() < 0.15:
             transformed = transformed + '\u200F'
 
-        # الطبقة 8: أحرف غير مرئية كثيفة
-        words = transformed.split(' ')
-        dense_words = []
-        for i, w in enumerate(words):
-            dense_words.append(w)
-            if i < len(words) - 1:
-                num_inv = random.randint(0, 2)
-                for _ in range(num_inv):
-                    dense_words.append(random.choice(inv_chars))
-        transformed = ' '.join(dense_words)
-
-        # الطبقة 9: أحرف غير مرئية بعد أحرف عربية
-        if len(transformed) > 10:
-            chars = list(transformed)
-            insert_positions = []
-            for i in range(len(chars)):
-                if '\u0600' <= chars[i] <= '\u06FF' and random.random() < 0.06:
-                    insert_positions.append((i + 1, random.choice(inv_chars[:4])))
-            for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
-                chars.insert(pos, char)
-            transformed = ''.join(chars)
-
-        # الطبقة 10: Zero-width joiner عشوائي
-        if random.random() < 0.15 and len(transformed) > 15:
-            pos = random.randint(5, len(transformed) - 5)
-            transformed = transformed[:pos] + '\u200D' + transformed[pos:]
-
-        # الطبقة 11: تداخل نمط ثانوي
-        if style_idx >= 0 and random.random() < 0.3:
-            secondary = random.choice([-1, -2, -4, -5])
-            if secondary == -1:
-                chars = list(transformed)
-                for i, c in enumerate(chars):
-                    if c.isalpha() and random.random() < 0.08:
-                        chars[i] = c + '\u0336'
-                transformed = ''.join(chars)
-            elif secondary == -2:
-                chars = list(transformed)
-                for i, c in enumerate(chars):
-                    if c.isalpha() and random.random() < 0.06:
-                        chars[i] = c + '\u0332'
-                transformed = ''.join(chars)
-            elif secondary == -4:
-                transformed = self._apply_zalgo(transformed, intensity=1)
-            elif secondary == -5:
-                transformed = self._apply_homoglyphs(transformed, intensity=0.1)
-
-        # الطبقة 12: بصمة غير مرئية نهائية
-        transformed = random.choice(inv_chars) + transformed + random.choice(inv_chars)
+        # ═══ الطبقة 8: حرف غير مرئي في النهاية (بصمة) ═══
+        transformed = transformed + random.choice(inv_chars[:3])
 
         return transformed
+    
+    def _apply_homoglyphs_latin_only(self, text, intensity=0.2):
+        """تطبيق homoglyphs على الأحرف اللاتينية فقط - لا يمس العربية"""
+        result = []
+        for c in text:
+            if ('a' <= c <= 'z') or ('A' <= c <= 'Z'):
+                if c in self.HOMOGLYPH_MAP and random.random() < intensity:
+                    result.append(self.HOMOGLYPH_MAP[c])
+                else:
+                    result.append(c)
+            else:
+                result.append(c)
+        return ''.join(result)
 
     def _get_random_style(self):
         available = list(range(len(self.STYLES)))
@@ -1980,14 +2024,14 @@ async def send_contact_message(client, chat_id, contact_data, caption):
 # ═══════════════════════════════════════════════
 #  نظام النشر الشبحي 👻 (انشر → انتظر → عدّل/احذف)
 # ═══════════════════════════════════════════════
-async def ghost_post_worker(client, group_id, msg_id, original_msg, lifetime=20, mode='replace'):
+async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime=20, mode='replace', original_raw_content=None, all_messages=None):
     """
-    نظام النشر الشبحي:
-    1. ينشر الرسالة الأصلية
+    نظام النشر الشبحي المحسّن:
+    1. ينشر الرسالة الأصلية (الإعلان مكوّد)
     2. ينتظر عدد الثواني المحدد (المستخدمون يقرؤون الرسالة)
-    3. يعدّل الرسالة بنص مختلف أو يحذفها
-    → بوتات الحماية تحلل الرسالة بعد التعديل = لا تجد الإعلان
-    → المستخدمون قرأوا الرسالة الأصلية بالفعل
+    3. يعدّل الرسالة بنفس الإعلان بتكويد مختلف أو بالإعلان التالي
+    → بوتات الحماية تحلل الرسالة بعد التعديل = لا تجد نفس النمط
+    → المستخدمون يرون الإعلان مرة أخرى بتكويد مختلف!
     """
     try:
         await asyncio.sleep(lifetime)
@@ -2011,25 +2055,52 @@ async def ghost_post_worker(client, group_id, msg_id, original_msg, lifetime=20,
             except:
                 pass
         elif mode == 'replace':
-            # تعديل بنص عادي مختلف تماماً (أقوى طريقة)
+            # 👻 التعديل بنفس الإعلان بتكويد مختلف أو بالإعلان التالي
             try:
-                neutral_texts = [
-                    'شكراً للجميع 👍',
-                    'تم ✅',
-                    'شكراً',
-                    '👍',
-                    '✅',
-                    'تمام',
-                    'حسناً',
-                    '👌',
-                    'thanks',
-                    'ok',
-                    '.',
-                ]
-                await client.edit_message(int(group_id), msg_id, random.choice(neutral_texts))
-                logger.info(f"👻 شبح: تعديل رسالة في {group_id}")
-            except:
-                pass
+                new_content = None
+                use_html = False
+                
+                # الخيار 1: استخدام رسالة مختلفة من الرسائل المضافة (أقوى)
+                if all_messages and len(all_messages) > 1 and random.random() < 0.5:
+                    other_msgs = [m for m in all_messages if m[1]]  # رسائل فيها محتوى
+                    if other_msgs:
+                        chosen = random.choice(other_msgs)
+                        raw_content = chosen[1]
+                        if raw_content:
+                            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                            if yaytext_on:
+                                new_content, use_html = yaytext_obfuscate(raw_content)
+                            else:
+                                obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
+                                varied = vary_text(raw_content)
+                                if obfuscation_on:
+                                    varied = obfuscate_for_humans(varied)
+                                new_content = encrypt_text(varied, group_id)
+                            logger.info(f"👻 شبح: استبدال بإعلان مختلف مكوّد في {group_id}")
+                
+                # الخيار 2: نفس الإعلان بتكويد جديد (نمط مختلف)
+                if not new_content and original_raw_content:
+                    yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                    if yaytext_on:
+                        new_content, use_html = yaytext_obfuscate(original_raw_content)
+                    else:
+                        obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
+                        varied = vary_text(original_raw_content)
+                        if obfuscation_on:
+                            varied = obfuscate_for_humans(varied)
+                        new_content = encrypt_text(varied, group_id)
+                    logger.info(f"👻 شبح: إعادة تكويد نفس الإعلان بنمط مختلف في {group_id}")
+                
+                # الخيار 3: نص محايد (fallback)
+                if not new_content:
+                    neutral_texts = ['شكراً للجميع 👍', 'تم ✅', 'شكراً', '👍', '✅', 'تمام', 'حسناً', '👌', 'thanks', 'ok', '.']
+                    new_content = random.choice(neutral_texts)
+                    logger.info(f"👻 شبح: استبدال بنص محايد في {group_id}")
+                
+                parse_mode = 'html' if use_html else None
+                await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
+            except Exception as e:
+                logger.debug(f"👻 شبح: فشل التعديل ({e})")
     except Exception as e:
         logger.debug(f"👻 شبح: تخطي ({e})")
 
@@ -2127,7 +2198,8 @@ async def fast_post_to_all_groups(messages):
                     if ghost_enabled and sent_msg and msg_type == 'text':
                         asyncio.create_task(ghost_post_worker(
                             client, gid, sent_msg.id, encrypted_content,
-                            lifetime=ghost_lifetime, mode=ghost_mode
+                            lifetime=ghost_lifetime, mode=ghost_mode,
+                            original_raw_content=content, all_messages=msg_order
                         ))
                     
                 except FloodWaitError as e:
@@ -2143,7 +2215,8 @@ async def fast_post_to_all_groups(messages):
                         if ghost_enabled and sent_msg and msg_type == 'text':
                             asyncio.create_task(ghost_post_worker(
                                 client, gid, sent_msg.id, encrypted_content,
-                                lifetime=ghost_lifetime, mode=ghost_mode
+                                lifetime=ghost_lifetime, mode=ghost_mode,
+                                original_raw_content=content, all_messages=msg_order
                             ))
                     except Exception as retry_e:
                         fail_count += 1
