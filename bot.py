@@ -892,6 +892,29 @@ class YayTextMesslettersObfuscator:
             self.REGIONAL_MAP[c] = chr(0x1F1E6 + i) + chr(0x1F1E6 + (i + 5) % 26)
         for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
             self.REGIONAL_MAP[c] = chr(0x1F1E6 + i) + chr(0x1F1E6 + (i + 5) % 26)
+        
+        # ═══ Arabic Smart Obfuscation Maps (NFD Decomposition) ═══
+        # تحويل النماذج المركبة إلى مفككة - يبدو متطابقاً مرئياً لكن الكود مختلف
+        # هذه التقنية أقوى من الأحرف غير المرئية لأنها تغير كود الحرف نفسه
+        self.ARABIC_DECOMPOSE_MAP = {
+            'أ': ('ا', '\u0654'),  # ALEF HAMZA ABOVE → ALEF + HAMZA ABOVE combining
+            'إ': ('ا', '\u0655'),  # ALEF HAMZA BELOW → ALEF + HAMZA BELOW combining
+            'آ': ('ا', '\u0653'),  # ALEF MADDA ABOVE → ALEF + MADDA ABOVE combining
+            'ؤ': ('و', '\u0654'),  # WAW HAMZA → WAW + HAMZA ABOVE combining
+            'ئ': ('ي', '\u0654'),  # YEH HAMZA → YEH + HAMZA ABOVE combining
+        }
+        
+        # Arabic-Indic digits (تبدو نفس الأرقام لكن بكود مختلف)
+        self.ARABIC_DIGIT_MAP = {
+            '0': '\u0660', '1': '\u0661', '2': '\u0662', '3': '\u0663', '4': '\u0664',
+            '5': '\u0665', '6': '\u0666', '7': '\u0667', '8': '\u0668', '9': '\u0669',
+        }
+        
+        # Extended Arabic digits (أرقام أردية - آمنة ومختلفة)
+        self.ARABIC_EXTENDED_DIGIT_MAP = {
+            '0': '\u06F0', '1': '\u06F1', '2': '\u06F2', '3': '\u06F3', '4': '\u06F4',
+            '5': '\u06F5', '6': '\u06F6', '7': '\u06F7', '8': '\u06F8', '9': '\u06F9',
+        }
 
     def _build_styles_list(self):
         """بناء قائمة كل الأنماط المتاحة (50+ نمط)"""
@@ -953,6 +976,91 @@ class YayTextMesslettersObfuscator:
             else:
                 result.append(c)
         return ''.join(result)
+
+    def _apply_arabic_smart_obfuscation(self, text, intensity=0.35):
+        """تطبيق تشويش عربي ذكي يحافظ على المقروئية تماماً
+        
+        تقنيات:
+        1. تحويل النماذج المركبة إلى مفككة (NFC → NFD) - يبدو متطابقاً مرئياً
+        2. أرقام عربية-هندية بدل اللاتينية
+        3. أحرف غير مرئية استراتيجية (متعددة الأنواع)
+        4. مسافات بديلة متنوعة
+        5. علامات RTL/ALM خفية
+        """
+        if not text:
+            return text
+        
+        # ═══ 1. NFD Decomposition - يبدو متطابقاً لكن الكود مختلف ═══
+        result = []
+        for c in text:
+            if c in self.ARABIC_DECOMPOSE_MAP and random.random() < intensity:
+                base, combining = self.ARABIC_DECOMPOSE_MAP[c]
+                result.append(base)
+                result.append(combining)
+            else:
+                result.append(c)
+        text = ''.join(result)
+        
+        # ═══ 2. Arabic-Indic digits (أرقام مفردة فقط وليس أرقام هواتف) ═══
+        result = list(text)
+        prev_was_digit = False
+        for i, c in enumerate(result):
+            if c.isdigit() and c in self.ARABIC_DIGIT_MAP:
+                if prev_was_digit:
+                    prev_was_digit = True
+                    continue
+                if random.random() < 0.25:
+                    digit_map = random.choice([self.ARABIC_DIGIT_MAP, self.ARABIC_EXTENDED_DIGIT_MAP])
+                    result[i] = digit_map[c]
+                prev_was_digit = True
+            else:
+                prev_was_digit = False
+        text = ''.join(result)
+        
+        # ═══ 3. أحرف غير مرئية احترافية (متعددة الأنواع) ═══
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+        
+        # حرف غير مرئي في البداية
+        text = random.choice(inv_chars[:4]) + text
+        
+        # أحرف غير مرئية بين الكلمات العربية
+        words = text.split(' ')
+        new_words = []
+        for i, w in enumerate(words):
+            new_words.append(w)
+            if i < len(words) - 1 and random.random() < 0.2:
+                new_words.append(random.choice(inv_chars[:4]))
+        text = ' '.join(new_words)
+        
+        # أحرف غير مرئية بعد علامات الترقيم العربية
+        arabic_punct = '،.؛:!؟-'
+        result = list(text)
+        insert_positions = []
+        for i, c in enumerate(result):
+            if c in arabic_punct and random.random() < 0.25:
+                insert_positions.append((i + 1, random.choice(inv_chars[:4])))
+        for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
+            result.insert(pos, char)
+        text = ''.join(result)
+        
+        # ═══ 4. مسافات بديلة متنوعة ═══
+        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007', '\u2006', '\u2005']
+        result = list(text)
+        for i, c in enumerate(result):
+            if c == ' ' and random.random() < 0.3:
+                result[i] = random.choice(alt_spaces)
+        text = ''.join(result)
+        
+        # ═══ 5. علامات RTL/ALM خفية ═══
+        if random.random() < 0.2:
+            text = text + '\u200F'  # RTL Mark
+        if random.random() < 0.1:
+            text = '\u061C' + text  # Arabic Letter Mark at start
+        
+        # حرف غير مرئي في النهاية
+        text = text + random.choice(inv_chars[:4])
+        
+        return text
 
     def _apply_strikethrough(self, text):
         result = []
@@ -1032,29 +1140,39 @@ class YayTextMesslettersObfuscator:
         return text
 
     def _obfuscate_display_text(self, text, style_idx):
-        """تشويش نص العرض للروابط - خفيف للحفاظ على المقروئية"""
+        """تشويش نص العرض للروابط - خفيف للحفاظ على المقروئية مع تشويش احترافي"""
         if not text or len(text) < 2:
             return text
-        # أحرف غير مرئية في البداية فقط
-        inv_chars = ['\u200B', '\u200C', '\uFEFF']
-        result = random.choice(inv_chars) + text
-        # مسافات بديلة خفيفة
-        alt_spaces = ['\u00A0', '\u2009', '\u202F']
+        # أحرف غير مرئية احترافية في البداية
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+        result = random.choice(inv_chars[:4]) + text
+        if random.random() < 0.3:
+            result = random.choice(inv_chars[:4]) + result
+        # مسافات بديلة متنوعة
+        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007', '\u2006']
         chars = list(result)
         for i, c in enumerate(chars):
-            if c == ' ' and random.random() < 0.25:
+            if c == ' ' and random.random() < 0.3:
                 chars[i] = random.choice(alt_spaces)
         result = ''.join(chars)
-        # تحويلات عربية آمنة (خفيفة جداً)
-        safe_arabic_variants = {'ه': '\u0647', 'ة': '\u0629'}
-        chars = list(result)
-        for i, c in enumerate(chars):
-            if c in safe_arabic_variants and random.random() < 0.04:
-                chars[i] = safe_arabic_variants[c]
-        result = ''.join(chars)
-        # علامة RTL خفية
-        if random.random() < 0.15:
-            result = result + '\u200F'
+        # NFD decomposition خفيف للعربية (أحرف مركبة → مفككة)
+        arabic_decompose = {
+            'أ': ('ا', '\u0654'), 'إ': ('ا', '\u0655'),
+            'آ': ('ا', '\u0653'), 'ؤ': ('و', '\u0654'),
+            'ئ': ('ي', '\u0654'),
+        }
+        new_chars = []
+        for c in result:
+            if c in arabic_decompose and random.random() < 0.15:
+                base, combining = arabic_decompose[c]
+                new_chars.append(base)
+                new_chars.append(combining)
+            else:
+                new_chars.append(c)
+        result = ''.join(new_chars)
+        # علامة RTL أو ALM خفية
+        if random.random() < 0.2:
+            result = result + random.choice(['\u200F', '\u061C'])
         return result
 
     def _create_url_display(self, url, style_idx):
@@ -1082,10 +1200,13 @@ class YayTextMesslettersObfuscator:
         return random.choice(displays)
 
     def _apply_style_to_text(self, text, style_idx):
-        """نظام تشويش ذكي - يحافظ على المقروئية العربية مع تشويش البوتات
+        """نظام تشويش ذكي محسّن - يحافظ على المقروئية العربية مع تشويش البوتات
         
         الاستراتيجية الجديدة:
-        1. النص العربي: تشويش خفيف فقط (أحرف غير مرئية + مسافات بديلة) - لا يُمسّ
+        1. النص العربي: تشويش ذكي (NFD + أرقام عربية + أحرف غير مرئية + مسافات بديلة)
+           - تحويل NFC→NFD يغير الكود بدون تغيير الشكل المرئي
+           - أرقام عربية-هندية بدل اللاتينية
+           - أحرف غير مرئية احترافية متعددة الأنواع
         2. الأحرف اللاتينية: تحويل لنمط Unicode مختلف
         3. الأرقام: تحويل لأرقام Unicode مختلفة
         4. الروابط والمعرفات: تُعالج بشكل منفصل في obfuscate()
@@ -1101,8 +1222,10 @@ class YayTextMesslettersObfuscator:
         
         # ═══ الطبقة 1: تحويل ذكي حسب نوع النص ═══
         if is_mostly_arabic:
-            # نص عربي: تحويلات آمنة تحافظ على المقروئية
+            # نص عربي: تشويش ذكي يحافظ على المقروئية تماماً
             transformed = text
+            
+            # تحويل الأحرف اللاتينية الموجودة في النص العربي
             if latin_chars > 0 and style_idx >= 0:
                 _, char_map = self.STYLES[style_idx]
                 result = []
@@ -1112,38 +1235,11 @@ class YayTextMesslettersObfuscator:
                     else:
                         result.append(c)
                 transformed = ''.join(result)
-            # تشويش عربي ذكي: أشكال عرض مختلفة لنفس الحرف
-            # هذه الأحرف تبدو متطابقة مرئياً لكن لها كود Unicode مختلف
-            arabic_display_variants = [
-                # مجموعة 1: أشكال عربية مختلفة التمثيل
-                {'ا': '\u0627', 'أ': '\u0623', 'إ': '\u0625', 'آ': '\u0622',
-                 'ة': '\u0629', 'ه': '\u0647', 'و': '\u0648', 'ى': '\u0649'},
-                # مجموعة 2: ألف ممدودة + تاء مربوطة مفتوحة
-                {'ا': '\u0627', 'أ': '\u0623', 'ة': '\u0629', 'ه': '\u0647',
-                 'ل': '\u0644', 'لا': '\uFEFB', 'لام': '\uFEFD'},
-                # مجموعة 3: أشكال العرض العربية (Presentation Forms-B)
-                # هذه تبدو نفس الشيء مرئياً لكن كود مختلف
-                {},
-            ]
-            # اختيار عشوائي لمجموعة التحويل
-            chosen_variants = random.choice(arabic_display_variants)
-            result = []
-            i = 0
-            while i < len(transformed):
-                # تحقق من الأحرف المركبة أولاً (مثل "لا")
-                if i < len(transformed) - 1:
-                    two_chars = transformed[i:i+2]
-                    if two_chars == 'لا' and 'لا' in chosen_variants and random.random() < 0.3:
-                        result.append(chosen_variants['لا'])
-                        i += 2
-                        continue
-                c = transformed[i]
-                if c in chosen_variants and random.random() < 0.3:
-                    result.append(chosen_variants[c])
-                else:
-                    result.append(c)
-                i += 1
-            transformed = ''.join(result)
+            
+            # تطبيق التشويش العربي الذكي (NFD + أرقام + أحرف غير مرئية)
+            transformed = self._apply_arabic_smart_obfuscation(transformed, intensity=0.35)
+            
+            return transformed
         else:
             # نص لاتيني: تحويل كامل بالنمط المختار
             if style_idx >= 0:
@@ -1174,42 +1270,38 @@ class YayTextMesslettersObfuscator:
         if style_idx not in (-5, -6, -7) and latin_chars > 0:
             transformed = self._apply_homoglyphs_latin_only(transformed, intensity=0.2)
 
-        # ═══ الطبقة 3: أحرف غير مرئية استراتيجية ═══
-        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060']
+        # ═══ الطبقة 3: أحرف غير مرئية احترافية ═══
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
         
-        # إضافة حرف غير مرئي في البداية
-        transformed = random.choice(inv_chars[:3]) + transformed
+        # حرف غير مرئي في البداية
+        transformed = random.choice(inv_chars[:4]) + transformed
         
-        # أحرف غير مرئية بين الكلمات العربية (خفيف - 15% احتمال)
-        if is_mostly_arabic and len(transformed) > 10:
+        # أحرف غير مرئية بين الكلمات
+        if len(transformed) > 10:
             words = transformed.split(' ')
             new_words = []
             for i, w in enumerate(words):
                 new_words.append(w)
                 if i < len(words) - 1 and random.random() < 0.15:
-                    new_words.append(random.choice(inv_chars[:3]))
+                    new_words.append(random.choice(inv_chars[:4]))
             transformed = ' '.join(new_words)
-        
-        # ═══ الطبقة 4: مسافات بديلة (خفيفة) + تحويل أرقام (خفيف) ═══
+
+        # ═══ الطبقة 4: مسافات بديلة + تحويل أرقام (خفيف) ═══
         alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007']
-        # خرائط أرقام متنوعة - نستخدم فقط الأنماط الواضحة
         safe_digit_maps = [
             self.DIGIT_SANS_MAP, self.DIGIT_SANS_BOLD_MAP,
             self.DIGIT_MONO_MAP, self.DIGIT_FULLWIDTH_MAP,
         ]
         chosen_digit_map = random.choice([m for m in safe_digit_maps if m])
         result_list = list(transformed)
-        # لا نحوّل الأرقام إذا كانت متتالية (رقم هاتف) - فقط الأرقام المفردة
         prev_was_digit = False
         for i, c in enumerate(result_list):
             if c == ' ' and random.random() < 0.2:
                 result_list[i] = random.choice(alt_spaces)
             elif c.isdigit() and c in chosen_digit_map:
-                # إذا الرقم السابق كان رقم (رقم هاتف/سعر) لا نحوّله
                 if prev_was_digit:
                     prev_was_digit = True
                     continue
-                # أرقام مفردة: 30% احتمال التحويل
                 if random.random() < 0.3:
                     result_list[i] = chosen_digit_map[c]
                 prev_was_digit = True
@@ -1217,37 +1309,24 @@ class YayTextMesslettersObfuscator:
                 prev_was_digit = False
         transformed = ''.join(result_list)
 
-        # ═══ الطبقة 5: تحويلات عربية آمنة خفيفة جداً ═══
-        if is_mostly_arabic:
-            # تحويلات تظهر بشكل مختلف للبوتات لكن نفس الشكل للمستخدم
-            safe_arabic_variants = {
-                'أ': '\u0623', 'إ': '\u0625', 'آ': '\u0622',
-                'ة': '\u0629', 'ه': '\u0647',
-            }
-            result_list = list(transformed)
-            for i, c in enumerate(result_list):
-                if c in safe_arabic_variants and random.random() < 0.03:
-                    result_list[i] = safe_arabic_variants[c]
-            transformed = ''.join(result_list)
-
-        # ═══ الطبقة 6: أحرف غير مرئية بعد علامات الترقيم (خفيف) ═══
+        # ═══ الطبقة 5: أحرف غير مرئية بعد علامات الترقيم ═══
         if len(transformed) > 5:
-            punctuation = '،.؛:!؟-'
+            punctuation = '،.؛:!؟-.'
             result_list = list(transformed)
             insert_positions = []
             for i, c in enumerate(result_list):
                 if c in punctuation and random.random() < 0.2:
-                    insert_positions.append((i + 1, random.choice(inv_chars[:3])))
+                    insert_positions.append((i + 1, random.choice(inv_chars[:4])))
             for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
                 result_list.insert(pos, char)
             transformed = ''.join(result_list)
 
-        # ═══ الطبقة 7: علامة RTL خفية ═══
+        # ═══ الطبقة 6: علامة RTL + حرف غير مرئي في النهاية ═══
         if random.random() < 0.15:
             transformed = transformed + '\u200F'
-
-        # ═══ الطبقة 8: حرف غير مرئي في النهاية (بصمة) ═══
-        transformed = transformed + random.choice(inv_chars[:3])
+        if random.random() < 0.1:
+            transformed = '\u061C' + transformed
+        transformed = transformed + random.choice(inv_chars[:4])
 
         return transformed
     
@@ -1336,8 +1415,11 @@ class YayTextMesslettersObfuscator:
                 result_parts.append(transformed)
 
         final_text = ''.join(result_parts)
-        inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
-        final_text = inv_char + final_text
+        # أحرف غير مرئية احترافية متعددة الأنواع في البداية
+        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+        final_text = random.choice(inv_chars[:4]) + final_text
+        if random.random() < 0.3:
+            final_text = random.choice(inv_chars[:4]) + final_text
 
         return final_text, has_links
 
@@ -1375,8 +1457,19 @@ class AdvancedMessageEncoder:
     الطبقة 7: علامات RTL خفية لتغيير ترتيب القراءة
     """
     
-    # أحرف غير مرئية متنوعة
-    INVISIBLE_CHARS = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u2061', '\u2062', '\u2063']
+    # أحرف غير مرئية احترافية متنوعة (متعددة الأنواع)
+    INVISIBLE_CHARS = [
+        '\u200B',   # Zero-Width Space
+        '\u200C',   # Zero-Width Non-Joiner
+        '\u200D',   # Zero-Width Joiner
+        '\uFEFF',   # BOM / Zero-Width No-Break Space
+        '\u2060',   # Word Joiner
+        '\u2061',   # Function Application
+        '\u2062',   # Invisible Times
+        '\u2063',   # Invisible Separator
+        '\u2064',   # Invisible Plus
+        '\u061C',   # Arabic Letter Mark (invisible)
+    ]
     
     # مسافات بديلة من مختلف نطاقات Unicode
     ALT_SPACES = [
@@ -1512,8 +1605,9 @@ class AdvancedMessageEncoder:
     
     def apply_pattern_disruption(self, text):
         """
-        الطبقة 6: تشويش النمط - إضافة أحرف غير مرئية لتغيير بصمة النص
+        الطبقة 6: تشويش النمط - إضافة أحرف غير مرئية احترافية لتغيير بصمة النص
         يمنع بوتات الحماية من مطابقة الأنماط المتكررة
+        يستخدم أنواعاً متعددة من الأحرف غير المرئية لتعظيم التغيير
         """
         if not text or len(text) < 10:
             return text
@@ -1521,75 +1615,101 @@ class AdvancedMessageEncoder:
         protected = self._extract_protected_zones(text)
         result = list(text)
         
-        # إضافة حرف غير مرئي في بداية النص
+        # إضافة 1-3 أحرف غير مرئية في بداية النص
         prefix = random.choice(self.INVISIBLE_CHARS)
-        # أحياناً إضافة 2 أحرف غير مرئية
-        if random.random() < 0.3:
+        if random.random() < 0.4:
+            prefix += random.choice(self.INVISIBLE_CHARS)
+        if random.random() < 0.15:
             prefix += random.choice(self.INVISIBLE_CHARS)
         
-        # إضافة أحرف غير مرئية بين الجمل (بعد النقاط)
-        for i, c in enumerate(result):
-            if c in '.!؟\n' and not self._is_protected_zone(i, protected):
-                if random.random() < 0.4:
-                    result.insert(i + 1, random.choice(['\u200B', '\u200C', '\uFEFF']))
+        # إضافة علامة Arabic Letter Mark أحياناً في البداية
+        if random.random() < 0.15:
+            prefix = '\u061C' + prefix
         
-        # إضافة علامة RTL خفية أحياناً لتغيير البصمة
-        if random.random() < 0.2:
-            result.append('\u200F')  # Right-to-Left Mark
+        # إضافة أحرف غير مرئية بين الجمل (بعد النقاط وعلامات الترقيم)
+        for i, c in enumerate(result):
+            if c in '.!؟\n،؛' and not self._is_protected_zone(i, protected):
+                if random.random() < 0.4:
+                    result.insert(i + 1, random.choice(self.INVISIBLE_CHARS[:6]))
+        
+        # إضافة علامة RTL أو ALM خفية أحياناً
+        if random.random() < 0.25:
+            result.append(random.choice(['\u200F', '\u061C']))
         
         return prefix + ''.join(result)
     
-    def apply_unicode_normalization_trick(self, text, intensity=0.05):
+    def apply_unicode_normalization_trick(self, text, intensity=0.15):
         """
-        الطبقة 7: تحويلات Unicode طفيفة - استخدام ترميزات مختلفة
-        لنفس الأحرف العربية (مثل Hamza بأنماط مختلفة)
+        الطبقة 7: تحويلات Unicode عربية ذكية (بدون أحرف فارسية!)
+        - NFD Decomposition: تحويل الأحرف المركبة لمفككة (نفس الشكل، كود مختلف)
+        - تحويلات عربية آمنة لا تكتشفها بوتات الحماية
         """
         if not text:
             return text
         
         protected = self._extract_protected_zones(text)
         result = list(text)
+        new_result = []
         
-        # تحويلات عربية خفيفة
-        arabic_variants = {
-            'ي': '\u06CC',  # Farsi Yeh (ي UNICODE مختلف)
-            'ك': '\u06A9',  # Farsi Keheh (ك UNICODE مختلف)
-            'ء': '\u0621',  # Hamza بترميز مختلف
+        # NFD Decomposition - آمن تماماً ويبدو متطابقاً مرئياً
+        arabic_decompose = {
+            'أ': ('\u0627', '\u0654'),  # ALEF HAMZA ABOVE → ALEF + combining HAMZA ABOVE
+            'إ': ('\u0627', '\u0655'),  # ALEF HAMZA BELOW → ALEF + combining HAMZA BELOW
+            'آ': ('\u0627', '\u0653'),  # ALEF MADDA ABOVE → ALEF + combining MADDA ABOVE
+            'ؤ': ('\u0648', '\u0654'),  # WAW HAMZA → WAW + combining HAMZA ABOVE
+            'ئ': ('\u064A', '\u0654'),  # YEH HAMZA → YEH + combining HAMZA ABOVE
         }
         
-        for i, c in enumerate(result):
-            if c in arabic_variants and not self._is_protected_zone(i, protected):
+        i = 0
+        while i < len(result):
+            c = result[i]
+            if c in arabic_decompose and not self._is_protected_zone(i, protected):
                 if random.random() < intensity:
-                    result[i] = arabic_variants[c]
+                    base, combining = arabic_decompose[c]
+                    new_result.append(base)
+                    new_result.append(combining)
+                else:
+                    new_result.append(c)
+            else:
+                new_result.append(c)
+            i += 1
         
-        return ''.join(result)
+        return ''.join(new_result)
     
     def encode_message(self, text, group_id=None):
         """
         تطبيق كل طبقات التشفير والتكويد على الرسالة
         يُرجع: (النص المشفر, use_html) حيث use_html يحدد استخدام parse_mode='html'
+        
+        الطبقات محسّنة للحفاظ على مقروئية النص العربي:
+        - الطبقة 1+2: تحويل YayText/Messletters (يتضمن NFD عربي ذكي)
+        - الطبقة 3: أحرف غير مرئية احترافية (متعددة الأنواع)
+        - الطبقة 4: مسافات بديلة متنوعة
+        - الطبقة 5: Homoglyphs (لاتينية فقط)
+        - الطبقة 6: تشويش النمط
+        - الطبقة 7: تحويلات NFD عربية ذكية (بدون فارسية!)
         """
         if not text or len(text) < 2:
             return text, False
         
         # تطبيق YayText/Messletters (الطبقة 1+2)
-        # الآن يُرجع (نص مع أكواد HTML, use_html)
+        # يتضمن الآن تشويش عربي ذكي (NFD decomposition + أرقام عربية)
         obfuscated_text, use_html = yaytext_obfuscator.obfuscate(text)
         
-        # الطبقة 3: أحرف غير مرئية استراتيجية
-        obfuscated_text = self.apply_strategic_invisibles(obfuscated_text, intensity=0.15)
+        # الطبقة 3: أحرف غير مرئية احترافية (كثافة أعلى)
+        obfuscated_text = self.apply_strategic_invisibles(obfuscated_text, intensity=0.2)
         
-        # الطبقة 4: مسافات بديلة
-        obfuscated_text = self.apply_alternate_spaces(obfuscated_text, intensity=0.3)
+        # الطبقة 4: مسافات بديلة متنوعة
+        obfuscated_text = self.apply_alternate_spaces(obfuscated_text, intensity=0.35)
         
-        # الطبقة 5: Homoglyphs
-        obfuscated_text = self.apply_homoglyphs(obfuscated_text, intensity=0.1)
+        # الطبقة 5: Homoglyphs (لاتينية فقط - لا يمس العربية)
+        obfuscated_text = self.apply_homoglyphs(obfuscated_text, intensity=0.12)
         
         # الطبقة 6: تشويش النمط
         obfuscated_text = self.apply_pattern_disruption(obfuscated_text)
         
-        # الطبقة 7: تحويلات Unicode عربية
-        obfuscated_text = self.apply_unicode_normalization_trick(obfuscated_text, intensity=0.03)
+        # الطبقة 7: تحويلات NFD عربية ذكية (بدون أحرف فارسية!)
+        obfuscated_text = self.apply_unicode_normalization_trick(obfuscated_text, intensity=0.15)
         
         return obfuscated_text, use_html
     
@@ -2056,20 +2176,29 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                 pass
         elif mode == 'replace':
             # 👻 التعديل بنفس الإعلان بتكويد مختلف أو بالإعلان التالي
+            # النظام المحسّن: يضمن دائماً تكويد مختلف عن الأصلي
             try:
                 new_content = None
                 use_html = False
+                yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
                 
-                # الخيار 1: استخدام رسالة مختلفة من الرسائل المضافة (أقوى)
-                if all_messages and len(all_messages) > 1 and random.random() < 0.5:
+                # الخيار 1: استخدام الإعلان التالي (أقوى ضد البوتات)
+                if all_messages and len(all_messages) > 1:
                     other_msgs = [m for m in all_messages if m[1]]  # رسائل فيها محتوى
                     if other_msgs:
+                        # اختيار رسالة مختلفة عشوائياً
                         chosen = random.choice(other_msgs)
                         raw_content = chosen[1]
                         if raw_content:
-                            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
                             if yaytext_on:
+                                # إجبار اختيار نمط مختلف
+                                old_style = yaytext_obfuscator._last_style
                                 new_content, use_html = yaytext_obfuscate(raw_content)
+                                # نتأكد أن النمط مختلف
+                                retries = 0
+                                while yaytext_obfuscator._last_style == old_style and retries < 5:
+                                    new_content, use_html = yaytext_obfuscate(raw_content)
+                                    retries += 1
                             else:
                                 obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
                                 varied = vary_text(raw_content)
@@ -2078,11 +2207,17 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                                 new_content = encrypt_text(varied, group_id)
                             logger.info(f"👻 شبح: استبدال بإعلان مختلف مكوّد في {group_id}")
                 
-                # الخيار 2: نفس الإعلان بتكويد جديد (نمط مختلف)
+                # الخيار 2: نفس الإعلان بتكويد جديد (نمط مختلف مضمون)
                 if not new_content and original_raw_content:
-                    yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
                     if yaytext_on:
+                        # إجبار اختيار نمط مختلف عن الأصلي
+                        old_style = yaytext_obfuscator._last_style
                         new_content, use_html = yaytext_obfuscate(original_raw_content)
+                        # نتأكد أن النمط مختلف
+                        retries = 0
+                        while yaytext_obfuscator._last_style == old_style and retries < 5:
+                            new_content, use_html = yaytext_obfuscate(original_raw_content)
+                            retries += 1
                     else:
                         obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
                         varied = vary_text(original_raw_content)
@@ -2091,7 +2226,7 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                         new_content = encrypt_text(varied, group_id)
                     logger.info(f"👻 شبح: إعادة تكويد نفس الإعلان بنمط مختلف في {group_id}")
                 
-                # الخيار 3: نص محايد (fallback)
+                # الخيار 3: نص محايد (fallback أخير فقط)
                 if not new_content:
                     neutral_texts = ['شكراً للجميع 👍', 'تم ✅', 'شكراً', '👍', '✅', 'تمام', 'حسناً', '👌', 'thanks', 'ok', '.']
                     new_content = random.choice(neutral_texts)
