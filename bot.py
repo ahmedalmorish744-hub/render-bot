@@ -306,6 +306,15 @@ def init_db():
         set_setting('edit_hide_enabled', 'on')
     if get_setting('exponential_backoff') is None:
         set_setting('exponential_backoff', 'on')
+    # 🆕 إعدادات نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
+    if get_setting('anti_guardian_enabled') is None:
+        set_setting('anti_guardian_enabled', 'on')
+    if get_setting('fullwidth_latin_enabled') is None:
+        set_setting('fullwidth_latin_enabled', 'on')
+    if get_setting('latin_extended_enabled') is None:
+        set_setting('latin_extended_enabled', 'on')
+    if get_setting('anti_guardian_mode') is None:
+        set_setting('anti_guardian_mode', 'smart')  # smart/stealth/aggressive
 
     conn.commit()
     conn.close()
@@ -590,6 +599,609 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  🛡️ نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة 2026
+#  مستهدف: @GoldenkidKbot @GHClone3Bot @Deevill07bot
+#           @GHSecurity2Bot @Jabal_RoBot @PMU_Securitybot
+#           @TaifUniTu1_BoT72638 وبوتات الحماية المشابهة
+# ═══════════════════════════════════════════════════════════════
+class AntiGuardianBypass:
+    """
+    نظام تجاوز بوتات الحماية المتقدمة - مبني على تحليل معمق لبوتات 2026
+    
+    بوتات الحماية المستهدفة تستخدم هذه الطرق للكشف:
+    ❌ فحص كيانات الرسائل (message.entities) - URL/mention/text_link
+    ❌ كشف الرسائل المُعاد توجيهها (forward_from / forward_date)
+    ❌ قوائم كلمات مفتاحية عربية (انضم، اشترك، قناة، الخ)
+    ❌ أنماط Regex (t.me/، @username، https://)
+    ❌ كشف Flood (رسائل متكررة من نفس المستخدم)
+    ❌ فترة اختبار للأعضاء الجدد (probation period)
+    ❌ كشف الأحرف غير المرئية (Zero-Width) - بعض البوتات المتقدمة
+    ❌ كشف الأحرف متعددة النصوص (Multi-Lang words) - tg-spam
+    
+    استراتيجية التجاوز:
+    ✅ Fullwidth Latin (U+FF21) - في تصنيف "Common" - لا يكتشفه أي بوت!
+    ✅ Latin Extended-A/B - تبدو لاتينية عادية تماماً
+    ✅ Enclosed Alphanumerics - لا يراقبها أي بوت حماية
+    ✅ Kashida عربي (U+0640) - يبقى بعد NFKC/NFD!
+    ✅ Arabic Homoglyphs - بدائل مرئية متطابقة
+    ✅ إخفاء الروابط في HTML entities (TextUrl) - بوتات الحماية لا تفحصها
+    ✅ إرسال بدون بصمة توجيه (send_message بدل forward)
+    ✅ تشويش كلمات مفتاحية عربية بنماذج NFD
+    ✅ تنويع كل رسالة لكسر كشف التكرار
+    ✅ أنماط آمنة فقط - بدون Cross-Script يكشفها isMultiLang
+    """
+    
+    # ═══ خريطة Fullwidth Latin (U+FF21-U+FF3A, U+FF41-U+FF5A, U+FF10-U+FF19) ═══
+    # هذه أقوى تقنية لأنها في تصنيف Unicode "Common" وليس "Latin"
+    # بوتات الحماية التي تفحص isMultiLang لا تكتشفها أبداً!
+    FULLWIDTH_MAP = {}
+    
+    # ═══ Latin Extended-A آمنة (تبدو لاتينية عادية لكن بكود مختلف) ═══
+    # كل حرف من نطاق Latin Extended-A يبدو شبه متطابق مع اللاتيني العادي
+    LATIN_EXT_A_MAP = {}
+    
+    # ═══ Latin Extended-B آمنة (نفس المبدأ) ═══
+    LATIN_EXT_B_MAP = {}
+    
+    # ═══ Enclosed Alphanumerics ═══
+    ENCLOSED_MAP = {}
+    
+    # ═══ خريطة الأرقام الآمنة (لا تمنع النقر على أرقام الهواتف) ═══
+    SAFE_DIGIT_MAPS = []
+    
+    # ═══ كلمات مفتاحية عربية تستخدمها بوتات الحماية ═══
+    # هذه الكلمات إذا وُجدت في الرسالة تُحذف تلقائياً
+    ARABIC_TRIGGER_WORDS = [
+        'انضم', 'اشترك', 'قناة', 'جروب', 'مجموعة', 'تابع', 'عروض', 'مجاني',
+        'عرض خاص', 'احصل', 'ادخل', 'رابط', 'اضغط هنا', 'من هنا', 'تفضل',
+        'زورنا', 'تابعنا', 'قناتنا', 'مجموعتنا', 'القناة', 'المجموعة',
+        'انضمام', 'اشتراك', 'متابعة', 'دخول', 'الرابط', 'الصفحة',
+    ]
+    
+    # ═══ بدائل عربية للتشويش (تبدو نفس الكلمة لكن بكود مختلف) ═══
+    ARABIC_SAFE_SUBSTITUTES = {
+        'انضم': ['ٱنضم', 'انضُم', 'ٱنضمّ', 'ان‌ضم', 'انضم'],
+        'اشترك': ['ٱشترك', 'اشتَرك', 'ٱشترك', 'اش‌ترك'],
+        'قناة': ['قنٰاة', 'قنﺎة', 'قِناة', 'ق‌ناة'],
+        'جروب': ['جروٻ', 'جُروب', 'ج‌روب'],
+        'مجموعة': ['مجمُوعة', 'مجٛوعة', 'مجموعٰة'],
+        'تابع': ['تٰابع', 'تا‌بع', 'تَابع'],
+        'عروض': ['عرُوض', 'عرٛوض', 'ع‌روض'],
+        'مجاني': ['مجٰاني', 'مجﻧي', 'مجَاني'],
+        'ادخل': ['ٱدخل', 'ادخُل', 'ا‌دخل'],
+        'رابط': ['رٲبط', 'رَابط', 'رٲبط'],
+        'اضغط': ['ٲضغط', 'اض‌غط', 'اضغط'],
+        'تابعنا': ['تٰابعنا', 'تا‌بعنا', 'تَابعنا'],
+        'قناتنا': ['قنٰاتنا', 'قنﺎتنا', 'قِناتنا'],
+        'القناة': ['ٱلقناة', 'ٱل‌قناة', 'القنٰاة'],
+    }
+    
+    # ═══ أحرف غير مرئية - آمنة وغير مكتشفة ═══
+    # نستخدم أنواعاً متنوعة لتجاوز نظام التنظيف
+    INVISIBLE_CHARS = [
+        '\u200B',   # Zero-Width Space
+        '\u200C',   # Zero-Width Non-Joiner
+        '\u200D',   # Zero-Width Joiner
+        '\uFEFF',   # BOM
+        '\u2060',   # Word Joiner
+        '\u2061',   # Function Application
+        '\u2062',   # Invisible Times
+        '\u2063',   # Invisible Separator
+        '\u2064',   # Invisible Plus
+        '\u061C',   # Arabic Letter Mark
+    ]
+    
+    # ═══ مسافات بديلة (تبدو متطابقة للمستخدم) ═══
+    ALT_SPACES = [
+        '\u00A0',   # No-Break Space
+        '\u2009',   # Thin Space
+        '\u202F',   # Narrow No-Break Space
+        '\u2007',   # Figure Space
+        '\u2006',   # Six-Per-Em Space
+        '\u2005',   # Four-Per-Em Space
+        '\u2004',   # Three-Per-Em Space
+    ]
+    
+    # ═══ عروض نص الروابط (بدائل عربية طبيعية) ═══
+    URL_DISPLAY_TEMPLATES = [
+        'تفضل', 'هنا', 'اضغط', 'تابع', 'شاهد', 'ادخل', 'زورنا',
+        'تفقد', 'انتقل', 'المزيد', 'تفاصيل', 'تصفح', 'استكشف',
+        'تعرف', 'تواصل', 'الموقع', 'الصفحة', 'الرئيسية', 'المحتوى',
+        'الخدمة', 'المنصة', 'التطبيق', 'الحساب', 'التسجيل',
+    ]
+    
+    def __init__(self):
+        self._build_safe_maps()
+        self._message_cache = deque(maxlen=2000)
+        self._group_first_message = {}  # {group_id: True} - هل أرسلنا رسالة تمهيدية؟
+    
+    def _build_safe_maps(self):
+        """بناء خرائط التحويل الآمنة التي لا تكتشفها بوتات الحماية"""
+        
+        # ═══ Fullwidth Latin - أقوى تقنية ضد isMultiLang ═══
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.FULLWIDTH_MAP[c] = chr(0xFF21 + i)
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.FULLWIDTH_MAP[c] = chr(0xFF41 + i)
+        for i in range(10):
+            self.FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
+        
+        # ═══ Latin Extended-A (تبدو متطابقة تقريباً مع اللاتينية العادية) ═══
+        ext_a_lower = 'āƀčḋēḟḡħīĵķĺṁņōṗɋŗşţūṽẁẋȳż'
+        ext_a_upper = 'ĀɃČḊĒḞḠĦĪĴĶĹṀŅŌṖɊŖŞŢŪṼẀẊȲŻ'
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.LATIN_EXT_A_MAP[c] = ext_a_lower[i]
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.LATIN_EXT_A_MAP[c] = ext_a_upper[i]
+        
+        # ═══ Latin Extended-B (تبدو مختلفة قليلاً لكن طبيعية) ═══
+        ext_b_lower_codes = [0x2C7F, 0x0180, 0x0292, 0x0256, 0x0117, 0x0192, 0x0260, 0x0127, 0x026A, 0x0135, 0x0137, 0x013A, 0x1E3F, 0x0144, 0x01A1, 0x1E57, 0x02A0, 0x0159, 0x015F, 0x0163, 0x01B4, 0x1E7D, 0x1E8B, 0x028F, 0x1E91, 0x017C]
+        ext_b_upper_codes = [0x2C7E, 0x0243, 0x0186, 0x018A, 0x0116, 0x0191, 0x0193, 0x0126, 0x0197, 0x0134, 0x0136, 0x0139, 0x1E3E, 0x0143, 0x01A0, 0x1E56, 0x02A0, 0x0158, 0x015E, 0x0162, 0x01B3, 0x1E7C, 0x1E8A, 0x028E, 0x1E90, 0x017B]
+        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+            self.LATIN_EXT_B_MAP[c] = chr(ext_b_lower_codes[i])
+        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+            self.LATIN_EXT_B_MAP[c] = chr(ext_b_upper_codes[i])
+        
+        # ═══ Enclosed Alphanumerics (بدائل الأرقام والحروف) ═══
+        enc_digits = '⓪①②③④⑤⑥⑦⑧⑨'
+        for i in range(10):
+            self.ENCLOSED_MAP[str(i)] = enc_digits[i]
+        
+        # ═══ خرائط أرقام آمنة ═══
+        digit_sans = {str(i): chr(0x1D7E2 + i) for i in range(10)}
+        digit_sans_bold = {str(i): chr(0x1D7EC + i) for i in range(10)}
+        digit_mono = {str(i): chr(0x1D7F6 + i) for i in range(10)}
+        digit_fullwidth = {str(i): chr(0xFF10 + i) for i in range(10)}
+        self.SAFE_DIGIT_MAPS = [digit_sans, digit_sans_bold, digit_mono, digit_fullwidth]
+    
+    def _extract_protected_zones(self, text):
+        """استخراج مناطق الروابط والمعرفات لحمايتها من أي تعديل"""
+        zones = []
+        for match in re.finditer(r'https?://\S+', text):
+            zones.append((match.start(), match.end()))
+        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+            overlaps = any(match.start() >= s and match.start() < e for s, e in zones)
+            if not overlaps:
+                zones.append((match.start(), match.end()))
+        # حماية أنماط t.me/ بدون https
+        for match in re.finditer(r'(?<!\w)t\.me/[a-zA-Z0-9_]+', text):
+            overlaps = any(match.start() >= s and match.start() < e for s, e in zones)
+            if not overlaps:
+                zones.append((match.start(), match.end()))
+        return zones
+    
+    def _is_protected(self, pos, zones):
+        """هل الموقع داخل منطقة محمية؟"""
+        return any(s <= pos < e for s, e in zones)
+    
+    def _split_protected(self, text):
+        """تقسيم النص إلى أجزاء محمية (روابط/معرفات) وأجزاء عادية"""
+        zones = self._extract_protected_zones(text)
+        segments = []
+        last_end = 0
+        for start, end in zones:
+            if start > last_end:
+                segments.append(('text', text[last_end:start]))
+            segments.append(('protected', text[start:end]))
+            last_end = end
+        if last_end < len(text):
+            segments.append(('text', text[last_end:]))
+        return segments
+    
+    def _apply_to_text_only(self, text, func):
+        """تطبيق دالة تحويل على النص العادي فقط - الروابط لا تُمس أبداً"""
+        segments = self._split_protected(text)
+        result = []
+        for seg_type, seg_text in segments:
+            if seg_type == 'protected':
+                result.append(seg_text)
+            else:
+                result.append(func(seg_text))
+        return ''.join(result)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 1: Fullwidth Latin - أقوى تقنية!
+    # ══════════════════════════════════════════════
+    def apply_fullwidth_latin(self, text, intensity=0.4):
+        """تحويل أحرف لاتينية إلى Fullwidth - في تصنيف Common!
+        بوتات الحماية التي تفحص isMultiLang لا تكتشفها لأنها ليست سيريلية/يونانية
+        تبدو مختلفة قليلاً (أعرض) مما يكسر مطابقة الأنماط بالكامل
+        """
+        def _apply(seg):
+            result = []
+            for c in seg:
+                if c in self.FULLWIDTH_MAP and random.random() < intensity:
+                    result.append(self.FULLWIDTH_MAP[c])
+                else:
+                    result.append(c)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 2: Latin Extended-A (تبدو لاتينية عادية)
+    # ══════════════════════════════════════════════
+    def apply_latin_extended(self, text, intensity=0.3):
+        """تحويل أحرف لاتينية إلى Latin Extended-A - تبدو شبه متطابقة!
+        الفرق الوحيد: نقطة أو خط صغير فوق الحرف (غير ملحوظ)
+        هذه في نطاق Latin - لا يكتشفها فحص isMultiLang
+        """
+        def _apply(seg):
+            result = []
+            for c in seg:
+                if c in self.LATIN_EXT_A_MAP and random.random() < intensity:
+                    result.append(self.LATIN_EXT_A_MAP[c])
+                else:
+                    result.append(c)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 3: تشويش الكلمات المفتاحية العربية
+    # ══════════════════════════════════════════════
+    def obfuscate_arabic_keywords(self, text):
+        """تشويش الكلمات المفتاحية العربية التي تبحث عنها بوتات الحماية
+        يستخدم بدائل مرئية متطابقة (أحرف عربية مختلفة بنفس الشكل)
+        + أحرف غير مرئية داخل الكلمة لكسر مطابقة الأنماط
+        """
+        def _apply(seg):
+            result = seg
+            for word, substitutes in self.ARABIC_SAFE_SUBSTITUTES.items():
+                if word in result:
+                    sub = random.choice(substitutes)
+                    result = result.replace(word, sub, 1)
+            return result
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 4: كشيدة عربية (Tatweel U+0640)
+    # ══════════════════════════════════════════════
+    def apply_kashida(self, text, intensity=0.25):
+        """إضافة كشيدة (Tatweel) بين أحرف الكلمات العربية
+        الكشيدة هي أقوى طبقة عربية لأنها تبقى بعد كل أنواع التطبيع NFKC/NFD!
+        تبطئ الكلمة بصرياً لكنها مقروئة تماماً
+        """
+        kashida_accepting = 'بتثجحخدذرزسشصضطظعغفقكلمنهي'
+        
+        def _apply(seg):
+            result = list(seg)
+            insertions = []
+            for i, c in enumerate(result):
+                if c in kashida_accepting and random.random() < intensity:
+                    num = 1 if random.random() < 0.7 else 2
+                    insertions.append((i + 1, '\u0640' * num))
+            for pos, chars in sorted(insertions, key=lambda x: x[0], reverse=True):
+                result.insert(pos, chars)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 5: NFD Decomposition عربي
+    # ══════════════════════════════════════════════
+    def apply_nfd_decomposition(self, text, intensity=0.3):
+        """تحويل الأحرف العربية المركبة لمفككة (نفس الشكل، كود مختلف)
+        مثال: أ → ا + ّ (همزة فوق)
+        يبدو متطابقاً مرئياً لكن الكود مختلف تماماً
+        """
+        decompose_map = {
+            'أ': ('\u0627', '\u0654'),
+            'إ': ('\u0627', '\u0655'),
+            'آ': ('\u0627', '\u0653'),
+            'ؤ': ('\u0648', '\u0654'),
+            'ئ': ('\u064A', '\u0654'),
+        }
+        
+        def _apply(seg):
+            result = []
+            for c in seg:
+                if c in decompose_map and random.random() < intensity:
+                    base, combining = decompose_map[c]
+                    result.append(base)
+                    result.append(combining)
+                else:
+                    result.append(c)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 6: Arabic Homoglyphs
+    # ══════════════════════════════════════════════
+    def apply_arabic_homoglyphs(self, text, intensity=0.2):
+        """استبدال أحرف عربية بنظيراتها المرئية المتطابقة
+        مثال: ا ↔ أ ↔ إ ↔ آ ↔ ٱ (كلها ألف بأشكال مختلفة)
+        تبدو نفس الكلمة تماماً لكن الكود مختلف
+        """
+        homoglyphs = {
+            'ا': ['أ', 'إ', 'آ', 'ٱ'],
+            'ه': ['ة', 'ھ'],
+            'ي': ['ى', 'ئ'],
+            'و': ['ؤ'],
+            'ك': ['ک'],
+            'ن': ['ں'],
+        }
+        
+        def _apply(seg):
+            result = list(seg)
+            for i, c in enumerate(result):
+                if c in homoglyphs and random.random() < intensity:
+                    result[i] = random.choice(homoglyphs[c])
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 7: أحرف غير مرئية استراتيجية
+    # ══════════════════════════════════════════════
+    def apply_strategic_invisibles(self, text, intensity=0.15):
+        """إضافة أحرف غير مرئية في مواقع استراتيجية
+        بين الكلمات، بعد علامات الترقيم، في البداية والنهاية
+        لا يُضاف داخل الروابط أبداً
+        """
+        def _apply(seg):
+            if not seg or len(seg) < 3:
+                return seg
+            result = list(seg)
+            insertions = []
+            
+            # بين الكلمات (بعد المسافات)
+            for i, c in enumerate(result):
+                if c == ' ' and random.random() < intensity:
+                    insertions.append((i + 1, random.choice(self.INVISIBLE_CHARS[:4])))
+            
+            # بعد علامات الترقيم العربية
+            for i, c in enumerate(result):
+                if c in '،.؛:!؟' and random.random() < intensity * 0.7:
+                    insertions.append((i + 1, random.choice(self.INVISIBLE_CHARS[:4])))
+            
+            for pos, char in sorted(insertions, key=lambda x: x[0], reverse=True):
+                result.insert(pos, char)
+            
+            # حرف غير مرئي في البداية
+            result.insert(0, random.choice(self.INVISIBLE_CHARS[:4]))
+            
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 8: مسافات بديلة
+    # ══════════════════════════════════════════════
+    def apply_alternate_spaces(self, text, intensity=0.3):
+        """استبدال بعض المسافات العادية بمسافات بديلة
+        تبدو متطابقة تماماً لكنها مختلفة في الكود
+        """
+        def _apply(seg):
+            result = list(seg)
+            for i, c in enumerate(result):
+                if c == ' ' and random.random() < intensity:
+                    result[i] = random.choice(self.ALT_SPACES)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 9: تحويل أرقام آمن
+    # ══════════════════════════════════════════════
+    def apply_safe_digit_transform(self, text, intensity=0.25):
+        """تحويل أرقام مفردة لأرقام Unicode مختلفة
+        لا يحول أرقام الهاتف (أرقام متتالية) للحفاظ على النقر
+        """
+        chosen_map = random.choice(self.SAFE_DIGIT_MAPS)
+        
+        def _apply(seg):
+            result = list(seg)
+            prev_was_digit = False
+            for i, c in enumerate(result):
+                if c.isdigit() and c in chosen_map:
+                    if prev_was_digit:
+                        prev_was_digit = True
+                        continue
+                    if random.random() < intensity:
+                        result[i] = chosen_map[c]
+                    prev_was_digit = True
+                else:
+                    prev_was_digit = False
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 10: إخفاء الروابط في HTML TextUrl
+    # ══════════════════════════════════════════════
+    def hide_links_in_html(self, text):
+        """إخفاء الروابط والمعرفات في كيانات HTML TextUrl
+        بوتات الحماية تفحص message.entities لكن TextUrl يظهر كنص عادي
+        الضغط على النص يفتح الرابط الحقيقي - قابل للنقر تماماً!
+        """
+        if not text:
+            return text, False
+        
+        has_links = False
+        result = text
+        
+        # إخفاء روابط https://
+        def replace_url(match):
+            nonlocal has_links
+            has_links = True
+            url = match.group()
+            display = random.choice(self.URL_DISPLAY_TEMPLATES)
+            return f'<a href="{url}">{display}</a>'
+        
+        result = re.sub(r'https?://\S+', replace_url, result)
+        
+        # إخفاء معرفات @username
+        def replace_mention(match):
+            nonlocal has_links
+            has_links = True
+            mention = match.group()
+            username = mention[1:]
+            display = random.choice(self.URL_DISPLAY_TEMPLATES)
+            return f'<a href="tg://resolve?domain={username}">{display}</a>'
+        
+        result = re.sub(r'@([a-zA-Z0-9_]{3,})', replace_mention, result)
+        
+        return result, has_links
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 11: Variation Selectors (غير مرئية وتبقى بعد التنظيف الجزئي)
+    # ══════════════════════════════════════════════
+    def apply_variation_selectors(self, text, intensity=0.06):
+        """إضافة Variation Selectors بعد الأحرف العربية
+        هذه أحرف تجميع غير مرئية تُستخدم لتغيير شكل الرموز التعبيرية
+        لكنها تعمل أيضاً مع الأحرف العربية وتغيّر الكود بدون تغيير الشكل
+        """
+        vs_list = [chr(0xFE00 + i) for i in range(16)]
+        
+        def _apply(seg):
+            result = list(seg)
+            insertions = []
+            for i, c in enumerate(result):
+                if '\u0600' <= c <= '\u06FF' and random.random() < intensity:
+                    insertions.append((i + 1, random.choice(vs_list)))
+            for pos, char in sorted(insertions, key=lambda x: x[0], reverse=True):
+                result.insert(pos, char)
+            return ''.join(result)
+        return self._apply_to_text_only(text, _apply)
+    
+    # ══════════════════════════════════════════════
+    #  الطبقة 12: Tag Characters مخفية
+    # ══════════════════════════════════════════════
+    def apply_tag_characters(self, text):
+        """إضافة Tag Characters في البداية والنهاية
+        هذه أحرف من نطاق Tags (U+E0000+) غير مرئية تماماً
+        لا ينظفها معظم أنظمة التنظيف لأنها ليست في نطاق Zero-Width
+        """
+        tag_chars = ''.join(chr(0xE0000 + ord(c)) for c in random.choice(['AG', 'BK', 'CF', 'DX']))
+        text = tag_chars + text
+        return text
+    
+    # ══════════════════════════════════════════════
+    #  🛡️ الدالة الرئيسية: تجاوز شامل لبوتات الحماية
+    # ══════════════════════════════════════════════
+    def bypass(self, text, group_id=None):
+        """تطبيق كل طبقات التجاوز على الرسالة
+        
+        يُرجع: (النص المعالج, use_html)
+        - use_html = True إذا تم إخفاء الروابط في HTML entities
+        - use_html = False إذا لم تكن هناك روابط
+        
+        الاستراتيجية:
+        1. إخفاء الروابط أولاً في HTML TextUrl (الطبقة الأهم)
+        2. تشويش الكلمات المفتاحية العربية
+        3. تطبيق Kashida + NFD + Homoglyphs على النص العربي
+        4. تطبيق Fullwidth/Latin Extended على النص اللاتيني
+        5. أحرف غير مرئية + مسافات بديلة
+        6. Variation Selectors + Tag Characters
+        7. تحويل أرقام آمن
+        """
+        if not text or len(text) < 2:
+            return text, False
+        
+        # التحقق من تفعيل النظام
+        if get_setting('anti_guardian_enabled', 'on') != 'on':
+            return text, False
+        
+        # تحديد كثافة التشويش حسب الوضع
+        ag_mode = get_setting('anti_guardian_mode', 'smart')
+        if ag_mode == 'stealth':
+            # وضع خفي: تشويش خفيف جداً - للبوتات البسيطة
+            kashida_int = 0.15
+            nfd_int = 0.2
+            homoglyph_int = 0.1
+            fullwidth_int = 0.25
+            latin_ext_int = 0.2
+            invisible_int = 0.08
+            space_int = 0.2
+            digit_int = 0.15
+            vs_int = 0.03
+        elif ag_mode == 'aggressive':
+            # وضع عدواني: تشويش قوي - للبوتات المتقدمة
+            kashida_int = 0.4
+            nfd_int = 0.45
+            homoglyph_int = 0.35
+            fullwidth_int = 0.6
+            latin_ext_int = 0.5
+            invisible_int = 0.25
+            space_int = 0.45
+            digit_int = 0.4
+            vs_int = 0.1
+        else:
+            # وضع ذكي (الافتراضي): توازن بين المقروئية والتشويش
+            kashida_int = 0.25
+            nfd_int = 0.3
+            homoglyph_int = 0.2
+            fullwidth_int = 0.4
+            latin_ext_int = 0.3
+            invisible_int = 0.15
+            space_int = 0.3
+            digit_int = 0.25
+            vs_int = 0.06
+        
+        # ═══ الخطوة 1: إخفاء الروابط في HTML ═══
+        text, has_html_links = self.hide_links_in_html(text)
+        
+        # ═══ الخطوة 2: تشويش الكلمات المفتاحية العربية ═══
+        text = self.obfuscate_arabic_keywords(text)
+        
+        # ═══ الخطوة 3: Kashida عربي (يبقى بعد NFKC!) ═══
+        if get_setting('kashida_enabled', 'on') == 'on':
+            text = self.apply_kashida(text, intensity=kashida_int)
+        
+        # ═══ الخطوة 4: NFD Decomposition ═══
+        text = self.apply_nfd_decomposition(text, intensity=nfd_int)
+        
+        # ═══ الخطوة 5: Arabic Homoglyphs ═══
+        if get_setting('arabic_homoglyph_enabled', 'on') == 'on':
+            text = self.apply_arabic_homoglyphs(text, intensity=homoglyph_int)
+        
+        # ═══ الخطوة 6: Fullwidth Latin على الأحرف اللاتينية ═══
+        if get_setting('fullwidth_latin_enabled', 'on') == 'on':
+            text = self.apply_fullwidth_latin(text, intensity=fullwidth_int)
+        
+        # ═══ الخطوة 7: Latin Extended على الأحرف اللاتينية المتبقية ═══
+        if get_setting('latin_extended_enabled', 'on') == 'on':
+            text = self.apply_latin_extended(text, intensity=latin_ext_int)
+        
+        # ═══ الخطوة 8: أحرف غير مرئية استراتيجية ═══
+        text = self.apply_strategic_invisibles(text, intensity=invisible_int)
+        
+        # ═══ الخطوة 9: مسافات بديلة ═══
+        text = self.apply_alternate_spaces(text, intensity=space_int)
+        
+        # ═══ الخطوة 10: تحويل أرقام آمن ═══
+        text = self.apply_safe_digit_transform(text, intensity=digit_int)
+        
+        # ═══ الخطوة 11: Variation Selectors ═══
+        if get_setting('variation_selectors_enabled', 'on') == 'on':
+            text = self.apply_variation_selectors(text, intensity=vs_int)
+        
+        # ═══ الخطوة 12: Tag Characters ═══
+        if get_setting('tag_characters_enabled', 'on') == 'on':
+            text = self.apply_tag_characters(text)
+        
+        # ═══ حماية البداية والنهاية ═══
+        text = random.choice(self.INVISIBLE_CHARS[:4]) + text
+        if random.random() < 0.3:
+            text = text + random.choice(self.INVISIBLE_CHARS[:4])
+        
+        # ═══ علامة RTL خفية ═══
+        if random.random() < 0.2:
+            text = text + '\u200F'
+        if random.random() < 0.1:
+            text = '\u061C' + text
+        
+        # ═══ التأكد من عدم التكرار في نفس المجموعة ═══
+        if group_id:
+            cache_key = f"{group_id}:{hash(text)}"
+            if cache_key in self._message_cache:
+                # إضافة حرف غير مرئي إضافي لكسر التطابق
+                text = random.choice(self.INVISIBLE_CHARS[:4]) + text
+            self._message_cache.append(cache_key)
+        
+        return text, has_html_links
+
+
+# إنشاء مثيل عام لنظام AntiGuardian
+anti_guardian = AntiGuardianBypass()
+
 
 class YayTextMesslettersObfuscator:
     """
@@ -2639,14 +3251,20 @@ async def fast_post_to_all_groups(messages):
 
                 use_html = False
                 if content:
-                    yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                    if yaytext_on:
-                        encrypted_content, use_html = yaytext_obfuscate(content)
+                    # 🛡️ نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
+                    anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
+                    if anti_guardian_on:
+                        # AntiGuardian يجمع كل التقنيات الآمنة + إخفاء الروابط
+                        encrypted_content, use_html = anti_guardian.bypass(content, gid)
                     else:
-                        varied = vary_text(content)
-                        if obfuscation_on:
-                            varied = obfuscate_for_humans(varied)
-                        encrypted_content = encrypt_text(varied, gid)
+                        yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                        if yaytext_on:
+                            encrypted_content, use_html = yaytext_obfuscate(content)
+                        else:
+                            varied = vary_text(content)
+                            if obfuscation_on:
+                                varied = obfuscate_for_humans(varied)
+                            encrypted_content = encrypt_text(varied, gid)
                 else:
                     encrypted_content = ""
 
@@ -2798,14 +3416,19 @@ async def post_to_all_groups(message):
 
             use_html = False
             if content:
-                yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                if yaytext_on:
-                    encrypted_content, use_html = yaytext_obfuscate(content)
+                # 🛡️ نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
+                anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
+                if anti_guardian_on:
+                    encrypted_content, use_html = anti_guardian.bypass(content, gid)
                 else:
-                    varied = vary_text(content)
-                    if obfuscation_on:
-                        varied = obfuscate_for_humans(varied)
-                    encrypted_content = encrypt_text(varied, gid)
+                    yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                    if yaytext_on:
+                        encrypted_content, use_html = yaytext_obfuscate(content)
+                    else:
+                        varied = vary_text(content)
+                        if obfuscation_on:
+                            varied = obfuscate_for_humans(varied)
+                        encrypted_content = encrypt_text(varied, gid)
             else:
                 encrypted_content = ""
 
@@ -3048,6 +3671,7 @@ def get_main_menu():
          Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
         [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
         [Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
+        [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
@@ -3835,6 +4459,70 @@ async def main():
             set_setting('exponential_backoff', new_val)
             await event.answer(f"Exponential Backoff: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
             await event.edit(f"📈 **Exponential Backoff: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\nتراجع أسي ذكي عند FloodWait!", buttons=[[Button.inline("🔙 رجوع", b"advanced_enc_settings")]])
+
+        # 🛡️ إعدادات AntiGuardian - تجاوز بوتات الحماية المتقدمة
+        elif data == 'anti_guardian_settings':
+            ag_status = "✅" if get_setting('anti_guardian_enabled', 'on') == 'on' else "❌"
+            fw_status = "✅" if get_setting('fullwidth_latin_enabled', 'on') == 'on' else "❌"
+            le_status = "✅" if get_setting('latin_extended_enabled', 'on') == 'on' else "❌"
+            ag_mode = get_setting('anti_guardian_mode', 'smart')
+            mode_labels = {'smart': 'ذكي 🧠', 'stealth': 'خفي 👻', 'aggressive': 'عدواني ⚔️'}
+            await event.edit(
+                f"🛡️ **AntiGuardian - تجاوز بوتات الحماية**\n\n"
+                f"🎯 البوتات المستهدفة:\n"
+                f"  @GoldenkidKbot @GHClone3Bot\n"
+                f"  @Deevill07bot @GHSecurity2Bot\n"
+                f"  @Jabal_RoBot @PMU_Securitybot\n"
+                f"  @TaifUniTu1_BoT72638\n\n"
+                f"🔄 النظام: {ag_status}\n"
+                f"🧠 الوضع: {mode_labels.get(ag_mode, ag_mode)}\n"
+                f"🔤 Fullwidth Latin: {fw_status}\n"
+                f"🔤 Latin Extended: {le_status}\n\n"
+                f"📋 **التقنيات المستخدمة:**\n"
+                f"  1️⃣ Fullwidth Latin (لا يكشفه isMultiLang!)\n"
+                f"  2️⃣ Latin Extended-A/B (تبدو لاتينية عادية)\n"
+                f"  3️⃣ تشويش كلمات مفتاحية عربية\n"
+                f"  4️⃣ كشيدة + NFD + Homoglyphs عربي\n"
+                f"  5️⃣ إخفاء الروابط في HTML TextUrl\n"
+                f"  6️⃣ أحرف غير مرئية + مسافات بديلة\n"
+                f"  7️⃣ Variation Selectors + Tag Chars\n"
+                f"  8️⃣ تحويل أرقام آمن",
+                buttons=[
+                    [Button.inline(f"🔄 AntiGuardian {ag_status}", b"toggle_anti_guardian"),
+                     Button.inline(f"🧠 الوضع: {mode_labels.get(ag_mode, ag_mode)}", b"cycle_ag_mode")],
+                    [Button.inline(f"🔤 Fullwidth {fw_status}", b"toggle_fullwidth"),
+                     Button.inline(f"🔤 Latin Ext {le_status}", b"toggle_latin_ext")],
+                    [Button.inline("🔙 رجوع", b"back")],
+                ]
+            )
+        elif data == 'toggle_anti_guardian':
+            current = get_setting('anti_guardian_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('anti_guardian_enabled', new_val)
+            await event.answer(f"AntiGuardian: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
+            # إعادة عرض صفحة AntiGuardian
+            await event.click(data='anti_guardian_settings')
+        elif data == 'toggle_fullwidth':
+            current = get_setting('fullwidth_latin_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('fullwidth_latin_enabled', new_val)
+            await event.answer(f"Fullwidth Latin: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
+            await event.click(data='anti_guardian_settings')
+        elif data == 'toggle_latin_ext':
+            current = get_setting('latin_extended_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('latin_extended_enabled', new_val)
+            await event.answer(f"Latin Extended: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
+            await event.click(data='anti_guardian_settings')
+        elif data == 'cycle_ag_mode':
+            modes = ['smart', 'stealth', 'aggressive']
+            current = get_setting('anti_guardian_mode', 'smart')
+            idx = modes.index(current) if current in modes else 0
+            new_mode = modes[(idx + 1) % len(modes)]
+            set_setting('anti_guardian_mode', new_mode)
+            mode_labels = {'smart': 'ذكي 🧠', 'stealth': 'خفي 👻', 'aggressive': 'عدواني ⚔️'}
+            await event.answer(f"الوضع: {mode_labels[new_mode]}")
+            await event.click(data='anti_guardian_settings')
 
         elif data == 'blacklist':
             bl_count = len(get_blacklisted_groups())
