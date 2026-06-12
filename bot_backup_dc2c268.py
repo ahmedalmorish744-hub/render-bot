@@ -3,10 +3,8 @@
 
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║  🤖 بوت النشر الخارق 2026 - النسخة العالمية الاحترافية 🌐⚡  ║
-║  Spintax + Ghost Swarm + Load Balancer + Human Delay         ║
-║  كشيدة + Variation Selectors + Tag Chars + RTLO + edit_hide  ║
-║  Exponential Backoff + Arabic Homoglyphs + 50+ Unicode Style ║
+║     🤖 بوت النشر الخارق - نسخة الجدولة المتقدمة 📅⚡         ║
+║     نشر سريع + جدولة حقيقية + تشفير غير مرئي               ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -18,8 +16,6 @@ import random
 import sqlite3
 import asyncio
 import logging
-import hashlib
-import unicodedata
 import urllib.request
 from threading import Thread
 from datetime import datetime, timedelta
@@ -81,125 +77,6 @@ scheduled_tasks = {}  # {schedule_id: asyncio.Task}
 GHOST_POST_ENABLED = True        # تفعيل النشر الشبحي
 GHOST_POST_LIFETIME = 20         # ثواني قبل التعديل/الحذف
 GHOST_POST_MODE = 'replace'      # 'replace' = تعديل بنص مختلف | 'delete' = حذف | 'empty' = تفريغ
-
-# ═══════════════════════════════════════════════
-#  🆕 نظام Spintax - تنويع تلقائي للرسائل
-# ═══════════════════════════════════════════════
-def parse_spintax(text):
-    """تحليل صيغة Spintax: {خيار1|خيار2|خيار3} لتنويع الرسائل تلقائياً
-    مثال: {مرحباً|أهلاً|سلام} بكم في {قناتنا|مجموعتنا}
-    → مرحباً بكم في قناتنا  أو  أهلاً بكم في مجموعتنا  ...إلخ
-    يدعم تداخل متعدد: {{خيار1|خيار2}|خيار3}
-    """
-    while '{' in text and '}' in text:
-        new_text = re.sub(r'\{([^{}]*)\}', lambda m: random.choice(m.group(1).split('|')), text)
-        if new_text == text:
-            break
-        text = new_text
-    return text
-
-# ═══════════════════════════════════════════════
-#  🆕 نظام موازنة التحميل - Load Balancer
-# ═══════════════════════════════════════════════
-class AccountLoadBalancer:
-    """توزيع ذكي للرسائل عبر الحسابات - يمنع الحظر ويقلل FloodWait
-    يختار الحساب الأقل استخداماً تلقائياً
-    يحترم حدود: 40 رسالة/ساعة و 10 رسائل/دقيقة لكل حساب
-    """
-    def __init__(self):
-        self.usage = {}  # {acc_id: [timestamps]}
-        self.max_per_hour = 40
-        self.max_per_minute = 10
-
-    def get_available_client(self):
-        """الحصول على العميل الأقل تحميلاً"""
-        now = time.time()
-        best_acc = None
-        best_score = float('inf')
-        for acc_id in user_clients:
-            if acc_id not in self.usage:
-                self.usage[acc_id] = []
-            # تنظيف الطوابع القديمة
-            self.usage[acc_id] = [t for t in self.usage[acc_id] if now - t < 3600]
-            # حساب النقاط = عدد الرسائل في الساعة
-            hourly = len(self.usage[acc_id])
-            minute_count = len([t for t in self.usage[acc_id] if now - t < 60])
-            if hourly < self.max_per_hour and minute_count < self.max_per_minute:
-                if hourly < best_score:
-                    best_score = hourly
-                    best_acc = acc_id
-        if best_acc is not None:
-            self.usage[best_acc].append(now)
-            return user_clients[best_acc], best_acc
-        # إذا كل الحسابات مشغولة - اختر عشوائي
-        if user_clients:
-            acc_id = random.choice(list(user_clients.keys()))
-            if acc_id not in self.usage:
-                self.usage[acc_id] = []
-            self.usage[acc_id].append(now)
-            return user_clients[acc_id], acc_id
-        return None, None
-
-    def get_stats(self):
-        """إحصائيات التحميل لكل حساب"""
-        now = time.time()
-        stats = {}
-        for acc_id in user_clients:
-            if acc_id not in self.usage:
-                self.usage[acc_id] = []
-            hourly = len([t for t in self.usage[acc_id] if now - t < 3600])
-            minute = len([t for t in self.usage[acc_id] if now - t < 60])
-            stats[acc_id] = {'hourly': hourly, 'minute': minute}
-        return stats
-
-load_balancer = AccountLoadBalancer()
-
-# ═══════════════════════════════════════════════
-#  🆕 تأخير بشري - Human Delay
-# ═══════════════════════════════════════════════
-async def human_delay(min_sec=None, max_sec=None):
-    """محاكاة تأخير بشري واقعي - يمنع بوتات الحماية من كشف النمط الآلي
-    يشمل: تأخير عشوائي + 10% احتمال توقف أطول (محاكاة تشتت)
-    """
-    if get_setting('human_delay_enabled', 'on') != 'on':
-        return
-    if min_sec is None:
-        min_sec = int(get_setting('human_delay_min', '3'))
-    if max_sec is None:
-        max_sec = int(get_setting('human_delay_max', '15'))
-    delay = random.uniform(min_sec, max_sec)
-    # 10% احتمال توقف أطول (محاكاة تشتت انتباه)
-    if random.random() < 0.1:
-        delay += random.uniform(5, 15)
-    # 5% احتمال توقف قصير جداً (محاكاة إرسال سريع)
-    if random.random() < 0.05:
-        delay = random.uniform(0.5, 2)
-    await asyncio.sleep(delay)
-
-# ═══════════════════════════════════════════════
-#  🆕 إرسال مع تراجع أسي - Exponential Backoff
-# ═══════════════════════════════════════════════
-async def send_with_backoff(client, chat_id, message, max_retries=5, **kwargs):
-    """إرسال مع تراجع أسي وتشويش عشوائي - احترافي ضد FloodWait
-    يستخدم: exponential backoff + jitter + تبديل الحساب عند الحاجة
-    """
-    base_delay = 1
-    for attempt in range(max_retries):
-        try:
-            return await client.send_message(int(chat_id), message, **kwargs)
-        except FloodWaitError as e:
-            jitter = random.uniform(0, 5)
-            total_wait = e.seconds + jitter
-            logger.warning(f"⏸ FloodWait: {e.seconds}s, محاولة {attempt+1}/{max_retries}")
-            await asyncio.sleep(total_wait)
-        except Exception as e:
-            if get_setting('exponential_backoff', 'on') == 'on':
-                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), 300)
-            else:
-                delay = base_delay
-            logger.error(f"❌ خطأ إرسال (محاولة {attempt+1}): {e}")
-            await asyncio.sleep(delay)
-    raise Exception(f"فشل بعد {max_retries} محاولات")
 
 # ═══════════════════════════════════════════════
 #  قاعدة البيانات
@@ -273,39 +150,6 @@ def init_db():
         set_setting('ghost_post_lifetime', '20')
     if get_setting('ghost_post_mode') is None:
         set_setting('ghost_post_mode', 'replace')
-    # 🆕 إعدادات الأنظمة المتقدمة
-    if get_setting('spintax_enabled') is None:
-        set_setting('spintax_enabled', 'on')
-    if get_setting('variation_selectors_enabled') is None:
-        set_setting('variation_selectors_enabled', 'on')
-    if get_setting('tag_characters_enabled') is None:
-        set_setting('tag_characters_enabled', 'on')
-    if get_setting('human_delay_enabled') is None:
-        set_setting('human_delay_enabled', 'on')
-    if get_setting('human_delay_min') is None:
-        set_setting('human_delay_min', '3')
-    if get_setting('human_delay_max') is None:
-        set_setting('human_delay_max', '15')
-    if get_setting('load_balancer_enabled') is None:
-        set_setting('load_balancer_enabled', 'on')
-    if get_setting('ghost_swarm_enabled') is None:
-        set_setting('ghost_swarm_enabled', 'off')
-    if get_setting('ghost_swarm_stages') is None:
-        set_setting('ghost_swarm_stages', '3')
-    if get_setting('ghost_swarm_interval') is None:
-        set_setting('ghost_swarm_interval', '10')
-    if get_setting('kashida_enabled') is None:
-        set_setting('kashida_enabled', 'on')
-    if get_setting('kashida_intensity') is None:
-        set_setting('kashida_intensity', '0.3')
-    if get_setting('arabic_homoglyph_enabled') is None:
-        set_setting('arabic_homoglyph_enabled', 'on')
-    if get_setting('rtlo_enabled') is None:
-        set_setting('rtlo_enabled', 'off')
-    if get_setting('edit_hide_enabled') is None:
-        set_setting('edit_hide_enabled', 'on')
-    if get_setting('exponential_backoff') is None:
-        set_setting('exponential_backoff', 'on')
 
     conn.commit()
     conn.close()
@@ -1071,38 +915,6 @@ class YayTextMesslettersObfuscator:
             '0': '\u06F0', '1': '\u06F1', '2': '\u06F2', '3': '\u06F3', '4': '\u06F4',
             '5': '\u06F5', '6': '\u06F6', '7': '\u06F7', '8': '\u06F8', '9': '\u06F9',
         }
-        
-        # 🆕 Arabic Homoglyphs - بدائل مرئية متطابقة (أقوى تقنية عربية)
-        self.ARABIC_HOMOGLYPHS = {
-            'ا': ['أ', 'إ', 'آ', 'ٱ'],  # ألف بمختلف أشكالها
-            'ه': ['ة', 'ھ'],              # هاء / تاء مربوطة
-            'ي': ['ى', 'ئ'],              # ياء بمختلف أشكالها
-            'و': ['ؤ'],                    # واو / واو بهمزة
-            'ل': ['ﻻ', 'ﻼ'],              # لام ألف
-            'ك': ['ک', 'ك'],              # كاف فارسية/عربية
-            'ن': ['ں'],                    # نون غنية
-            'ب': ['ٻ'],                    # باء بنقطة أسفل
-        }
-        
-        # 🆕 Kashida positions - أحرف تقبل الكشيدة (Tatweel U+0640)
-        # الكشيدة أقوى طبقة لأنها تبقى بعد كل أنواع التطبيع
-        self.KASHIDA_ACCEPTING = 'بتثجحخدذرزسشصضطظعغفقكلمنهي'
-        
-        # 🆕 Variation Selectors (VS1-VS16: U+FE00-U+FE0F)
-        # أحرف تجميع غير مرئية تبقى بعد التطبيع
-        self.VARIATION_SELECTORS = [chr(0xFE00 + i) for i in range(16)]
-        
-        # 🆕 Arabic Presentation Forms-B (PFB)
-        # تحويل الحرف العربي لكود مختلف بنفس الشكل المرئي
-        self.ARABIC_PFB_MAP = {
-            'ا': '\uFE8D', 'ب': '\uFE90', 'ت': '\uFE96', 'ث': '\uFE9A',
-            'ج': '\uFE9E', 'ح': '\uFEA2', 'خ': '\uFEA6', 'د': '\uFEAA',
-            'ذ': '\uFEAC', 'ر': '\uFEAE', 'ز': '\uFEB0', 'س': '\uFEB4',
-            'ش': '\uFEB8', 'ص': '\uFEBC', 'ض': '\uFEC0', 'ط': '\uFEC4',
-            'ظ': '\uFEC8', 'ع': '\uFECC', 'غ': '\uFED0', 'ف': '\uFED4',
-            'ق': '\uFED8', 'ك': '\uFEDC', 'ل': '\uFEE0', 'م': '\uFEE4',
-            'ن': '\uFEE8', 'ه': '\uFEEC', 'و': '\uFEF0', 'ي': '\uFEF2',
-        }
 
     def _build_styles_list(self):
         """بناء قائمة كل الأنماط المتاحة (50+ نمط)"""
@@ -1166,55 +978,19 @@ class YayTextMesslettersObfuscator:
         return ''.join(result)
 
     def _apply_arabic_smart_obfuscation(self, text, intensity=0.35):
-        """تطبيق تشويش عربي خارق - 12 طبقة دفاعية متقدمة
+        """تطبيق تشويش عربي ذكي يحافظ على المقروئية تماماً
         
-        الطبقات (مرتبة من الأقوى للأخف):
-        1. Arabic Homoglyphs - بدائل مرئية متطابقة (أقوى تقنية عربية 2026)
-        2. كشيدة/Tatweel (U+0640) - تبقى بعد كل أنواع التطبيع NFKC/NFD
-        3. PFB (Arabic Presentation Forms-B) - نفس الشكل، كود مختلف
-        4. NFD Decomposition - تحويل المركب لمفكك
-        5. Variation Selectors (VS1-VS16) - أحرف تجميع غير مرئية
-        6. Tag Characters (U+E0000+) - ترميز مخفي كامل
-        7. Arabic-Indic digits - أرقام بنفس الشكل
-        8. أحرف غير مرئية استراتيجية
-        9. مسافات بديلة متنوعة
-        10. RTLO trick - تشويش اتجاه القراءة
-        11. علامات RTL/ALM خفية
-        12. حماية البداية والنهاية
+        تقنيات:
+        1. تحويل النماذج المركبة إلى مفككة (NFC → NFD) - يبدو متطابقاً مرئياً
+        2. أرقام عربية-هندية بدل اللاتينية
+        3. أحرف غير مرئية استراتيجية (متعددة الأنواع)
+        4. مسافات بديلة متنوعة
+        5. علامات RTL/ALM خفية
         """
         if not text:
             return text
         
-        # ═══ 1. Arabic Homoglyphs - أقوى طبقة عربية 🆕 ═══
-        if get_setting('arabic_homoglyph_enabled', 'on') == 'on':
-            result = list(text)
-            for i, c in enumerate(result):
-                if c in self.ARABIC_HOMOGLYPHS and random.random() < 0.25:
-                    result[i] = random.choice(self.ARABIC_HOMOGLYPHS[c])
-            text = ''.join(result)
-        
-        # ═══ 2. كشيدة/Tatweel - أقوى طبقة ثابتة (تبقى بعد NFKC!) 🆕 ═══
-        if get_setting('kashida_enabled', 'on') == 'on':
-            kashida_intensity = float(get_setting('kashida_intensity', '0.3'))
-            result = list(text)
-            insertions = []
-            for i, c in enumerate(result):
-                if c in self.KASHIDA_ACCEPTING and random.random() < kashida_intensity:
-                    # إضافة 1-2 كشيدة (Tatweel U+0640)
-                    num_kashida = 1 if random.random() < 0.7 else 2
-                    insertions.append((i + 1, '\u0640' * num_kashida))
-            for pos, chars in sorted(insertions, key=lambda x: x[0], reverse=True):
-                result.insert(pos, chars)
-            text = ''.join(result)
-        
-        # ═══ 3. PFB (Arabic Presentation Forms-B) 🆕 ═══
-        result = list(text)
-        for i, c in enumerate(result):
-            if c in self.ARABIC_PFB_MAP and random.random() < 0.2:
-                result[i] = self.ARABIC_PFB_MAP[c]
-        text = ''.join(result)
-        
-        # ═══ 4. NFD Decomposition - يبدو متطابقاً لكن الكود مختلف ═══
+        # ═══ 1. NFD Decomposition - يبدو متطابقاً لكن الكود مختلف ═══
         result = []
         for c in text:
             if c in self.ARABIC_DECOMPOSE_MAP and random.random() < intensity:
@@ -1225,25 +1001,7 @@ class YayTextMesslettersObfuscator:
                 result.append(c)
         text = ''.join(result)
         
-        # ═══ 5. Variation Selectors (VS1-VS16) 🆕 ═══
-        if get_setting('variation_selectors_enabled', 'on') == 'on':
-            result = list(text)
-            insertions = []
-            for i, c in enumerate(result):
-                if '\u0600' <= c <= '\u06FF' and random.random() < 0.08:
-                    insertions.append((i + 1, random.choice(self.VARIATION_SELECTORS)))
-            for pos, char in sorted(insertions, key=lambda x: x[0], reverse=True):
-                result.insert(pos, char)
-            text = ''.join(result)
-        
-        # ═══ 6. Tag Characters (U+E0000+) - ترميز مخفي 🆕 ═══
-        if get_setting('tag_characters_enabled', 'on') == 'on':
-            # إضافة أحرف Tag غير مرئية في البداية
-            tag_prefix = ''.join(chr(0xE0000 + ord(c)) for c in 'TG')
-            tag_suffix = ''.join(chr(0xE0000 + ord(c)) for c in random.choice(['AB','CD','EF','GH']))
-            text = tag_prefix + text + tag_suffix
-        
-        # ═══ 7. Arabic-Indic digits (أرقام مفردة فقط وليس أرقام هواتف) ═══
+        # ═══ 2. Arabic-Indic digits (أرقام مفردة فقط وليس أرقام هواتف) ═══
         result = list(text)
         prev_was_digit = False
         for i, c in enumerate(result):
@@ -1259,7 +1017,7 @@ class YayTextMesslettersObfuscator:
                 prev_was_digit = False
         text = ''.join(result)
         
-        # ═══ 8. أحرف غير مرئية احترافية (متعددة الأنواع) ═══
+        # ═══ 3. أحرف غير مرئية احترافية (متعددة الأنواع) ═══
         inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
         
         # حرف غير مرئي في البداية
@@ -1285,7 +1043,7 @@ class YayTextMesslettersObfuscator:
             result.insert(pos, char)
         text = ''.join(result)
         
-        # ═══ 9. مسافات بديلة متنوعة ═══
+        # ═══ 4. مسافات بديلة متنوعة ═══
         alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007', '\u2006', '\u2005']
         result = list(text)
         for i, c in enumerate(result):
@@ -1293,26 +1051,14 @@ class YayTextMesslettersObfuscator:
                 result[i] = random.choice(alt_spaces)
         text = ''.join(result)
         
-        # ═══ 10. RTLO trick - تشويش اتجاه القراءة 🆕 ═══
-        if get_setting('rtlo_enabled', 'off') == 'on':
-            words = text.split(' ')
-            if len(words) > 3:
-                new_words = []
-                for i, w in enumerate(words):
-                    new_words.append(w)
-                    if i < len(words) - 1 and random.random() < 0.05:
-                        new_words.append('\u202E')  # RTLO
-                        new_words.append('\u202D')  # LTR override (استعادة)
-                text = ' '.join(new_words)
-        
-        # ═══ 11. علامات RTL/ALM خفية ═══
+        # ═══ 5. علامات RTL/ALM خفية ═══
         if random.random() < 0.2:
             text = text + '\u200F'  # RTL Mark
         if random.random() < 0.1:
             text = '\u061C' + text  # Arabic Letter Mark at start
         
-        # ═══ 12. حماية البداية والنهاية ═══
-        text = random.choice(inv_chars[:4]) + text + random.choice(inv_chars[:4])
+        # حرف غير مرئي في النهاية
+        text = text + random.choice(inv_chars[:4])
         
         return text
 
@@ -2494,79 +2240,10 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
         logger.debug(f"👻 شبح: تخطي ({e})")
 
 # ═══════════════════════════════════════════════
-#  🆕 نظام سرب الأشباح - Ghost Swarm 👻🐝
-# ═══════════════════════════════════════════════
-async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=3, interval=10, original_raw_content=None, all_messages=None):
-    """نظام سرب الأشباح: تعديلات متتالية بتكويد مختلف كل مرة
-    المرحلة 1: تعديل بنمط مختلف (بعد interval ثانية)
-    المرحلة 2: تعديل بنمط مختلف آخر (بعد interval ثانية أخرى)
-    المرحلة 3: تعديل بنمط مختلف أو نص محايد
-    → بوتات الحماية تحلل الرسالة بعد كل تعديل = لا تجد نفس النمط أبداً!
-    → مع edit_hide لا يظهر علامة "معدّل" على الرسالة!
-    """
-    for stage in range(stages):
-        await asyncio.sleep(interval)
-        if not is_posting_active:
-            return
-        try:
-            new_content = None
-            use_html = False
-            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-            
-            # استخدام الإعلان التالي أو نفس الإعلان بتكويد مختلف
-            if all_messages and len(all_messages) > 1 and random.random() < 0.5:
-                other_msgs = [m for m in all_messages if m[1]]
-                if other_msgs:
-                    chosen = random.choice(other_msgs)
-                    raw = chosen[1]
-                    if raw:
-                        if yaytext_on:
-                            new_content, use_html = yaytext_obfuscate(raw)
-                        else:
-                            new_content = encrypt_text(vary_text(raw), group_id)
-            elif original_raw_content:
-                if yaytext_on:
-                    # إجبار نمط مختلف
-                    old_style = yaytext_obfuscator._last_style
-                    new_content, use_html = yaytext_obfuscate(original_raw_content)
-                    retries = 0
-                    while yaytext_obfuscator._last_style == old_style and retries < 5:
-                        new_content, use_html = yaytext_obfuscate(original_raw_content)
-                        retries += 1
-                else:
-                    new_content = encrypt_text(vary_text(original_raw_content), group_id)
-            
-            if not new_content:
-                neutral = ['✅', '👍', 'تم', 'شكراً', '👌', 'حسناً', 'تمام']
-                new_content = random.choice(neutral)
-                use_html = False
-            
-            # 🆕 استخدام edit_hide لإخفاء علامة "معدّل"
-            try:
-                from telethon.tl.functions.messages import EditMessageRequest
-                parse_mode = 'html' if use_html else None
-                if get_setting('edit_hide_enabled', 'on') == 'on':
-                    await client(EditMessageRequest(
-                        peer=int(group_id),
-                        id=msg_id,
-                        message=new_content,
-                        no_webpage=True
-                    ))
-                else:
-                    await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
-            except:
-                parse_mode = 'html' if use_html else None
-                await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
-            
-            logger.info(f"🐝 Swarm مرحلة {stage+1}/{stages} في {group_id}")
-        except Exception as e:
-            logger.debug(f"🐝 Swarm مرحلة فشلت: {e}")
-
-# ═══════════════════════════════════════════════
 #  النشر السريع - ينشر بكل الحسابات لكل المجموعات + كل الرسائل + شبحي
 # ═══════════════════════════════════════════════
 async def fast_post_to_all_groups(messages):
-    """نشر سريع: كل حساب × كل مجموعة × كل رسالة + نظام شبحي + Spintax + Human Delay + Ghost Swarm"""
+    """نشر سريع: كل حساب × كل مجموعة × كل رسالة + نظام شبحي"""
     global is_posting_active
 
     if not isinstance(messages, list):
@@ -2577,11 +2254,6 @@ async def fast_post_to_all_groups(messages):
     ghost_enabled = get_setting('ghost_post_enabled', 'on') == 'on'
     ghost_lifetime = max(10, int(get_setting('ghost_post_lifetime', '20')))
     ghost_mode = get_setting('ghost_post_mode', 'replace')
-    ghost_swarm_on = get_setting('ghost_swarm_enabled', 'off') == 'on'
-    ghost_swarm_stages = int(get_setting('ghost_swarm_stages', '3'))
-    ghost_swarm_interval = int(get_setting('ghost_swarm_interval', '10'))
-    spintax_on = get_setting('spintax_enabled', 'on') == 'on'
-    use_load_balancer = get_setting('load_balancer_enabled', 'on') == 'on'
     success_count = 0
     fail_count = 0
     total_posts = 0
@@ -2597,7 +2269,7 @@ async def fast_post_to_all_groups(messages):
     if total_posts == 0:
         return 0, 0, 0
 
-    logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × {len(messages)} رسالة (إجمالي ~{total_posts}) 👻شبحي={'✅' if ghost_enabled else '❌'} 🐝سرب={'✅' if ghost_swarm_on else '❌'} 🎲Spintax={'✅' if spintax_on else '❌'}")
+    logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × {len(messages)} رسالة (إجمالي ~{total_posts} منشور) 👻شبحي={'✅' if ghost_enabled else '❌'}")
 
     # كل حساب ينشر في كل مجموعاته + كل الرسائل
     for acc_id, client in list(user_clients.items()):
@@ -2633,10 +2305,6 @@ async def fast_post_to_all_groups(messages):
                 msg_type = msg[3]
                 media_data = msg[4] if len(msg) > 4 else None
 
-                # 🆕 تطبيق Spintax على المحتوى
-                if content and spintax_on:
-                    content = parse_spintax(content)
-
                 use_html = False
                 if content:
                     yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
@@ -2651,11 +2319,7 @@ async def fast_post_to_all_groups(messages):
                     encrypted_content = ""
 
                 try:
-                    # 🆕 استخدام Human Delay بدل التأخير الثابت
-                    if get_setting('human_delay_enabled', 'on') == 'on':
-                        await human_delay()
-                    else:
-                        await asyncio.sleep(fast_delay)
+                    await asyncio.sleep(fast_delay)
                     if not is_posting_active:
                         break
                     
@@ -2666,44 +2330,29 @@ async def fast_post_to_all_groups(messages):
                     logger.info(f"⚡ سريع ✅ {gname[:30]} (حساب {acc_id}) ({success_count}/{total_posts})")
                     
                     # 👻 تفعيل النشر الشبحي
-                    if sent_msg and msg_type == 'text':
-                        # 🆕 Ghost Swarm أو Ghost Post عادي
-                        if ghost_swarm_on:
-                            asyncio.create_task(ghost_swarm_worker(
-                                client, gid, sent_msg.id, encrypted_content,
-                                stages=ghost_swarm_stages, interval=ghost_swarm_interval,
-                                original_raw_content=content, all_messages=msg_order
-                            ))
-                        elif ghost_enabled:
-                            asyncio.create_task(ghost_post_worker(
-                                client, gid, sent_msg.id, encrypted_content,
-                                lifetime=ghost_lifetime, mode=ghost_mode,
-                                original_raw_content=content, all_messages=msg_order
-                            ))
+                    if ghost_enabled and sent_msg and msg_type == 'text':
+                        asyncio.create_task(ghost_post_worker(
+                            client, gid, sent_msg.id, encrypted_content,
+                            lifetime=ghost_lifetime, mode=ghost_mode,
+                            original_raw_content=content, all_messages=msg_order
+                        ))
                     
                 except FloodWaitError as e:
                     logger.warning(f"⏸ FloodWait: {e.seconds}ث - انتظار ثم إعادة المحاولة")
                     try:
-                        await asyncio.sleep(e.seconds + random.uniform(1, 5))
+                        await asyncio.sleep(e.seconds + 1)
                         if not is_posting_active:
                             break
                         sent_msg = await _send_and_get_message(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
                         success_count += 1
                         log_posting(acc_id, int(gid), msg_id, 'success (retry after flood)')
                         logger.info(f"⚡ سريع ✅ (بعد FloodWait) {gname[:30]}")
-                        if sent_msg and msg_type == 'text':
-                            if ghost_swarm_on:
-                                asyncio.create_task(ghost_swarm_worker(
-                                    client, gid, sent_msg.id, encrypted_content,
-                                    stages=ghost_swarm_stages, interval=ghost_swarm_interval,
-                                    original_raw_content=content, all_messages=msg_order
-                                ))
-                            elif ghost_enabled:
-                                asyncio.create_task(ghost_post_worker(
-                                    client, gid, sent_msg.id, encrypted_content,
-                                    lifetime=ghost_lifetime, mode=ghost_mode,
-                                    original_raw_content=content, all_messages=msg_order
-                                ))
+                        if ghost_enabled and sent_msg and msg_type == 'text':
+                            asyncio.create_task(ghost_post_worker(
+                                client, gid, sent_msg.id, encrypted_content,
+                                lifetime=ghost_lifetime, mode=ghost_mode,
+                                original_raw_content=content, all_messages=msg_order
+                            ))
                     except Exception as retry_e:
                         fail_count += 1
                         logger.error(f"❌ فشل بعد إعادة المحاولة: {retry_e}")
@@ -3015,14 +2664,6 @@ def get_main_menu():
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
     ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
-    spintax_status = "✅" if get_setting('spintax_enabled', 'on') == 'on' else "❌"
-    kashida_status = "✅" if get_setting('kashida_enabled', 'on') == 'on' else "❌"
-    homoglyph_status = "✅" if get_setting('arabic_homoglyph_enabled', 'on') == 'on' else "❌"
-    hd_status = "✅" if get_setting('human_delay_enabled', 'on') == 'on' else "❌"
-    swarm_status = "✅" if get_setting('ghost_swarm_enabled', 'off') == 'on' else "❌"
-    vs_status = "✅" if get_setting('variation_selectors_enabled', 'on') == 'on' else "❌"
-    tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
-    lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '100')
     fast_delay = get_setting('fast_post_delay', '3')
@@ -3038,16 +2679,7 @@ def get_main_menu():
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
          Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
-        [Button.inline(f"🔄 YayText & Messletters {ym_status}", b"toggle_yaytext"),
-         Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax")],
-        [Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida"),
-         Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph")],
-        [Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs"),
-         Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag")],
-        [Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm"),
-         Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
-        [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
-        [Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
+        [Button.inline(f"🔄 تشويش YayText & Messletters {ym_status}", b"toggle_yaytext")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
@@ -3134,25 +2766,25 @@ async def main():
         example_text = "اشترك في قناتنا للحصول على عروض حصرية"
         encrypted_example = encrypt_text(example_text)
         await event.respond(
-            "🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
-            "✨ **12+ طبقة تشفير خارقة:**\n"
-            "• 🎲 Spintax - تنويع تلقائي للرسائل\n"
-            "• 🔀 Arabic Homoglyphs - بدائل متطابقة مرئياً\n"
-            "• 〰️ كشيدة/Tatweel - تبقى بعد كل التطبيع!\n"
-            "• 🏷️ Tag Characters - ترميز مخفي كامل\n"
-            "• 🔤 Variation Selectors - أحرف تجميع غير مرئية\n"
-            "• PFB + NFD + مسافات بديلة + أحرف مخفية\n\n"
-            "🐝 **أنظمة متقدمة:**\n"
-            "• 🐝 Ghost Swarm - تعديلات متتالية بتكويد مختلف\n"
-            "• 👁️ edit_hide - يخفي علامة 'معدّل'\n"
-            "• ⏱️ Human Delay - محاكاة تأخير بشري\n"
-            "• ⚖️ Load Balancer - توزيع ذكي بين الحسابات\n"
-            "• 📈 Exponential Backoff - تعامل احترافي مع FloodWait\n"
-            "• 🔗 الروابط والمعرفات تبقى قابلة للنقر!\n\n"
-            f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
-            f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولات: {pending_sched}\n\n"
-            f"📢 المجموعات: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n\n"
-            "🧪 جرب: /test_obfuscate لاختبار التشفير",
+            "🛡 **بوت النشر - الجدولة المتقدمة + النشر السريع**\n\n"
+            "✨ **تقنيات تجاوز الحماية (تحافظ على المحتوى):**\n"
+            "• أحرف غير مرئية بين الكلمات\n• مسافات بديلة (غير مرئية)\n"
+            "• حروف لاتينية متشابهة (homoglyphs)\n"
+            "• أنماط Unicode مزخرفة (YayText & Messletters)\n"
+            "• تشويش الأرقام بأنماط Unicode مختلفة\n"
+            "• 🔗 الروابط تبقى قابلة للنقر!\n"
+            "• 👤 المعرفات تبقى قابلة للنقر!\n\n"
+            f"📅 **الجدولة المتقدمة:**\n"
+            "• مرة واحدة في وقت محدد\n• تكرار كل X دقيقة/ساعة\n"
+            "• يومياً في وقت محدد\n• أسبوعياً\n\n"
+            f"⚡ النشر السريع ({fast_delay} ثانية)\n"
+            f"📌 منشورات مجدولة معلقة: {pending_sched}\n\n"
+            f"📝 **مثال للتشفير:**\n"
+            f"الأصلي: {example_text}\n"
+            f"المشفر: {encrypted_example}\n\n"
+            f"📢 المجموعات: {groups_count}\n"
+            f"⏱ مدة النشر العادي: {message_interval} ثانية\n\n"
+            "اختر من القائمة:",
             buttons=get_main_menu()
         )
 
@@ -3234,38 +2866,7 @@ async def main():
     async def test_handler(event):
         if not is_admin(event.sender_id):
             return
-        await event.respond("✅ بوت النشر الخارق 2026 يعمل!\n🎲 Spintax | 🐝 Ghost Swarm | ⚖️ Load Balancer\n〰️ كشيدة | 🔤 VS | 🏷️ Tags | 🔀 Homoglyphs | ⏱️ Human Delay")
-
-    # 🆕 أمر اختبار التشفير
-    @bot.on(events.NewMessage(pattern='/test_obfuscate'))
-    async def test_obfuscate_handler(event):
-        if not is_admin(event.sender_id):
-            return
-        test_text = "مرحباً بكم في قناتنا للحصول على عروض حصرية https://t.me/example"
-        if get_setting('spintax_enabled', 'on') == 'on':
-            test_text = parse_spintax("{مرحباً|أهلاً|سلام} بكم في {قناتنا|مجموعتنا} للحصول على {عروض حصرية|تخفيضات مميزة}")
-        encrypted, use_html = yaytext_obfuscate(test_text)
-        style_name = yaytext_obfuscator.get_style_name()
-        await event.respond(
-            f"🧪 **اختبار التشفير الخارق 2026**\n\n"
-            f"📝 الأصلي:\n{test_text}\n\n"
-            f"🔒 المشفر (نمط: {style_name}):\n{encrypted}\n\n"
-            f"📊 **الطبقات المفعلة:**\n"
-            f"• 🛡️ التشفير: {'✅' if get_setting('encryption','on')=='on' else '❌'}\n"
-            f"• 🎭 مكافحة الكشف: {'✅' if get_setting('anti_detect','on')=='on' else '❌'}\n"
-            f"• 🔄 YayText: {'✅' if get_setting('yaytext_messletters_obfuscation','on')=='on' else '❌'}\n"
-            f"• 🎲 Spintax: {'✅' if get_setting('spintax_enabled','on')=='on' else '❌'}\n"
-            f"• 〰️ كشيدة: {'✅' if get_setting('kashida_enabled','on')=='on' else '❌'}\n"
-            f"• 🔀 Homoglyphs عربي: {'✅' if get_setting('arabic_homoglyph_enabled','on')=='on' else '❌'}\n"
-            f"• 🔤 Variation Selectors: {'✅' if get_setting('variation_selectors_enabled','on')=='on' else '❌'}\n"
-            f"• 🏷️ Tag Characters: {'✅' if get_setting('tag_characters_enabled','on')=='on' else '❌'}\n"
-            f"• 🐝 Ghost Swarm: {'✅' if get_setting('ghost_swarm_enabled','off')=='on' else '❌'}\n"
-            f"• ⏱️ Human Delay: {'✅' if get_setting('human_delay_enabled','on')=='on' else '❌'}\n"
-            f"• ⚖️ Load Balancer: {'✅' if get_setting('load_balancer_enabled','on')=='on' else '❌'}\n"
-            f"• 👁️ edit_hide: {'✅' if get_setting('edit_hide_enabled','on')=='on' else '❌'}\n"
-            f"• 📈 Exponential Backoff: {'✅' if get_setting('exponential_backoff','on')=='on' else '❌'}\n"
-            f"• ↔️ RTLO: {'✅' if get_setting('rtlo_enabled','off')=='on' else '❌'}"
-        )
+        await event.respond("✅ البوت يعمل مع الجدولة المتقدمة والنشر السريع!")
 
     @bot.on(events.NewMessage(pattern='/fast_post'))
     async def fast_post_command(event):
@@ -3640,202 +3241,6 @@ async def main():
                 await event.answer("تشويش YayText & Messletters: معطل")
                 await event.edit("🔄 **تشويش YayText & Messletters: معطل** ❌", buttons=get_settings_menu())
 
-        # 🆕 تبديل Spintax
-        elif data == 'toggle_spintax':
-            current = get_setting('spintax_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('spintax_enabled', new_val)
-            await event.answer(f"Spintax: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🎲 **Spintax: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"📝 **صيغة Spintax:** {{خيار1|خيار2|خيار3}}\n"
-                f"مثال: {{مرحباً|أهلاً|سلام}} بكم في {{قناتنا|مجموعتنا}}\n\n"
-                f"كل رسالة تُرسل تختار خيارات مختلفة تلقائياً\n"
-                f"→ بوتات الحماية لا تجد نفس النص مرتين أبداً!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل كشيدة
-        elif data == 'toggle_kashida':
-            current = get_setting('kashida_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('kashida_enabled', new_val)
-            await event.answer(f"كشيدة: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"〰️ **كشيدة/Tatweel: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"أقوى طبقة تشفير عربية - تبقى بعد كل أنواع التطبيع!\n"
-                f"تضيف أحرف ـ (Tatweel U+0640) بين الحروف العربية\n"
-                f"→ النص يبقى مقروءاً طبيعياً\n"
-                f"→ بوتات الحماية لا تستطيع إزالتها",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Arabic Homoglyphs
-        elif data == 'toggle_arabic_homoglyph':
-            current = get_setting('arabic_homoglyph_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('arabic_homoglyph_enabled', new_val)
-            await event.answer(f"Homoglyphs عربي: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🔀 **Homoglyphs عربي: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"يبدل الأحرف العربية ببدائل متطابقة مرئياً:\n"
-                f"• ا ↔ أ ↔ إ ↔ آ ↔ ٱ\n"
-                f"• ه ↔ ة ↔ ھ\n"
-                f"• ي ↔ ى ↔ ئ\n"
-                f"• و ↔ ؤ\n"
-                f"→ تبدو نفس الحروف لكن بكود Unicode مختلف!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Variation Selectors
-        elif data == 'toggle_vs':
-            current = get_setting('variation_selectors_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('variation_selectors_enabled', new_val)
-            await event.answer(f"Variation Selectors: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🔤 **Variation Selectors: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"أحرف تجميع غير مرئية (VS1-VS16)\n"
-                f"تُضاف بعد الحروف العربية بشكل عشوائي\n"
-                f"→ غير مرئية تماماً للمستخدم\n"
-                f"→ تبقى بعد تطبيع Unicode",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Tag Characters
-        elif data == 'toggle_tag':
-            current = get_setting('tag_characters_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('tag_characters_enabled', new_val)
-            await event.answer(f"Tag Characters: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🏷️ **Tag Characters: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"أحرف Unicode Tag (U+E0000+) مخفية تماماً\n"
-                f"تُضاف في بداية ونهاية النص\n"
-                f"→ غير مرئية للمستخدم\n"
-                f"→ تُغيّر بصمة النص كلياً",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Ghost Swarm
-        elif data == 'toggle_ghost_swarm':
-            current = get_setting('ghost_swarm_enabled', 'off')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('ghost_swarm_enabled', new_val)
-            stages = get_setting('ghost_swarm_stages', '3')
-            interval = get_setting('ghost_swarm_interval', '10')
-            await event.answer(f"Ghost Swarm: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🐝 **Ghost Swarm: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"نظام سرب الأشباح: تعديلات متتالية بتكويد مختلف\n"
-                f"• المراحل: {stages} تعديلات متتالية\n"
-                f"• الفاصل: كل {interval} ثانية\n"
-                f"• كل مرحلة تستخدم نمط تشفير مختلف\n"
-                f"• مع edit_hide لا تظهر علامة 'معدّل'!\n\n"
-                f"→ بوتات الحماية تحلل الرسالة بعد كل تعديل = لا تجد نفس النمط أبداً!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Human Delay
-        elif data == 'toggle_human_delay':
-            current = get_setting('human_delay_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('human_delay_enabled', new_val)
-            min_d = get_setting('human_delay_min', '3')
-            max_d = get_setting('human_delay_max', '15')
-            await event.answer(f"Human Delay: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"⏱️ **Human Delay: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"محاكاة تأخير بشري واقعي:\n"
-                f"• التأخير: {min_d}-{max_d} ثانية عشوائية\n"
-                f"• 10% احتمال توقف أطول (محاكاة تشتت)\n"
-                f"• 5% احتمال إرسال سريع\n\n"
-                f"→ يمنع بوتات الحماية من كشف النمط الآلي!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Load Balancer
-        elif data == 'toggle_load_balancer':
-            current = get_setting('load_balancer_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('load_balancer_enabled', new_val)
-            await event.answer(f"Load Balancer: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"⚖️ **Load Balancer: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"توزيع ذكي للرسائل عبر الحسابات:\n"
-                f"• الحد: 40 رسالة/ساعة و 10/دقيقة لكل حساب\n"
-                f"• يختار الحساب الأقل استخداماً تلقائياً\n\n"
-                f"→ يمنع حظر الحسابات ويقلل FloodWait!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 إعدادات التشفير المتقدمة
-        elif data == 'advanced_enc_settings':
-            kashida_i = get_setting('kashida_intensity', '0.3')
-            swarm_s = get_setting('ghost_swarm_stages', '3')
-            swarm_i = get_setting('ghost_swarm_interval', '10')
-            hd_min = get_setting('human_delay_min', '3')
-            hd_max = get_setting('human_delay_max', '15')
-            rtlo_s = "✅" if get_setting('rtlo_enabled', 'off') == 'on' else "❌"
-            eh_s = "✅" if get_setting('edit_hide_enabled', 'on') == 'on' else "❌"
-            eb_s = "✅" if get_setting('exponential_backoff', 'on') == 'on' else "❌"
-            await event.edit(
-                f"🛡️ **إعدادات التشفير المتقدمة**\n\n"
-                f"〰️ كثافة الكشيدة: {kashida_i}\n"
-                f"🐝 مراحل Swarm: {swarm_s}\n"
-                f"🐝 فاصل Swarm: {swarm_i}ث\n"
-                f"⏱️ Human Delay: {hd_min}-{hd_max}ث\n"
-                f"↔️ RTLO: {rtlo_s}\n"
-                f"👁️ edit_hide: {eh_s}\n"
-                f"📈 Exponential Backoff: {eb_s}",
-                buttons=[
-                    [Button.inline("〰️ كثافة الكشيدة", b"set_kashida_intensity")],
-                    [Button.inline("🐝 مراحل Swarm", b"set_swarm_stages"),
-                     Button.inline("🐝 فاصل Swarm", b"set_swarm_interval")],
-                    [Button.inline("⏱️ Human Delay Min", b"set_hd_min"),
-                     Button.inline("⏱️ Human Delay Max", b"set_hd_max")],
-                    [Button.inline(f"↔️ RTLO {rtlo_s}", b"toggle_rtlo"),
-                     Button.inline(f"👁️ edit_hide {eh_s}", b"toggle_edit_hide"),
-                     Button.inline(f"📈 Backoff {eb_s}", b"toggle_backoff")],
-                    [Button.inline("🔙 رجوع", b"back")],
-                ]
-            )
-
-        # 🆕 معالجات الإعدادات المتقدمة
-        elif data == 'set_kashida_intensity':
-            set_setting('awaiting_kashida_intensity', 'true')
-            await event.edit("〰️ أرسل كثافة الكشيدة (0.1 - 0.8):\nمثال: 0.3\n/cancel للإلغاء")
-        elif data == 'set_swarm_stages':
-            set_setting('awaiting_swarm_stages', 'true')
-            await event.edit("🐝 أرسل عدد مراحل Swarm (1-10):\nمثال: 3\n/cancel للإلغاء")
-        elif data == 'set_swarm_interval':
-            set_setting('awaiting_swarm_interval', 'true')
-            await event.edit("🐝 أرسل فاصل Swarm بالثواني (5-120):\nمثال: 10\n/cancel للإلغاء")
-        elif data == 'set_hd_min':
-            set_setting('awaiting_hd_min', 'true')
-            await event.edit("⏱️ أرسل الحد الأدنى لـ Human Delay بالثواني (1-30):\nمثال: 3\n/cancel للإلغاء")
-        elif data == 'set_hd_max':
-            set_setting('awaiting_hd_max', 'true')
-            await event.edit("⏱️ أرسل الحد الأقصى لـ Human Delay بالثواني (5-60):\nمثال: 15\n/cancel للإلغاء")
-        elif data == 'toggle_rtlo':
-            current = get_setting('rtlo_enabled', 'off')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('rtlo_enabled', new_val)
-            await event.answer(f"RTLO: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(f"↔️ **RTLO: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n⚠️ قد يؤثر على عرض النص!", buttons=[[Button.inline("🔙 رجوع", b"advanced_enc_settings")]])
-        elif data == 'toggle_edit_hide':
-            current = get_setting('edit_hide_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('edit_hide_enabled', new_val)
-            await event.answer(f"edit_hide: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(f"👁️ **edit_hide: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\nيخفي علامة 'معدّل' عند تعديل الرسائل!", buttons=[[Button.inline("🔙 رجوع", b"advanced_enc_settings")]])
-        elif data == 'toggle_backoff':
-            current = get_setting('exponential_backoff', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('exponential_backoff', new_val)
-            await event.answer(f"Exponential Backoff: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(f"📈 **Exponential Backoff: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\nتراجع أسي ذكي عند FloodWait!", buttons=[[Button.inline("🔙 رجوع", b"advanced_enc_settings")]])
-
         elif data == 'blacklist':
             bl_count = len(get_blacklisted_groups())
             await event.edit(f"🚫 **القائمة السوداء** ({bl_count} مجموعة)", buttons=get_blacklist_menu())
@@ -3939,9 +3344,7 @@ async def main():
                        'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc',
                        'awaiting_msg_interval', 'awaiting_join_interval',
                        'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
-                       'awaiting_schedule', 'awaiting_schedule_delete',
-                       'awaiting_kashida_intensity', 'awaiting_swarm_stages',
-                       'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max']:
+                       'awaiting_schedule', 'awaiting_schedule_delete']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -4107,76 +3510,6 @@ async def main():
                     await event.respond(f"✅ تم ضبط سرعة النشر السريع إلى {val} ثانية", buttons=get_main_menu())
                 else:
                     await event.respond("❌ الرجاء إدخال قيمة بين 2 و 30", buttons=get_main_menu())
-            except:
-                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
-            return
-
-        # 🆕 كثافة الكشيدة
-        if get_setting('awaiting_kashida_intensity') == 'true':
-            set_setting('awaiting_kashida_intensity', '')
-            try:
-                val = float(event.raw_text.strip())
-                if 0.1 <= val <= 0.8:
-                    set_setting('kashida_intensity', str(val))
-                    await event.respond(f"✅ تم ضبط كثافة الكشيدة إلى {val}", buttons=get_main_menu())
-                else:
-                    await event.respond("❌ بين 0.1 و 0.8", buttons=get_main_menu())
-            except:
-                await event.respond("❌ أرسل رقماً عشرياً", buttons=get_main_menu())
-            return
-
-        # 🆕 مراحل Swarm
-        if get_setting('awaiting_swarm_stages') == 'true':
-            set_setting('awaiting_swarm_stages', '')
-            try:
-                val = int(event.raw_text.strip())
-                if 1 <= val <= 10:
-                    set_setting('ghost_swarm_stages', str(val))
-                    await event.respond(f"✅ تم ضبط مراحل Swarm إلى {val}", buttons=get_main_menu())
-                else:
-                    await event.respond("❌ بين 1 و 10", buttons=get_main_menu())
-            except:
-                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
-            return
-
-        # 🆕 فاصل Swarm
-        if get_setting('awaiting_swarm_interval') == 'true':
-            set_setting('awaiting_swarm_interval', '')
-            try:
-                val = int(event.raw_text.strip())
-                if 5 <= val <= 120:
-                    set_setting('ghost_swarm_interval', str(val))
-                    await event.respond(f"✅ تم ضبط فاصل Swarm إلى {val} ثانية", buttons=get_main_menu())
-                else:
-                    await event.respond("❌ بين 5 و 120", buttons=get_main_menu())
-            except:
-                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
-            return
-
-        # 🆕 Human Delay Min
-        if get_setting('awaiting_hd_min') == 'true':
-            set_setting('awaiting_hd_min', '')
-            try:
-                val = int(event.raw_text.strip())
-                if 1 <= val <= 30:
-                    set_setting('human_delay_min', str(val))
-                    await event.respond(f"✅ تم ضبط الحد الأدنى لـ Human Delay إلى {val} ثانية", buttons=get_main_menu())
-                else:
-                    await event.respond("❌ بين 1 و 30", buttons=get_main_menu())
-            except:
-                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
-            return
-
-        # 🆕 Human Delay Max
-        if get_setting('awaiting_hd_max') == 'true':
-            set_setting('awaiting_hd_max', '')
-            try:
-                val = int(event.raw_text.strip())
-                if 5 <= val <= 60:
-                    set_setting('human_delay_max', str(val))
-                    await event.respond(f"✅ تم ضبط الحد الأقصى لـ Human Delay إلى {val} ثانية", buttons=get_main_menu())
-                else:
-                    await event.respond("❌ بين 5 و 60", buttons=get_main_menu())
             except:
                 await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
             return
