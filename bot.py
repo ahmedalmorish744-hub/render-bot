@@ -315,6 +315,9 @@ def init_db():
         set_setting('latin_extended_enabled', 'on')
     if get_setting('anti_guardian_mode') is None:
         set_setting('anti_guardian_mode', 'smart')  # smart/stealth/aggressive
+    # 🆕 إعدادات نظام StealthObfuscator - تشويش خفي 100%
+    if get_setting('stealth_obfuscator_enabled') is None:
+        set_setting('stealth_obfuscator_enabled', 'on')
 
     conn.commit()
     conn.close()
@@ -599,6 +602,480 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  🔬 نظام StealthObfuscator - تشويش خفي 100% غير مرئي
+#  النص يبقى كما هو تماماً للعين المجردة - لا كشيدة لا PFB لا homoglyphs
+#  فقط تقنيات غير مرئية تكسر مطابقة البوتات
+#  مستهدف: @GoldenkidKbot @GHClone3Bot @Deevill07bot
+#           @GHSecurity2Bot @Jabal_RoBot @PMU_Securitybot
+#           @TaifUniTu1_BoT72638 وبوتات الحماية المشابهة
+# ═══════════════════════════════════════════════════════════════
+class StealthObfuscator:
+    """
+    نظام تشويش خفي متقدم - النص يبقى مقروءاً تماماً 100%
+    
+    ❌ لا يستخدم: PFB (يخرب شكل الحروف) | كشيدة (يطول النص) |
+                  Arabic Homoglyphs (يغير المعنى) | أنماط Unicode (يغير الخط)
+    
+    ✅ يستخدم فقط تقنيات غير مرئية:
+    1. ZWJ (U+200D) بين أحرف الكلمات العربية - يبقي الربط ويكسر المطابقة
+    2. Variation Selectors (U+FE00-FE0F) - أحرف تجميع غير مرئية تماماً
+    3. Tag Characters (U+E0020-E007F) - ترميز مخفي كامل
+    4. أحرف غير مرئية بين الكلمات وفي الحواف
+    5. مسافات بديلة (تبدو متطابقة)
+    6. NFD Decomposition (يبدو متطابقاً مرئياً لكن الكود مختلف)
+    7. إخفاء الروابط في HTML <a href> - الضغط يفتح الرابط الحقيقي
+    8. علامات اتجاهية RTL/ALM خفية
+    9. ملح خفي فريد لكل رسالة (يمنع كشف التكرار)
+    """
+    
+    # ═══ أحرف غير مرئية آمنة ═══
+    INVISIBLE_CHARS = [
+        '\u200B',   # Zero-Width Space
+        '\u200C',   # Zero-Width Non-Joiner
+        '\u200D',   # Zero-Width Joiner
+        '\uFEFF',   # BOM / Zero-Width No-Break Space
+        '\u2060',   # Word Joiner
+        '\u2061',   # Function Application
+        '\u2062',   # Invisible Times
+        '\u2063',   # Invisible Separator
+        '\u2064',   # Invisible Plus
+        '\u061C',   # Arabic Letter Mark
+    ]
+    
+    # ═══ مسافات بديلة (تبدو متطابقة للمستخدم) ═══
+    ALT_SPACES = [
+        '\u00A0',   # No-Break Space
+        '\u2009',   # Thin Space
+        '\u202F',   # Narrow No-Break Space
+        '\u2007',   # Figure Space
+        '\u2006',   # Six-Per-Em Space
+        '\u2005',   # Four-Per-Em Space
+    ]
+    
+    # ═══ Variation Selectors - غير مرئية تماماً ═══
+    VARIATION_SELECTORS = [chr(0xFE00 + i) for i in range(16)]
+    
+    # ═══ الأحرف العربية ثنائية الربط (تقبل الربط يميناً ويساراً) ═══
+    # هذه الأحرف يمكن إضافة ZWJ بعدها بأمان - النص يبقى كما هو
+    DUAL_JOINING_LETTERS = set('بتثجحخسشصضطظعغفقكلمنهيئ')
+    
+    # ═══ الأحرف العربية أحادية الربط (تربط من اليمين فقط) ═══
+    # لا نضيف ZWJ بعدها لأنها لا ترتبط يساراً طبيعياً
+    RIGHT_JOINING_LETTERS = set('ادذرزو')
+    
+    # ═══ خريطة NFD Decomposition (تبدو متطابقة مرئياً لكن الكود مختلف) ═══
+    NFD_DECOMPOSE = {
+        'أ': ('\u0627', '\u0654'),  # ALEF HAMZA → ALEF + HAMZA ABOVE
+        'إ': ('\u0627', '\u0655'),  # ALEF HAMZA BELOW → ALEF + HAMZA BELOW
+        'آ': ('\u0627', '\u0653'),  # ALEF MADDA → ALEF + MADDA ABOVE
+        'ؤ': ('\u0648', '\u0654'),  # WAW HAMZA → WAW + HAMZA ABOVE
+        'ئ': ('\u064A', '\u0654'),  # YEH HAMZA → YEH + HAMZA ABOVE
+    }
+    
+    # ═══ عروض نص الروابط - نص عربي طبيعي يبدو كجزء من الإعلان ═══
+    URL_DISPLAY_TEMPLATES = [
+        'هنا', 'اضغط هنا', 'تفضل', 'تابع', 'الرابط', 'من هنا',
+        'تفاصيل أكثر', 'المزيد', 'تواصل', 'ادخل', 'شاهد',
+        'انتقل', 'زورنا', 'تفقد', 'استكشف', 'تعرف',
+    ]
+    
+    # ═══ كلمات مفتاحية عربية تستخدمها بوتات الحماية ═══
+    ARABIC_TRIGGER_WORDS = [
+        'انضم', 'اشترك', 'قناة', 'جروب', 'مجموعة', 'تابع', 'عروض', 'مجاني',
+        'عرض خاص', 'احصل', 'ادخل', 'رابط', 'اضغط هنا', 'من هنا', 'تفضل',
+        'زورنا', 'تابعنا', 'قناتنا', 'مجموعتنا', 'القناة', 'المجموعة',
+        'انضمام', 'اشتراك', 'متابعة', 'دخول', 'الرابط', 'الصفحة',
+        'حرمان', 'غياب', 'سكليف', 'معتمد', 'بدوام',
+    ]
+    
+    def __init__(self):
+        self._message_cache = deque(maxlen=3000)
+        self._salt_counter = 0
+    
+    def _is_arabic(self, char):
+        """هل الحرف عربي؟"""
+        return '\u0600' <= char <= '\u06FF' or '\u0750' <= char <= '\u077F' or '\uFB50' <= char <= '\uFDFF' or '\uFE70' <= char <= '\uFEFF'
+    
+    def _extract_protected_segments(self, text):
+        """استخراج الروابط والمعرفات ووسوم HTML لحمايتها من أي تعديل"""
+        protected = []
+        # وسوم HTML <a href="...">...</a> - يجب حمايتها بالكامل
+        for match in re.finditer(r'<a href="[^"]*">[^<]*</a>', text):
+            protected.append((match.start(), match.end(), match.group(), 'html'))
+        # روابط https:// (خارج وسوم HTML)
+        for match in re.finditer(r'https?://\S+', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+            if not overlaps:
+                url = match.group().rstrip('\u200B\u200C\u200D\uFEFF\u2060\u2061\u2062\u2063\u00A0\u2009\u202F')
+                protected.append((match.start(), match.start() + len(url), url, 'url'))
+        # روابط wa.me بدون https
+        for match in re.finditer(r'(?<!\w)wa\.me/\+\d+', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+            if not overlaps:
+                protected.append((match.start(), match.end(), match.group(), 'url'))
+        # معرفات @username
+        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+            if not overlaps:
+                protected.append((match.start(), match.end(), match.group(), 'mention'))
+        # أنماط t.me/
+        for match in re.finditer(r'(?<!\w)t\.me/[a-zA-Z0-9_]+', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+            if not overlaps:
+                full_url = 'https://' + match.group()
+                protected.append((match.start(), match.end(), full_url, 'url'))
+        # أرقام هواتف واتساب (نمط +966...)
+        for match in re.finditer(r'\+\d{10,15}', text):
+            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+            if not overlaps:
+                protected.append((match.start(), match.end(), match.group(), 'phone'))
+        protected.sort(key=lambda x: x[0])
+        # إزالة التداخل
+        clean = []
+        for seg in protected:
+            if not clean:
+                clean.append(seg)
+            elif seg[0] >= clean[-1][1]:
+                clean.append(seg)
+        return clean
+    
+    def _split_text_protected(self, text):
+        """تقسيم النص إلى أجزاء محمية وأجزاء عادية"""
+        protected = self._extract_protected_segments(text)
+        segments = []
+        last_end = 0
+        for start, end, original, seg_type in protected:
+            if start > last_end:
+                segments.append(('text', text[last_end:start]))
+            segments.append((seg_type, original))
+            last_end = end
+        if last_end < len(text):
+            segments.append(('text', text[last_end:]))
+        return segments
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 1: ZWJ داخل الكلمات العربية (أقوى طبقة!)
+    # ══════════════════════════════════════════════════
+    def _insert_zwj_in_arabic_words(self, text, intensity=0.5):
+        """إضافة ZWJ (U+200D) بين أحرف الكلمات العربية
+        
+        ZWJ يحافظ على ربط الحروف العربية (لأنه يطلب الشكل المتصل)
+        لكنه يضيف حرفاً غير مرئي يكسر مطابقة النص تماماً
+        
+        مثال: "حرمان" → "ح‍ر‍م‍ا‍ن" (تبدو متطابقة تماماً!)
+        البوت يبحث عن "حرمان" لكنه يجد "ح‍ر‍م‍ا‍ن" ← لا تطابق!
+        """
+        if not text:
+            return text
+        
+        result = []
+        prev_was_dual_joining = False
+        prev_was_arabic = False
+        
+        for i, c in enumerate(text):
+            result.append(c)
+            
+            if self._is_arabic(c):
+                if c in self.DUAL_JOINING_LETTERS:
+                    # بعد حرف ثنائي الربط: يمكن إضافة ZWJ بأمان
+                    if prev_was_arabic and random.random() < intensity:
+                        result.append('\u200D')  # ZWJ
+                    prev_was_dual_joining = True
+                else:
+                    # حرف أحادي الربط (ا، د، ذ، ر، ز، و)
+                    # لا نضيف ZWJ بعده لأنه قد يغير الشكل
+                    prev_was_dual_joining = False
+                prev_was_arabic = True
+            else:
+                prev_was_arabic = False
+                prev_was_dual_joining = False
+        
+        return ''.join(result)
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 2: Variation Selectors (غير مرئية تماماً)
+    # ══════════════════════════════════════════════════
+    def _add_variation_selectors(self, text, intensity=0.12):
+        """إضافة Variation Selectors بعد الأحرف العربية
+        هذه أحرف تجميع غير مرئية تماماً - تُستخدم لتغيير شكل الرموز التعبيرية
+        لكنها تعمل مع الأحرف العربية وتغيّر الكود بدون أي تغيير مرئي
+        حتى لو حذف البوت ZWJ، الـ VS يكسر المطابقة أيضاً
+        """
+        if not text:
+            return text
+        
+        result = list(text)
+        insertions = []
+        for i, c in enumerate(result):
+            if self._is_arabic(c) and random.random() < intensity:
+                # إضافة 1-2 variation selectors بعد الحرف
+                vs = random.choice(self.VARIATION_SELECTORS)
+                insertions.append((i + 1, vs))
+        
+        for pos, char in sorted(insertions, key=lambda x: x[0], reverse=True):
+            result.insert(pos, char)
+        
+        return ''.join(result)
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 3: Tag Characters (ترميز مخفي كامل)
+    # ══════════════════════════════════════════════════
+    def _add_tag_characters(self, text):
+        """إضافة Tag Characters في البداية والنهاية
+        هذه أحرف من نطاق Tags (U+E0020+) غير مرئية تماماً
+        معظم أنظمة التنظيف لا تعرفها لأنها ليست Zero-Width تقليدية
+        """
+        # Tag prefix - يشفر حرفين عشوائيين
+        tag_options = ['SG', 'BK', 'CF', 'DX', 'AG', 'PR', 'MZ', 'NV']
+        chosen = random.choice(tag_options)
+        tag_prefix = ''.join(chr(0xE0000 + ord(c)) for c in chosen)
+        # Tag suffix
+        chosen2 = random.choice(tag_options)
+        tag_suffix = ''.join(chr(0xE0000 + ord(c)) for c in chosen2)
+        
+        return tag_prefix + text + tag_suffix
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 4: أحرف غير مرئية بين الكلمات
+    # ══════════════════════════════════════════════════
+    def _add_invisible_between_words(self, text, intensity=0.25):
+        """إضافة أحرف غير مرئية بين الكلمات العربية
+        بين الكلمات فقط - لا داخلها - لضمان عدم تأثير الربط
+        """
+        if not text or len(text) < 3:
+            return text
+        
+        words = text.split(' ')
+        new_words = []
+        for i, w in enumerate(words):
+            new_words.append(w)
+            if i < len(words) - 1 and random.random() < intensity:
+                # إضافة حرف غير مرئي بين الكلمتين
+                inv = random.choice(self.INVISIBLE_CHARS[:6])
+                new_words.append(inv)
+        
+        return ' '.join(new_words)
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 5: مسافات بديلة (تبدو متطابقة)
+    # ══════════════════════════════════════════════════
+    def _replace_spaces(self, text, intensity=0.3):
+        """استبدال بعض المسافات العادية بمسافات بديلة
+        تبدو متطابقة تماماً لكنها مختلفة في الكود
+        """
+        result = list(text)
+        for i, c in enumerate(result):
+            if c == ' ' and random.random() < intensity:
+                result[i] = random.choice(self.ALT_SPACES)
+        return ''.join(result)
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 6: NFD Decomposition (يبدو متطابقاً مرئياً)
+    # ══════════════════════════════════════════════════
+    def _apply_nfd_decomposition(self, text, intensity=0.4):
+        """تحويل الأحرف العربية المركبة لمفككة
+        أ → ا + ّ (همزة فوق) - يبدو متطابقاً تماماً!
+        الكود مختلف لكن الشكل المرئي لا يتغير
+        """
+        result = []
+        for c in text:
+            if c in self.NFD_DECOMPOSE and random.random() < intensity:
+                base, combining = self.NFD_DECOMPOSE[c]
+                result.append(base)
+                result.append(combining)
+            else:
+                result.append(c)
+        return ''.join(result)
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 7: إخفاء الروابط في HTML <a href>
+    # ══════════════════════════════════════════════════
+    def _hide_links_in_html(self, text):
+        """إخفاء الروابط والمعرفات في كيانات HTML TextUrl
+        
+        بوتات الحماية تفحص message.entities باحثة عن:
+        - MessageEntityUrl (رابط مكشوف)
+        - MessageEntityMention (@username)
+        
+        لكن TextUrl (<a href>) يظهر كنص عادي!
+        الضغط على النص يفتح الرابط الحقيقي ✅
+        البوت لا يرى أي نمط رابط ✅
+        """
+        if not text:
+            return text, False
+        
+        has_links = False
+        result = text
+        
+        # إخفاء روابط https:// و http://
+        def replace_url(match):
+            nonlocal has_links
+            has_links = True
+            url = match.group().rstrip('\u200B\u200C\u200D\uFEFF\u2060\u00A0\u2009\u202F')
+            # نص عرض عربي طبيعي بدل الرابط المكشوف
+            if 'wa.me' in url or 'whatsapp' in url:
+                display = 'واتساب'
+            elif 't.me' in url:
+                display = random.choice(self.URL_DISPLAY_TEMPLATES)
+            else:
+                display = random.choice(self.URL_DISPLAY_TEMPLATES)
+            # إضافة أحرف غير مرئية خفية في نص العرض
+            display = random.choice(self.INVISIBLE_CHARS[:3]) + display
+            return f'<a href="{url}">{display}</a>'
+        
+        result = re.sub(r'https?://\S+', replace_url, result)
+        
+        # إخفاء معرفات @username
+        def replace_mention(match):
+            nonlocal has_links
+            has_links = True
+            username = match.group()[1:]
+            display = random.choice(self.URL_DISPLAY_TEMPLATES)
+            display = random.choice(self.INVISIBLE_CHARS[:3]) + display
+            return f'<a href="tg://resolve?domain={username}">{display}</a>'
+        
+        result = re.sub(r'@([a-zA-Z0-9_]{3,})', replace_mention, result)
+        
+        return result, has_links
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 8: علامات اتجاهية RTL/ALM خفية
+    # ══════════════════════════════════════════════════
+    def _add_directional_marks(self, text):
+        """إضافة علامات RTL و ALM خفية
+        غير مرئية تماماً لكنها تؤثر على معالجة النص
+        """
+        # ALM في البداية أحياناً
+        if random.random() < 0.3:
+            text = '\u061C' + text
+        # RLM في النهاية أحياناً
+        if random.random() < 0.25:
+            text = text + '\u200F'
+        return text
+    
+    # ══════════════════════════════════════════════════
+    #  الطبقة 9: ملح خفي فريد (يمنع كشف التكرار)
+    # ══════════════════════════════════════════════════
+    def _add_stealth_salt(self, text, group_id=None):
+        """إضافة ملح خفي فريد لكل رسالة
+        يمنع بوتات الحماية من كشف الرسائل المتكررة
+        كل رسالة تحصل على بصمة خفية مختلفة
+        """
+        self._salt_counter += 1
+        # إنشاء ملح فريد من الوقت + العداد + مجموعة عشوائية
+        salt_chars = []
+        # حرف غير مرئي عشوائي في البداية
+        salt_chars.append(random.choice(self.INVISIBLE_CHARS[:6]))
+        # Tag character فريد
+        salt_code = 0xE0000 + (self._salt_counter % 95) + 0x20
+        salt_chars.append(chr(salt_code))
+        # حرف غير مرئي إضافي
+        salt_chars.append(random.choice(self.INVISIBLE_CHARS[:6]))
+        
+        salt = ''.join(salt_chars)
+        
+        # إضافة الملح في البداية
+        text = salt + text
+        
+        # ملح في النهاية أيضاً
+        end_salt = random.choice(self.INVISIBLE_CHARS[:4])
+        if random.random() < 0.4:
+            end_salt += random.choice(self.INVISIBLE_CHARS[:4])
+        text = text + end_salt
+        
+        return text
+    
+    # ══════════════════════════════════════════════════
+    #  طبقة إضافية: كسر الكلمات المفتاحية بـ ZWJ
+    # ══════════════════════════════════════════════════
+    def _break_trigger_words(self, text):
+        """كسر الكلمات المفتاحية العربية بإضافة ZWJ بين أحرفها
+        البوت يبحث عن "حرمان" لكنه يجد "ح‍ر‍م‍ا‍ن" ← لا تطابق!
+        ZWJ بين أحرف الكلمة لا يغير شكلها المرئي
+        """
+        for word in self.ARABIC_TRIGGER_WORDS:
+            if word in text:
+                # إضافة ZWJ بين كل حرفين في الكلمة المفتاحية
+                broken = '\u200D'.join(list(word))
+                text = text.replace(word, broken)
+        return text
+    
+    # ══════════════════════════════════════════════════
+    #  طبقة حماية الروابط والمعرفات من التعديل
+    # ══════════════════════════════════════════════════
+    def _apply_to_text_only(self, text, func):
+        """تطبيق دالة تحويل على النص العادي فقط - الروابط ووسوم HTML لا تُمس أبداً"""
+        segments = self._split_text_protected(text)
+        result = []
+        for seg_type, seg_text in segments:
+            if seg_type in ('url', 'mention', 'phone', 'html'):
+                result.append(seg_text)  # لا نعدل الروابط ووسوم HTML أبداً
+            else:
+                result.append(func(seg_text))
+        return ''.join(result)
+    
+    # ══════════════════════════════════════════════════
+    #  🛡️ الدالة الرئيسية: تشويش خفي شامل
+    # ══════════════════════════════════════════════════
+    def obfuscate(self, text, group_id=None):
+        """تطبيق كل طبقات التشويش الخفي
+        
+        النتيجة: نص يبدو متطابقاً تماماً مع الأصل
+        لكنه مليء بتعديلات غير مرئية تكسر كشف البوتات
+        
+        يُرجع: (النص المشفر, use_html)
+        """
+        if not text or len(text) < 2:
+            return text, False
+        
+        # ═══ الخطوة 1: إخفاء الروابط في HTML ═══
+        text, has_html = self._hide_links_in_html(text)
+        
+        # ═══ الخطوة 2: كسر الكلمات المفتاحية بـ ZWJ ═══
+        # هذا أهم طبقة! يكسر مطابقة الكلمات بدون أي تغيير مرئي
+        text = self._apply_to_text_only(text, lambda t: self._break_trigger_words(t))
+        
+        # ═══ الخطوة 3: ZWJ داخل الكلمات العربية ═══
+        text = self._apply_to_text_only(text, lambda t: self._insert_zwj_in_arabic_words(t, intensity=0.45))
+        
+        # ═══ الخطوة 4: Variation Selectors ═══
+        text = self._apply_to_text_only(text, lambda t: self._add_variation_selectors(t, intensity=0.10))
+        
+        # ═══ الخطوة 5: NFD Decomposition (تبدو متطابقة) ═══
+        text = self._apply_to_text_only(text, lambda t: self._apply_nfd_decomposition(t, intensity=0.35))
+        
+        # ═══ الخطوة 6: Tag Characters مخفية ═══
+        text = self._add_tag_characters(text)
+        
+        # ═══ الخطوة 7: أحرف غير مرئية بين الكلمات ═══
+        text = self._apply_to_text_only(text, lambda t: self._add_invisible_between_words(t, intensity=0.2))
+        
+        # ═══ الخطوة 8: مسافات بديلة ═══
+        text = self._apply_to_text_only(text, lambda t: self._replace_spaces(t, intensity=0.25))
+        
+        # ═══ الخطوة 9: علامات اتجاهية خفية ═══
+        text = self._add_directional_marks(text)
+        
+        # ═══ الخطوة 10: ملح خفي فريد ═══
+        text = self._add_stealth_salt(text, group_id)
+        
+        # ═══ التأكد من عدم التكرار ═══
+        if group_id:
+            cache_key = f"{group_id}:{hash(text)}"
+            if cache_key in self._message_cache:
+                # إضافة ملح إضافي لكسر التطابق
+                text = random.choice(self.INVISIBLE_CHARS[:4]) + text
+            self._message_cache.append(cache_key)
+        
+        # use_html = True إذا كانت هناك روابط HTML
+        return text, has_html
+
+
+# إنشاء مثيل عام لنظام التشويش الخفي
+stealth_obfuscator = StealthObfuscator()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -3046,6 +3523,7 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
             try:
                 new_content = None
                 use_html = False
+                stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
                 yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
                 
                 # الخيار 1: استخدام الإعلان التالي (أقوى ضد البوتات)
@@ -3056,11 +3534,11 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                         chosen = random.choice(other_msgs)
                         raw_content = chosen[1]
                         if raw_content:
-                            if yaytext_on:
-                                # إجبار اختيار نمط مختلف
+                            if stealth_on:
+                                new_content, use_html = stealth_obfuscator.obfuscate(raw_content, group_id)
+                            elif yaytext_on:
                                 old_style = yaytext_obfuscator._last_style
                                 new_content, use_html = yaytext_obfuscate(raw_content)
-                                # نتأكد أن النمط مختلف
                                 retries = 0
                                 while yaytext_obfuscator._last_style == old_style and retries < 5:
                                     new_content, use_html = yaytext_obfuscate(raw_content)
@@ -3075,11 +3553,11 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                 
                 # الخيار 2: نفس الإعلان بتكويد جديد (نمط مختلف مضمون)
                 if not new_content and original_raw_content:
-                    if yaytext_on:
-                        # إجبار اختيار نمط مختلف عن الأصلي
+                    if stealth_on:
+                        new_content, use_html = stealth_obfuscator.obfuscate(original_raw_content, group_id)
+                    elif yaytext_on:
                         old_style = yaytext_obfuscator._last_style
                         new_content, use_html = yaytext_obfuscate(original_raw_content)
-                        # نتأكد أن النمط مختلف
                         retries = 0
                         while yaytext_obfuscator._last_style == old_style and retries < 5:
                             new_content, use_html = yaytext_obfuscate(original_raw_content)
@@ -3123,6 +3601,7 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
         try:
             new_content = None
             use_html = False
+            stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
             yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
             
             # استخدام الإعلان التالي أو نفس الإعلان بتكويد مختلف
@@ -3132,13 +3611,16 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
                     chosen = random.choice(other_msgs)
                     raw = chosen[1]
                     if raw:
-                        if yaytext_on:
+                        if stealth_on:
+                            new_content, use_html = stealth_obfuscator.obfuscate(raw, group_id)
+                        elif yaytext_on:
                             new_content, use_html = yaytext_obfuscate(raw)
                         else:
                             new_content = encrypt_text(vary_text(raw), group_id)
             elif original_raw_content:
-                if yaytext_on:
-                    # إجبار نمط مختلف
+                if stealth_on:
+                    new_content, use_html = stealth_obfuscator.obfuscate(original_raw_content, group_id)
+                elif yaytext_on:
                     old_style = yaytext_obfuscator._last_style
                     new_content, use_html = yaytext_obfuscate(original_raw_content)
                     retries = 0
@@ -3251,20 +3733,25 @@ async def fast_post_to_all_groups(messages):
 
                 use_html = False
                 if content:
-                    # 🛡️ نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
-                    anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
-                    if anti_guardian_on:
-                        # AntiGuardian يجمع كل التقنيات الآمنة + إخفاء الروابط
-                        encrypted_content, use_html = anti_guardian.bypass(content, gid)
+                    # 🔬 نظام StealthObfuscator - تشويش خفي 100% (الأساسي)
+                    stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
+                    if stealth_on:
+                        # StealthObfuscator: تشويش غير مرئي يحافظ على المقروئية تماماً
+                        encrypted_content, use_html = stealth_obfuscator.obfuscate(content, gid)
                     else:
-                        yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                        if yaytext_on:
-                            encrypted_content, use_html = yaytext_obfuscate(content)
+                        # نظام AntiGuardian القديم (يغير شكل النص)
+                        anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
+                        if anti_guardian_on:
+                            encrypted_content, use_html = anti_guardian.bypass(content, gid)
                         else:
-                            varied = vary_text(content)
-                            if obfuscation_on:
-                                varied = obfuscate_for_humans(varied)
-                            encrypted_content = encrypt_text(varied, gid)
+                            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                            if yaytext_on:
+                                encrypted_content, use_html = yaytext_obfuscate(content)
+                            else:
+                                varied = vary_text(content)
+                                if obfuscation_on:
+                                    varied = obfuscate_for_humans(varied)
+                                encrypted_content = encrypt_text(varied, gid)
                 else:
                     encrypted_content = ""
 
@@ -3416,19 +3903,24 @@ async def post_to_all_groups(message):
 
             use_html = False
             if content:
-                # 🛡️ نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
-                anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
-                if anti_guardian_on:
-                    encrypted_content, use_html = anti_guardian.bypass(content, gid)
+                # 🔬 نظام StealthObfuscator - تشويش خفي 100% (الأساسي)
+                stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
+                if stealth_on:
+                    encrypted_content, use_html = stealth_obfuscator.obfuscate(content, gid)
                 else:
-                    yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                    if yaytext_on:
-                        encrypted_content, use_html = yaytext_obfuscate(content)
+                    # نظام AntiGuardian القديم
+                    anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
+                    if anti_guardian_on:
+                        encrypted_content, use_html = anti_guardian.bypass(content, gid)
                     else:
-                        varied = vary_text(content)
-                        if obfuscation_on:
-                            varied = obfuscate_for_humans(varied)
-                        encrypted_content = encrypt_text(varied, gid)
+                        yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
+                        if yaytext_on:
+                            encrypted_content, use_html = yaytext_obfuscate(content)
+                        else:
+                            varied = vary_text(content)
+                            if obfuscation_on:
+                                varied = obfuscate_for_humans(varied)
+                            encrypted_content = encrypt_text(varied, gid)
             else:
                 encrypted_content = ""
 
@@ -3646,6 +4138,7 @@ def get_main_menu():
     vs_status = "✅" if get_setting('variation_selectors_enabled', 'on') == 'on' else "❌"
     tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
     lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
+    stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '100')
     fast_delay = get_setting('fast_post_delay', '3')
@@ -3657,19 +4150,20 @@ def get_main_menu():
          Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
         [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
-        [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
-         Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
+        [Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth"),
+         Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc")],
+        [Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti"),
          Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
-        [Button.inline(f"🔄 YayText & Messletters {ym_status}", b"toggle_yaytext"),
-         Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax")],
-        [Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida"),
-         Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph")],
-        [Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs"),
-         Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag")],
-        [Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm"),
-         Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
-        [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
+        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
+         Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext")],
+        [Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax"),
+         Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida")],
+        [Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph"),
+         Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs")],
+        [Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag"),
+         Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm")],
+        [Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay"),
+         Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
         [Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
         [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
@@ -3865,31 +4359,40 @@ async def main():
     async def test_obfuscate_handler(event):
         if not is_admin(event.sender_id):
             return
-        test_text = "مرحباً بكم في قناتنا للحصول على عروض حصرية https://t.me/example"
+        test_text = "أحد عنده حرمان تبي تشيل الحرمان بدوامك ذي تسوي لكم سكليف معتمد حتى لو عندك غياب قديم الي يبي يكلمها https://wa.me/+966571482466"
         if get_setting('spintax_enabled', 'on') == 'on':
-            test_text = parse_spintax("{مرحباً|أهلاً|سلام} بكم في {قناتنا|مجموعتنا} للحصول على {عروض حصرية|تخفيضات مميزة}")
-        encrypted, use_html = yaytext_obfuscate(test_text)
-        style_name = yaytext_obfuscator.get_style_name()
-        await event.respond(
-            f"🧪 **اختبار التشفير الخارق 2026**\n\n"
-            f"📝 الأصلي:\n{test_text}\n\n"
-            f"🔒 المشفر (نمط: {style_name}):\n{encrypted}\n\n"
-            f"📊 **الطبقات المفعلة:**\n"
-            f"• 🛡️ التشفير: {'✅' if get_setting('encryption','on')=='on' else '❌'}\n"
-            f"• 🎭 مكافحة الكشف: {'✅' if get_setting('anti_detect','on')=='on' else '❌'}\n"
-            f"• 🔄 YayText: {'✅' if get_setting('yaytext_messletters_obfuscation','on')=='on' else '❌'}\n"
-            f"• 🎲 Spintax: {'✅' if get_setting('spintax_enabled','on')=='on' else '❌'}\n"
-            f"• 〰️ كشيدة: {'✅' if get_setting('kashida_enabled','on')=='on' else '❌'}\n"
-            f"• 🔀 Homoglyphs عربي: {'✅' if get_setting('arabic_homoglyph_enabled','on')=='on' else '❌'}\n"
-            f"• 🔤 Variation Selectors: {'✅' if get_setting('variation_selectors_enabled','on')=='on' else '❌'}\n"
-            f"• 🏷️ Tag Characters: {'✅' if get_setting('tag_characters_enabled','on')=='on' else '❌'}\n"
-            f"• 🐝 Ghost Swarm: {'✅' if get_setting('ghost_swarm_enabled','off')=='on' else '❌'}\n"
-            f"• ⏱️ Human Delay: {'✅' if get_setting('human_delay_enabled','on')=='on' else '❌'}\n"
-            f"• ⚖️ Load Balancer: {'✅' if get_setting('load_balancer_enabled','on')=='on' else '❌'}\n"
-            f"• 👁️ edit_hide: {'✅' if get_setting('edit_hide_enabled','on')=='on' else '❌'}\n"
-            f"• 📈 Exponential Backoff: {'✅' if get_setting('exponential_backoff','on')=='on' else '❌'}\n"
-            f"• ↔️ RTLO: {'✅' if get_setting('rtlo_enabled','off')=='on' else '❌'}"
-        )
+            test_text = parse_spintax("أحد عنده حرمان تبي تشيل الحرمان بدوامك ذي تسوي لكم سكليف معتمد حتى لو عندك غياب قديم الي يبي يكلمها https://wa.me/+966571482466")
+        
+        # اختبار التشويش الخفي
+        stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
+        if stealth_on:
+            stealth_text, stealth_html = stealth_obfuscator.obfuscate(test_text)
+            await event.respond(
+                f"🔬 **اختبار التشويش الخفي StealthObfuscator**\n\n"
+                f"📝 **الأصل:**\n{test_text}\n\n"
+                f"🔬 **بعد التشويش الخفي:**\n{stealth_text}\n\n"
+                f"💡 النص يبدو متطابقاً تماماً - الفرق غير مرئي!\n"
+                f"البوتات لا تستطيع قراءة النص لأنه مليء بأحرف خفية\n\n"
+                f"📊 **الأنظمة المفعلة:**\n"
+                f"• 🔬 تشويش خفي: {'✅' if stealth_on else '❌'}\n"
+                f"• 🛡️ التشفير: {'✅' if get_setting('encryption','on')=='on' else '❌'}\n"
+                f"• 🎭 مكافحة الكشف: {'✅' if get_setting('anti_detect','on')=='on' else '❌'}\n"
+                f"• 🛡️ AntiGuardian: {'✅' if get_setting('anti_guardian_enabled','on')=='on' else '❌'}\n"
+                f"• 🔄 YayText: {'✅' if get_setting('yaytext_messletters_obfuscation','on')=='on' else '❌'}\n"
+                f"• 🎲 Spintax: {'✅' if get_setting('spintax_enabled','on')=='on' else '❌'}\n"
+                f"• 👁️ edit_hide: {'✅' if get_setting('edit_hide_enabled','on')=='on' else '❌'}\n"
+                f"• 📈 Exponential Backoff: {'✅' if get_setting('exponential_backoff','on')=='on' else '❌'}",
+                parse_mode='html' if stealth_html else None
+            )
+        else:
+            encrypted, use_html = yaytext_obfuscate(test_text)
+            style_name = yaytext_obfuscator.get_style_name()
+            await event.respond(
+                f"🧪 **اختبار التشفير القديم**\n\n"
+                f"📝 الأصلي:\n{test_text}\n\n"
+                f"🔒 المشفر (نمط: {style_name}):\n{encrypted}\n\n"
+                f"💡 لتفعيل التشويش الخفي: اضغط زر 🔬 تشويش خفي في القائمة"
+            )
 
     @bot.on(events.NewMessage(pattern='/fast_post'))
     async def fast_post_command(event):
@@ -4215,6 +4718,25 @@ async def main():
             set_setting('encryption', new_val)
             await event.answer(f"التشفير: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+        elif data == 'toggle_stealth':
+            current = get_setting('stealth_obfuscator_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('stealth_obfuscator_enabled', new_val)
+            if new_val == 'on':
+                example = "أحد عنده حرمان تبي تشيل الحرمان https://wa.me/+966571482466"
+                stealth_text, _ = stealth_obfuscator.obfuscate(example)
+                await event.answer("🔬 تشويش خفي: مفعل ✨")
+                await event.edit(
+                    f"🔬 **تشويش خفي StealthObfuscator: مفعل** ✅\n\n"
+                    f"النص يبقى مقروءاً 100% - بدون كشيدة بدون PFB بدون homoglyphs!\n\n"
+                    f"📝 **الأصل:**\n{example}\n\n"
+                    f"🔬 **بعد التشويش الخفي:**\n{stealth_text}\n\n"
+                    f"💡 الفرق غير مرئي للعين لكن البوتات لا تستطيع قراءته!",
+                    buttons=get_main_menu()
+                )
+            else:
+                await event.answer("🔬 تشويش خفي: معطل")
+                await event.edit("🔬 **تشويش خفي StealthObfuscator: معطل** ❌\n\nالنظام القديم (AntiGuardian/YayText) سيعمل بدلاً منه.", buttons=get_main_menu())
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
             new_val = 'off' if current == 'on' else 'on'
