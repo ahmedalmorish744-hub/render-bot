@@ -5969,58 +5969,10 @@ async def main():
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
 
-        # 🚀 الانضمام التلقائي المتقدم
-        if get_setting('awaiting_auto_join') == 'true':
-            set_setting('awaiting_auto_join', '')
-            # استخراج الروابط المتقدمة
-            extracted_links = extract_telegram_links(event.raw_text)
-            if extracted_links:
-                progress_msg = await event.respond(
-                    f"🚀 **بدء الانضمام التلقائي**\n\n"
-                    f"📡 تم اكتشاف {len(extracted_links)} رابط\n"
-                    f"👥 حسابات متاحة: {len(user_clients)}\n"
-                    f"⏱ مدة الانتظار: {get_setting('join_interval', '40')}ث\n\n"
-                    f"⏳ جاري المعالجة..."
-                )
-                # دالة تحديث التقدم
-                async def update_progress(text):
-                    try:
-                        await progress_msg.edit(text)
-                    except:
-                        pass
-                
-                success, failed, skipped, result_msg = await auto_join_links(extracted_links, progress_callback=update_progress)
-                try:
-                    await progress_msg.edit(result_msg, buttons=get_main_menu())
-                except:
-                    await event.respond(result_msg, buttons=get_main_menu())
-            else:
-                await event.respond("❌ لم يتم العثور على روابط تيليجرام صالحة", buttons=get_main_menu())
-            return
-
-        # الروابط - انضمام تلقائي مباشر (إرسال روابط بدون الضغط على زر)
-        auto_detected_links = extract_telegram_links(event.raw_text)
-        if auto_detected_links and user_clients and not get_setting('awaiting_msg') and get_setting('awaiting_auto_join') != 'true':
-            # إذا كانت الرسالة تحتوي على 3 روابط أو أكثر - انضمام تلقائي
-            if len(auto_detected_links) >= 3:
-                progress_msg = await event.respond(
-                    f"🚀 **انضمام تلقائي**\n\n"
-                    f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
-                    f"👥 حسابات: {len(user_clients)}\n\n"
-                    f"⏳ جاري المعالجة..."
-                )
-                async def update_progress2(text):
-                    try:
-                        await progress_msg.edit(text)
-                    except:
-                        pass
-                
-                success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress2)
-                try:
-                    await progress_msg.edit(result_msg, buttons=get_main_menu())
-                except:
-                    await event.respond(result_msg, buttons=get_main_menu())
-                return
+        # ═══════════════════════════════════════════
+        #  🟡 أولوية ثانية: إضافة رسالة (قبل الروابط!)
+        #  يجب أن يكون قبل كشف الروابط التلقائي
+        # ═══════════════════════════════════════════
 
         # إضافة رسالة
         if get_setting('awaiting_msg') == 'true':
@@ -6083,28 +6035,70 @@ async def main():
             )
             return
 
-        if get_setting('awaiting_slow_join') == 'true':
-            set_setting('awaiting_slow_join', '')
+        # 🚀 الانضمام التلقائي المتقدم
+        if get_setting('awaiting_auto_join') == 'true':
+            set_setting('awaiting_auto_join', '')
+            # استخراج الروابط المتقدمة
             extracted_links = extract_telegram_links(event.raw_text)
+            # محاولة بسيطة: كل سطر يحتوي على t.me/
             if not extracted_links:
-                # محاولة بسيطة: كل سطر رابط
                 extracted_links = [l.strip() for l in event.raw_text.split('\n') if l.strip() and 't.me/' in l]
             if extracted_links:
                 progress_msg = await event.respond(
-                    f"🚀 **بدء الانضمام**\n\n📡 {len(extracted_links)} رابط\n⏳ جاري المعالجة..."
+                    f"🚀 **بدء الانضمام التلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(extracted_links)} رابط\n"
+                    f"👥 حسابات متاحة: {len(user_clients)}\n"
+                    f"⏱ مدة الانتظار: {get_setting('join_interval', '40')}ث\n\n"
+                    f"⏳ جاري المعالجة..."
                 )
-                async def update_progress3(text):
+                # دالة تحديث التقدم
+                async def update_progress(text):
                     try:
                         await progress_msg.edit(text)
                     except:
                         pass
                 
-                success, failed, skipped, result_msg = await auto_join_links(extracted_links, progress_callback=update_progress3)
+                success, failed, skipped, result_msg = await auto_join_links(extracted_links, progress_callback=update_progress)
                 try:
                     await progress_msg.edit(result_msg, buttons=get_main_menu())
                 except:
                     await event.respond(result_msg, buttons=get_main_menu())
+            else:
+                await event.respond("❌ لم يتم العثور على روابط تيليجرام صالحة\n💡 أرسل الروابط مرة أخرى أو /cancel", buttons=get_main_menu())
+                set_setting('awaiting_auto_join', 'true')  # إعادة التفعيل
             return
+
+        # الروابط - انضمام تلقائي مباشر (إرسال روابط بدون الضغط على زر)
+        # فقط إذا لم يكن هناك أي حالة انتظار مفعلة
+        any_awaiting = any(get_setting(k) == 'true' for k in [
+            'awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
+            'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_slow_join',
+            'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_msg_interval',
+            'awaiting_join_interval', 'awaiting_fast_delay', 'awaiting_add_blacklist',
+            'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete'
+        ])
+        if not any_awaiting and user_clients:
+            auto_detected_links = extract_telegram_links(event.raw_text)
+            # إذا كانت الرسالة تحتوي على 3 روابط أو أكثر - انضمام تلقائي
+            if len(auto_detected_links) >= 3:
+                progress_msg = await event.respond(
+                    f"🚀 **انضمام تلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
+                    f"👥 حسابات: {len(user_clients)}\n\n"
+                    f"⏳ جاري المعالجة..."
+                )
+                async def update_progress2(text):
+                    try:
+                        await progress_msg.edit(text)
+                    except:
+                        pass
+                
+                success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress2)
+                try:
+                    await progress_msg.edit(result_msg, buttons=get_main_menu())
+                except:
+                    await event.respond(result_msg, buttons=get_main_menu())
+                return
 
         if get_setting('awaiting_del_msg') == 'true':
             set_setting('awaiting_del_msg', '')
