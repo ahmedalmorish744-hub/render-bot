@@ -262,7 +262,7 @@ def init_db():
     if get_setting('message_interval') is None:
         set_setting('message_interval', '3')
     if get_setting('join_interval') is None:
-        set_setting('join_interval', '40')
+        set_setting('join_interval', '30')
     if get_setting('join_per_account_limit') is None:
         set_setting('join_per_account_limit', '15')
     if get_setting('join_human_delay') is None:
@@ -3520,7 +3520,7 @@ async def auto_join_links(links, progress_callback=None):
     total_links = len(clean_links)
     
     # إعدادات الحماية من الحظر
-    base_interval = int(get_setting('join_interval', '40'))  # الفترة الأساسية بين الانضمامات
+    base_interval = int(get_setting('join_interval', '30'))  # الفترة الأساسية بين الانضمامات
     max_joins_per_hour = int(get_setting('join_per_account_limit', '15'))
     human_like = get_setting('join_human_delay', 'on') == 'on'
     
@@ -4525,7 +4525,7 @@ def get_main_menu():
     lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
     stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
-    join_interval = get_setting('join_interval', '40')
+    join_interval = get_setting('join_interval', '30')
     fast_delay = get_setting('fast_post_delay', '3')
     pending_sched = len(get_pending_scheduled_posts())
     return [
@@ -4583,7 +4583,7 @@ def get_join_reports_menu():
     ]
 
 def get_join_settings_menu():
-    join_interval = get_setting('join_interval', '40')
+    join_interval = get_setting('join_interval', '30')
     join_limit = get_setting('join_per_account_limit', '15')
     hd_status = "✅" if get_setting('join_human_delay', 'on') == 'on' else "❌"
     return [
@@ -4846,7 +4846,7 @@ async def main():
         if data == 'back':
             groups_count = await get_all_groups_count()
             message_interval = get_setting('message_interval', '3')
-            join_interval = get_setting('join_interval', '40')
+            join_interval = get_setting('join_interval', '30')
             pending_sched = len(get_pending_scheduled_posts())
             join_limit = get_setting('join_per_account_limit', '15')
             await event.edit(
@@ -5096,7 +5096,7 @@ async def main():
                 "⚙️ **الإعدادات**\n\n"
                 f"⏱ مدة النشر العادي: {get_setting('message_interval', '3')} ثانية\n"
                 f"⚡ مدة النشر السريع: {get_setting('fast_post_delay', '3')} ثانية\n"
-                f"🚀 مدة الانضمام: {get_setting('join_interval', '40')} ثانية\n"
+                f"🚀 مدة الانضمام: {get_setting('join_interval', '30')} ثانية\n"
                 f"👤 حد الحساب/ساعة: {get_setting('join_per_account_limit', '15')}\n"
                 f"🎭 تأخير بشري للانضمام: {get_setting('join_human_delay', 'on')}\n"
                 f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
@@ -5111,7 +5111,7 @@ async def main():
             await event.edit("⏱ أرسل المدة (2-600 ثانية، الحد الأدنى 2):\n/cancel للإلغاء")
             set_setting('awaiting_msg_interval', 'true')
         elif data == 'set_join_interval':
-            await event.edit("⏱ أرسل مدة الانتظار بين الانضمامات (15-600 ثانية، موصى به: 30-60):\n/cancel للإلغاء")
+            await event.edit("⏱ أرسل الفاصل الزمني بين الانضمامات (10-600 ثانية، الافتراضي: 30):\n/cancel للإلغاء")
             set_setting('awaiting_join_interval', 'true')
         elif data == 'toggle_enc':
             current = get_setting('encryption', 'on')
@@ -5500,7 +5500,7 @@ async def main():
 
         elif data == 'auto_join':
             acc_count = len(user_clients)
-            join_interval = get_setting('join_interval', '40')
+            join_interval = get_setting('join_interval', '30')
             join_limit = get_setting('join_per_account_limit', '15')
             hd_status = "✅" if get_setting('join_human_delay', 'on') == 'on' else "❌"
             await event.edit(
@@ -5568,43 +5568,6 @@ async def main():
             status = "✅ مفعل" if new_val == 'on' else "❌ معطل"
             await event.edit(f"🎭 تأخير بشري للانضمام: {status}", buttons=get_join_settings_menu())
 
-        elif data == 'confirm_auto_join':
-            # تأكيد الانضمام التلقائي للروابط المكتشفة
-            pending_links_json = get_setting('pending_join_links', '')
-            if pending_links_json:
-                try:
-                    pending_links = json.loads(pending_links_json)
-                except:
-                    pending_links = []
-                set_setting('pending_join_links', '')  # مسح الروابط المحفوظة
-                if pending_links and user_clients:
-                    await event.edit(
-                        f"🚀 **بدء الانضمام التلقائي**\n\n"
-                        f"📡 {len(pending_links)} رابط\n"
-                        f"👥 حسابات: {len(user_clients)}\n\n"
-                        f"⏳ جاري المعالجة..."
-                    )
-                    progress_msg_ref = event.message
-                    async def update_progress_confirm(text):
-                        try:
-                            await progress_msg_ref.edit(text)
-                        except:
-                            pass
-                    
-                    success, failed, skipped, result_msg = await auto_join_links(pending_links, progress_callback=update_progress_confirm)
-                    try:
-                        await event.edit(result_msg, buttons=get_main_menu())
-                    except:
-                        await event.respond(result_msg, buttons=get_main_menu())
-                else:
-                    await event.edit("❌ لا توجد روابط أو حسابات متاحة", buttons=get_main_menu())
-            else:
-                await event.edit("❌ انتهت صلاحية الروابط، أرسلها مرة أخرى", buttons=get_main_menu())
-
-        elif data == 'cancel_auto_join':
-            set_setting('pending_join_links', '')
-            await event.edit("❌ تم إلغاء الانضمام", buttons=get_main_menu())
-
         elif data == 'clean_db':
             await event.edit(
                 "⚠️ **تنظيف قاعدة البيانات**\n\nسيتم حذف كل شيء ما عدا الحسابات\n\nهل أنت متأكد؟",
@@ -5615,7 +5578,7 @@ async def main():
                 saved = clean_database_keep_accounts()
                 set_setting('message_interval', '3')
                 set_setting('fast_post_delay', '3')
-                set_setting('join_interval', '40')
+                set_setting('join_interval', '30')
                 set_setting('join_per_account_limit', '15')
                 set_setting('join_human_delay', 'on')
                 set_setting('encryption', 'on')
@@ -5994,11 +5957,11 @@ async def main():
             set_setting('awaiting_join_interval', '')
             try:
                 val = int(event.raw_text.strip())
-                if 15 <= val <= 600:
+                if 10 <= val <= 600:
                     set_setting('join_interval', str(val))
                     await event.respond(f"✅ تم ضبط مدة الانضمام إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ بين 15 و 600", buttons=get_main_menu())
+                    await event.respond("❌ بين 10 و 600", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -6126,7 +6089,7 @@ async def main():
                     f"🚀 **بدء الانضمام التلقائي**\n\n"
                     f"📡 تم اكتشاف {len(extracted_links)} رابط\n"
                     f"👥 حسابات متاحة: {len(user_clients)}\n"
-                    f"⏱ مدة الانتظار: {get_setting('join_interval', '40')}ث\n\n"
+                    f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
                     f"⏳ جاري المعالجة..."
                 )
                 # دالة تحديث التقدم
@@ -6157,20 +6120,26 @@ async def main():
         ])
         if not any_awaiting and user_clients and not is_joining_active:
             auto_detected_links = extract_telegram_links(event.raw_text)
-            # إذا كانت الرسالة تحتوي على 3 روابط أو أكثر - اقتراح الانضمام
-            if len(auto_detected_links) >= 3:
-                # حفظ الروابط في الإعدادات للموافقة
-                set_setting('pending_join_links', json.dumps(auto_detected_links[:500]))  # حد أقصى 500
-                await event.respond(
-                    f"🔍 **تم اكتشاف {len(auto_detected_links)} رابط تيليجرام**\n\n"
-                    f"هل تريد الانضمام لها جميعاً؟\n"
+            # إذا كانت الرسالة تحتوي على رابط تيليجرام واحد أو أكثر - انضمام تلقائي فوري
+            if len(auto_detected_links) >= 1:
+                progress_msg = await event.respond(
+                    f"🚀 **انضمام تلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
                     f"👥 حسابات: {len(user_clients)}\n"
-                    f"⏱ مدة الانتظار: {get_setting('join_interval', '40')}ث",
-                    buttons=[
-                        [Button.inline("🚀 نعم، انضم للكل", b"confirm_auto_join")],
-                        [Button.inline("❌ لا، تجاهل", b"cancel_auto_join")]
-                    ]
+                    f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
+                    f"⏳ جاري المعالجة..."
                 )
+                async def update_progress2(text):
+                    try:
+                        await progress_msg.edit(text)
+                    except:
+                        pass
+                
+                success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress2)
+                try:
+                    await progress_msg.edit(result_msg, buttons=get_main_menu())
+                except:
+                    await event.respond(result_msg, buttons=get_main_menu())
                 return
 
         if get_setting('awaiting_del_msg') == 'true':
