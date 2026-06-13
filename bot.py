@@ -79,6 +79,7 @@ is_posting_active = False
 is_joining_active = False  # علم الانضمام التلقائي
 join_progress_msg = None  # رسالة تقدم الانضمام
 join_cancelled = False  # إلغاء الانضمام
+join_queue = []  # طابور الروابط - يحفظ الروابط للانضمام التالي
 scheduled_tasks = {}  # {schedule_id: asyncio.Task}
 
 # ═══════════════════════════════════════════════
@@ -3781,7 +3782,7 @@ def is_already_joined(client, group_id):
 
 
 def get_join_account_usage(acc_id):
-    """الحصول على عدد الانضمامات الأخيرة للحساب"""
+    """الحصول على عدد الانضمامات الأخيرة للحساب - للتوزيع فقط وليس حد"""
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -3795,53 +3796,71 @@ def get_join_account_usage(acc_id):
         return 0
 
 
+# متغير لتتبع آخر حساب مستخدم بالتناوب
+_last_join_acc_index = 0
+
 def get_best_join_account():
-    """اختيار أفضل حساب للانضمام - الأقل استخداماً في الساعة الأخيرة
-    حد الانضمام: 15 مجموعة/ساعة لكل حساب (أقل من حد تيليجرام لتجنب الحظر)
+    """اختيار أفضل حساب للانضمام - توزيع بالتناوب بين الحسابات
+    بدون حد ساعة - كل الحسابات تنظم بلا قيود
+    فقط يوزع الروابط بالتناوب لمنع ضغط حساب واحد
     """
+    global _last_join_acc_index
+    
     if not user_clients:
         return None, None
     
-    best_acc = None
-    best_count = float('inf')
-    max_joins_per_hour = int(get_setting('join_per_account_limit', '15'))
+    acc_ids = list(user_clients.keys())
+    if not acc_ids:
+        return None, None
     
-    for acc_id in user_clients:
-        count = get_join_account_usage(acc_id)
-        if count < max_joins_per_hour and count < best_count:
-            best_count = count
-            best_acc = acc_id
+    # تحقق من FloodWait - تخطي الحسابات التي في FloodWait
+    for attempt in range(len(acc_ids)):
+        # اختيار الحساب التالي بالتناوب
+        idx = (_last_join_acc_index + attempt) % len(acc_ids)
+        acc_id = acc_ids[idx]
+        
+        # تحقق من FloodWait
+        flood_remaining = get_setting(f'flood_wait_{acc_id}', '0')
+        if flood_remaining and flood_remaining != '0':
+            flood_time = float(flood_remaining)
+            if time.time() < flood_time:
+                continue  # تخطي هذا الحساب - في FloodWait
+        
+        # هذا الحساب متاح
+        _last_join_acc_index = (idx + 1) % len(acc_ids)
+        return user_clients[acc_id], acc_id
     
-    if best_acc is None:
-        # كل الحسابات وصلت للحد - اختر الأقل استخداماً على أي حال
-        for acc_id in user_clients:
-            count = get_join_account_usage(acc_id)
-            if count < best_count:
-                best_count = count
+    # كل الحسابات في FloodWait - أرجع الأقل انتظاراً
+    best_acc = acc_ids[0]
+    best_wait = float('inf')
+    for acc_id in acc_ids:
+        flood_remaining = get_setting(f'flood_wait_{acc_id}', '0')
+        if flood_remaining and flood_remaining != '0':
+            remaining = float(flood_remaining) - time.time()
+            if remaining < best_wait:
+                best_wait = remaining
                 best_acc = acc_id
     
-    if best_acc is not None:
-        return user_clients[best_acc], best_acc
-    return None, None
+    _last_join_acc_index = (acc_ids.index(best_acc) + 1) % len(acc_ids)
+    return user_clients[best_acc], best_acc
 
 
 async def auto_join_links(links, progress_callback=None):
-    """نظام الانضمام التلقائي المتقدم - يدعم مئات الروابط مع حماية من الحظر
+    """نظام الانضمام التلقائي - ينضم لكل الروابط بفاصل زمني فقط
     
     الميزات:
-    - دعم مئات الروابط بدون حد أقصى
-    - توزيع ذكي على عدة حسابات
-    - تبديل تلقائي للحساب عند FloodWait
-    - تأخير بشري عشوائي بين كل انضمام
-    - تخطي المجموعات المنضم إليها مسبقاً
-    - تقارير تقدم مباشرة
-    - إلغاء ممكن أثناء التنفيذ
-    - حماية من الحظر: حد 15 انضمام/ساعة لكل حساب
+    - ينضم لكل الروابط بدون حد أقصى
+    - فاصل زمني بين كل رابط فقط (بدون تأخيرات إضافية)
+    - توزيع بالتناوب على الحسابات
+    - تبديل تلقائي عند FloodWait
+    - طابور: الروابط تُحفظ وتُعالج بالترتيب
     """
-    global is_joining_active, join_cancelled
+    global is_joining_active, join_cancelled, join_queue
     
     if is_joining_active:
-        return 0, 0, 0, "⚠️ يوجد عملية انضمام قيد التنفيذ بالفعل"
+        # إضافة الروابط للطابور بدلاً من رفضها
+        join_queue.extend(links)
+        return 0, 0, 0, f"📋 تم إضافة {len(links)} رابط للطابور (سيتم الانضمام بعد الانتهاء من الروابط الحالية)"
     
     is_joining_active = True
     join_cancelled = False
@@ -3854,7 +3873,6 @@ async def auto_join_links(links, progress_callback=None):
     failed_count = 0
     skipped_count = 0
     
-    # ضمان إعادة تعيين is_joining_active حتى لو حدث استثناء غير متوقع
     try:
         # تنظيف الروابط وإزالة المكررات
         clean_links = []
@@ -3864,7 +3882,7 @@ async def auto_join_links(links, progress_callback=None):
             if not link:
                 continue
             # تطبيع الرابط
-            link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)  # إزالة المحارف غير المرئية
+            link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)
             if link.startswith('@'):
                 username = link[1:]
                 if len(username) >= 5 and username[0].isalpha():
@@ -3881,59 +3899,40 @@ async def auto_join_links(links, progress_callback=None):
         
         total_links = len(clean_links)
         
-        # إعدادات الحماية من الحظر
-        base_interval = int(get_setting('join_interval', '30'))  # الفترة الأساسية بين الانضمامات
-        max_joins_per_hour = int(get_setting('join_per_account_limit', '15'))
-        human_like = get_setting('join_human_delay', 'on') == 'on'
+        # الفاصل الزمني فقط - بدون أي تأخير إضافي
+        base_interval = int(get_setting('join_interval', '30'))
         
-        logger.info(f"🚀 بدء الانضمام المتقدم لـ {total_links} رابط عبر {len(user_clients)} حساب")
-        
-        # حساب تقديري للوقت
-        est_per_link = base_interval + (10 if human_like else 0)
-        est_total = (total_links * est_per_link) // 60
-        num_accounts = len(user_clients)
-        if num_accounts > 1:
-            est_total = est_total // num_accounts
+        logger.info(f"🚀 بدء الانضمام لـ {total_links} رابط عبر {len(user_clients)} حساب - فاصل {base_interval}ث")
         
         for i, link in enumerate(clean_links, 1):
             # التحقق من الإلغاء
             if join_cancelled:
+                # إضافة الروابط المتبقية للطابور
+                remaining = clean_links[i-1:]
+                if remaining:
+                    join_queue.extend(remaining)
+                    logger.info(f"📋 تم إضافة {len(remaining)} رابط متبقي للطابور بعد الإلغاء")
                 is_joining_active = False
-                return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط"
+                # معالجة الطابور
+                if join_queue:
+                    asyncio.create_task(process_join_queue(progress_callback))
+                return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط - الباقي في الطابور"
             
-            # اختيار أفضل حساب
+            # اختيار حساب بالتناوب
             client, acc_id = get_best_join_account()
             if client is None:
-                logger.warning("⚠️ جميع الحسابات وصلت للحد الأقصى - انتظار 60 ثانية")
-                if progress_callback:
-                    await progress_callback(f"⏸ جميع الحسابات وصلت حد الساعة... انتظار 60ث\n📊 التقدم: {i}/{total_links}")
-                await asyncio.sleep(60)
-                client, acc_id = get_best_join_account()
-                if client is None:
-                    logger.warning(f"⚠️ تعذر إيجاد حساب متاح - تخطي الروابط المتبقية ({total_links - i + 1})")
-                    failed_count += (total_links - i + 1)
-                    break  # بدلاً من return - نخرج من الحلقة لنعرض النتائج
+                logger.warning(f"⚠️ لا يوجد حساب متاح - تخطي الروابط المتبقية ({total_links - i + 1})")
+                failed_count += (total_links - i + 1)
+                break
             
-            # تأخير بشري عشوائي (تخطي التأخير للرابط الأول)
+            # الفاصل الزمني فقط (بدون تأخير بشري) - تخطي للرابط الأول
             if i > 1:
                 try:
-                    jitter = random.randint(-8, 15)
-                    actual_delay = max(20, base_interval + jitter)
+                    # فقط الفاصل المحدد + تذبذب بسيط ±3 ثواني
+                    jitter = random.randint(-3, 3)
+                    actual_delay = max(5, base_interval + jitter)
                     
-                    # تأخير بشري إضافي عشوائي
-                    if human_like:
-                        # 15% احتمال توقف أطول (محاكاة تصفح)
-                        if random.random() < 0.15:
-                            actual_delay += random.randint(20, 60)
-                        # 5% احتمال توقف قصير جداً
-                        elif random.random() < 0.05:
-                            actual_delay = random.randint(8, 15)
-                        # تأخير إضافي كل 10 روابط
-                        if i % 10 == 0:
-                            actual_delay += random.randint(30, 90)
-                            logger.info(f"☕ استراحة كل 10 روابط: +{actual_delay - base_interval}ث")
-                    
-                    # انتظار FloodWait سابق
+                    # انتظار FloodWait إذا كان الحساب في انتظار
                     flood_remaining = get_setting(f'flood_wait_{acc_id}', '0')
                     if flood_remaining and flood_remaining != '0':
                         flood_time = float(flood_remaining)
@@ -3942,21 +3941,23 @@ async def auto_join_links(links, progress_callback=None):
                             logger.info(f"⏸ حساب {acc_id} في FloodWait - انتظار {wait_more:.0f}ث")
                             if progress_callback:
                                 await progress_callback(f"⏸ FloodWait حساب {acc_id}... انتظار {wait_more:.0f}ث\n📊 التقدم: {i}/{total_links}")
-                            await asyncio.sleep(wait_more + random.randint(5, 15))
+                            await asyncio.sleep(wait_more + 3)
                         set_setting(f'flood_wait_{acc_id}', '0')
                     
                     logger.info(f"⏸ انتظار {actual_delay}ث قبل الرابط {i}/{total_links} [حساب {acc_id}]")
                     await asyncio.sleep(actual_delay)
                 
                 except asyncio.CancelledError:
+                    remaining = clean_links[i-1:]
+                    if remaining:
+                        join_queue.extend(remaining)
                     is_joining_active = False
-                    return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط"
+                    return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط - الباقي في الطابور"
             
             # محاولة الانضمام
             group_info = None
             try:
                 if "joinchat" in link or "+" in link:
-                    # رابط دعوة خاص
                     hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
                     if not hash_part:
                         failed_count += 1
@@ -3968,8 +3969,7 @@ async def auto_join_links(links, progress_callback=None):
                         chat = updates.chats[0]
                         group_info = (chat.id, getattr(chat, 'title', 'غير معروف'))
                 else:
-                    # قناة/مجموعة عامة
-                    username = link.split('/')[-1].split('?')[0]  # إزالة معلمات URL
+                    username = link.split('/')[-1].split('?')[0]
                     if not username:
                         failed_count += 1
                         logger.warning(f"❌ [{i}/{total_links}] رابط بدون اسم: {link[:50]}")
@@ -3977,13 +3977,10 @@ async def auto_join_links(links, progress_callback=None):
                         continue
                     entity = await client.get_entity(username)
                     if entity:
-                        # التحقق من الانضمام مسبقاً
                         if hasattr(entity, 'left') and not entity.left:
                             skipped_count += 1
                             logger.info(f"⏭ [{i}/{total_links}] منضم بالفعل: {username}")
                             save_join_history(link, entity.id, getattr(entity, 'title', username), 'skipped', f"account_{acc_id}")
-                            if progress_callback and i % 5 == 0:
-                                await progress_callback(f"📊 التقدم: {i}/{total_links} | ✅ {success_count} ⏭ {skipped_count} ❌ {failed_count}")
                             continue
                         
                         await client(JoinChannelRequest(entity))
@@ -4003,18 +4000,15 @@ async def auto_join_links(links, progress_callback=None):
                 flood_seconds = e.seconds
                 logger.warning(f"⏸ حساب {acc_id} في FloodWait: {flood_seconds}ث - تبديل الحساب")
                 
-                # تسجيل وقت انتهاء FloodWait
                 set_setting(f'flood_wait_{acc_id}', str(time.time() + flood_seconds))
-                
-                # لا نحتسبه كفشل كامل - نعيد المحاولة بحساب آخر
                 save_join_history(link, 0, "FloodWait", f'flood_wait:{flood_seconds}s', f"account_{acc_id}")
                 
-                # تبديل الحساب وإعادة المحاولة
+                # تبديل الحساب وإعادة المحاولة فوراً
                 client2, acc_id2 = get_best_join_account()
                 if client2 and acc_id2 != acc_id:
                     try:
                         logger.info(f"🔄 إعادة محاولة الرابط {i} بحساب {acc_id2}")
-                        await asyncio.sleep(random.randint(5, 15))  # تأخير قصير قبل التبديل
+                        await asyncio.sleep(3)  # تأخير بسيط فقط
                         
                         if "joinchat" in link or "+" in link:
                             hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
@@ -4044,28 +4038,25 @@ async def auto_join_links(links, progress_callback=None):
                         logger.info(f"✅ [{i}/{total_links}] نجاح بعد تبديل الحساب [حساب {acc_id2}]")
                     except FloodWaitError as e2:
                         failed_count += 1
-                        logger.error(f"❌ [{i}/{total_links}] FloodWait على حسابين - تخطي")
+                        logger.error(f"❌ [{i}/{total_links}] FloodWait على حسابين")
                         set_setting(f'flood_wait_{acc_id2}', str(time.time() + e2.seconds))
-                        # انتظار FloodWait
-                        await asyncio.sleep(min(e2.seconds + 5, 120))
+                        await asyncio.sleep(min(e2.seconds, 60))
                     except Exception as e3:
                         failed_count += 1
                         logger.error(f"❌ [{i}/{total_links}] فشل بعد تبديل الحساب: {e3}")
                         save_join_history(link, 0, "فشل", f'failed_retry:{str(e3)[:40]}', f"account_{acc_id2}")
                 else:
-                    # حساب واحد فقط أو لا يوجد حساب بديل - انتظار FloodWait ثم إعادة المحاولة
-                    wait_time = min(flood_seconds + 5, 180)
+                    # حساب واحد فقط - انتظار FloodWait ثم إعادة المحاولة
+                    wait_time = min(flood_seconds + 3, 120)
                     logger.info(f"⏸ انتظار FloodWait {wait_time}ث ثم إعادة المحاولة")
                     if progress_callback:
                         await progress_callback(f"⏸ FloodWait {flood_seconds}ث - انتظار ثم إعادة محاولة...\n📊 التقدم: {i}/{total_links}")
                     await asyncio.sleep(wait_time)
-                    # إعادة محاولة الرابط بعد الانتظار
                     try:
                         if "joinchat" in link or "+" in link:
                             hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
                             if not hash_part:
                                 failed_count += 1
-                                save_join_history(link, 0, "رابط غير مكتمل", 'failed:empty_invite_wait', f"account_{acc_id}")
                                 continue
                             updates = await client(ImportChatInviteRequest(hash_part))
                             if updates.chats:
@@ -4075,7 +4066,6 @@ async def auto_join_links(links, progress_callback=None):
                             username = link.split('/')[-1].split('?')[0]
                             if not username:
                                 failed_count += 1
-                                save_join_history(link, 0, "رابط غير مكتمل", 'failed:empty_username_wait', f"account_{acc_id}")
                                 continue
                             entity = await client.get_entity(username)
                             await client(JoinChannelRequest(entity))
@@ -4102,27 +4092,22 @@ async def auto_join_links(links, progress_callback=None):
             
             except InviteHashExpiredError:
                 failed_count += 1
-                logger.warning(f"❌ [{i}/{total_links}] رابط دعوة منتهي: {link[:50]}")
                 save_join_history(link, 0, "رابط منتهي", 'failed:expired_invite', f"account_{acc_id}")
             
             except InviteHashInvalidError:
                 failed_count += 1
-                logger.warning(f"❌ [{i}/{total_links}] رابط دعوة غير صالح: {link[:50]}")
                 save_join_history(link, 0, "رابط غير صالح", 'failed:invalid_invite', f"account_{acc_id}")
             
             except ChannelPrivateError:
                 failed_count += 1
-                logger.warning(f"❌ [{i}/{total_links}] قناة خاصة: {link[:50]}")
                 save_join_history(link, 0, "قناة خاصة", 'failed:private', f"account_{acc_id}")
             
             except ChannelInvalidError:
                 failed_count += 1
-                logger.warning(f"❌ [{i}/{total_links}] قناة غير صالحة: {link[:50]}")
                 save_join_history(link, 0, "قناة غير صالحة", 'failed:invalid_channel', f"account_{acc_id}")
             
             except Exception as e:
                 error_str = str(e)
-                # التحقق إذا كان الخطأ "Already participant" بأشكال مختلفة
                 if 'already' in error_str.lower() or 'ALREADY' in error_str:
                     skipped_count += 1
                     save_join_history(link, 0, "منضم بالفعل", 'skipped', f"account_{acc_id}")
@@ -4131,8 +4116,8 @@ async def auto_join_links(links, progress_callback=None):
                     logger.error(f"❌ [{i}/{total_links}] فشل: {e} [حساب {acc_id}]")
                     save_join_history(link, 0, "فشل", f'failed:{error_str[:40]}', f"account_{acc_id}")
             
-            # تحديث التقدم كل 5 روابط
-            if progress_callback and i % 5 == 0:
+            # تحديث التقدم
+            if progress_callback and (i % 3 == 0 or i == total_links):
                 try:
                     await progress_callback(
                         f"🔄 الانضمام: {i}/{total_links}\n"
@@ -4153,13 +4138,41 @@ async def auto_join_links(links, progress_callback=None):
             f"📈 نسبة النجاح: {(success_count / max(total_links, 1)) * 100:.1f}%"
         )
         
+        # معالجة الطابور بعد الانتهاء
+        if join_queue:
+            asyncio.create_task(process_join_queue(progress_callback))
+        
         return success_count, failed_count, skipped_count, result_msg
     
     except Exception as outer_e:
-        # ضمان إعادة تعيين is_joining_active عند أي استثناء غير متوقع
         logger.error(f"❌ خطأ غير متوقع في الانضمام: {outer_e}")
         is_joining_active = False
+        if join_queue:
+            asyncio.create_task(process_join_queue(progress_callback))
         return success_count, failed_count, skipped_count, f"❌ خطأ غير متوقع: {str(outer_e)[:100]}\n✅ نجاح: {success_count} | ❌ فشل: {failed_count} | ⏭ تخطي: {skipped_count}"
+
+
+async def process_join_queue(original_callback=None):
+    """معالجة طابور الروابط - ينضم للروابط المحفوظة بعد الانتهاء من الدفعة الحالية"""
+    global join_queue
+    
+    if not join_queue:
+        return
+    
+    # أخذ الروابط من الطابور
+    queued_links = join_queue.copy()
+    join_queue = []
+    
+    logger.info(f"📋 معالجة طابور {len(queued_links)} رابط")
+    
+    async def queue_callback(text):
+        if original_callback:
+            try:
+                await original_callback(f"📋 [طابور] {text}")
+            except:
+                pass
+    
+    await auto_join_links(queued_links, progress_callback=queue_callback)
 
 def save_join_history(link, group_id, group_name, status, joined_by):
     conn = sqlite3.connect(DB_PATH)
@@ -4935,12 +4948,11 @@ def get_join_reports_menu():
 
 def get_join_settings_menu():
     join_interval = get_setting('join_interval', '30')
-    join_limit = get_setting('join_per_account_limit', '15')
-    hd_status = "✅" if get_setting('join_human_delay', 'on') == 'on' else "❌"
+    queue_count = len(join_queue)
+    queue_info = f" ({queue_count} في الطابور)" if queue_count > 0 else ""
     return [
-        [Button.inline(f"⏱ مدة الانتظار ({join_interval}ث)", b"set_join_interval")],
-        [Button.inline(f"👤 حد الحساب/ساعة ({join_limit})", b"set_join_limit")],
-        [Button.inline(f"🎭 تأخير بشري {hd_status}", b"toggle_join_human_delay")],
+        [Button.inline(f"⏱ الفاصل بين الروابط ({join_interval}ث)", b"set_join_interval")],
+        [Button.inline(f"📋 الطابور{queue_info}", b"view_join_queue")],
         [Button.inline("🔙 رجوع", b"back")],
     ]
 
@@ -5199,14 +5211,14 @@ async def main():
             message_interval = get_setting('message_interval', '3')
             join_interval = get_setting('join_interval', '30')
             pending_sched = len(get_pending_scheduled_posts())
-            join_limit = get_setting('join_per_account_limit', '15')
+            queue_count = len(join_queue)
+            queue_info = f"\n📋 طابور الانضمام: {queue_count} رابط" if queue_count > 0 else ""
             await event.edit(
                 "🛡 **لوحة التحكم**\n\n"
                 f"📢 المجموعات: {groups_count}\n"
                 f"⏱ مدة النشر: {message_interval} ثانية\n"
-                f"🚀 مدة الانضمام: {join_interval} ثانية\n"
-                f"👤 حد الحساب: {join_limit}/ساعة\n"
-                f"📅 منشورات مجدولة: {pending_sched}",
+                f"🚀 فاصل الانضمام: {join_interval} ثانية\n"
+                f"📅 منشورات مجدولة: {pending_sched}{queue_info}",
                 buttons=get_main_menu()
             )
 
@@ -5447,9 +5459,8 @@ async def main():
                 "⚙️ **الإعدادات**\n\n"
                 f"⏱ مدة النشر العادي: {get_setting('message_interval', '3')} ثانية\n"
                 f"⚡ مدة النشر السريع: {get_setting('fast_post_delay', '3')} ثانية\n"
-                f"🚀 مدة الانضمام: {get_setting('join_interval', '30')} ثانية\n"
-                f"👤 حد الحساب/ساعة: {get_setting('join_per_account_limit', '15')}\n"
-                f"🎭 تأخير بشري للانضمام: {get_setting('join_human_delay', 'on')}\n"
+                f"🚀 فاصل الانضمام: {get_setting('join_interval', '30')} ثانية\n"
+                f"📋 طابور الانضمام: {len(join_queue)} رابط\n"
                 f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
                 f"🎭 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
                 f"🎭 تشويش النص: {obf_status}\n"
@@ -5462,7 +5473,7 @@ async def main():
             await event.edit("⏱ أرسل المدة (2-600 ثانية، الحد الأدنى 2):\n/cancel للإلغاء")
             set_setting('awaiting_msg_interval', 'true')
         elif data == 'set_join_interval':
-            await event.edit("⏱ أرسل الفاصل الزمني بين الانضمامات (10-600 ثانية، الافتراضي: 30):\n/cancel للإلغاء")
+            await event.edit("⏱ أرسل الفاصل الزمني بين الروابط (5-300 ثانية، الافتراضي: 30):\n/cancel للإلغاء")
             set_setting('awaiting_join_interval', 'true')
         elif data == 'toggle_enc':
             current = get_setting('encryption', 'on')
@@ -5875,22 +5886,21 @@ async def main():
         elif data == 'auto_join':
             acc_count = len(user_clients)
             join_interval = get_setting('join_interval', '30')
-            join_limit = get_setting('join_per_account_limit', '15')
-            hd_status = "✅" if get_setting('join_human_delay', 'on') == 'on' else "❌"
+            queue_count = len(join_queue)
+            queue_info = f"\n  📋 روابط في الطابور: {queue_count}" if queue_count > 0 else ""
             await event.edit(
-                f"🚀 **الانضمام التلقائي المتقدم**\n\n"
+                f"🚀 **الانضمام التلقائي**\n\n"
                 f"📤 أرسل الروابط مباشرة (يدعم مئات الروابط)\n"
                 f"🔗 الأنواع المدعومة:\n"
                 f"  • https://t.me/channel\n"
                 f"  • https://t.me/+invite\n"
                 f"  • https://t.me/joinchat/xxx\n"
                 f"  • @username\n"
-                f"\n📊 الإعدادات الحالية:\n"
-                f"  ⏱ مدة الانتظار: {join_interval}ث\n"
-                f"  👤 حد الحساب: {join_limit}/ساعة\n"
-                f"  🎭 تأخير بشري: {hd_status}\n"
-                f"  👥 حسابات متاحة: {acc_count}\n\n"
-                f"💡 أرسل الروابط الآن /cancel للإلغاء"
+                f"\n📊 الإعدادات:\n"
+                f"  ⏱ الفاصل بين الروابط: {join_interval}ث\n"
+                f"  👥 حسابات متاحة: {acc_count}{queue_info}\n\n"
+                f"💡 أرسل الروابط الآن /cancel للإلغاء\n"
+                f"💡 الروابط تُحفظ في الطابور تلقائياً إذا كان هناك انضمام جاري"
             )
             set_setting('awaiting_auto_join', 'true')
         elif data == 'stop_joining':
@@ -5933,14 +5943,22 @@ async def main():
                     text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n   👤 {joined_by}\n\n"
                 await event.edit(text, buttons=get_join_reports_menu())
         elif data == 'set_join_limit':
-            await event.edit("👤 **حد الانضمام لكل حساب في الساعة**\n\nأرسل الرقم (موصى به: 10-20):")
-            set_setting('awaiting_join_limit', 'true')
+            # تم إزالة حد الساعة - الحسابات تنظم بدون حد
+            await event.edit("✅ لا يوجد حد على عدد الانضمامات - الحسابات تنظم بلا قيود\nالفاصل الزمني فقط هو المحدد", buttons=get_join_settings_menu())
         elif data == 'toggle_join_human_delay':
-            current = get_setting('join_human_delay', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('join_human_delay', new_val)
-            status = "✅ مفعل" if new_val == 'on' else "❌ معطل"
-            await event.edit(f"🎭 تأخير بشري للانضمام: {status}", buttons=get_join_settings_menu())
+            # تم إزالة التأخير البشري - فقط الفاصل الزمني
+            await event.edit("✅ التأخير البشري تمت إزالته\nيُستخدم فقط الفاصل الزمني المحدد بين الروابط", buttons=get_join_settings_menu())
+        elif data == 'view_join_queue':
+            queue_count = len(join_queue)
+            if queue_count == 0:
+                await event.edit("📋 **طابور الروابط**\n\n✅ الطابور فارغ\n💡 أرسل روابط أثناء عملية انضمام جارية وستُحفظ في الطابور تلقائياً", buttons=get_join_settings_menu())
+            else:
+                text = f"📋 **طابور الروابط**\n\n🔢 عدد الروابط: {queue_count}\n\n"
+                for idx, link in enumerate(join_queue[:20], 1):
+                    text += f"{idx}. {link[:50]}\n"
+                if queue_count > 20:
+                    text += f"\n... و{queue_count - 20} رابط آخر"
+                await event.edit(text, buttons=get_join_settings_menu())
 
         elif data == 'clean_db':
             await event.edit(
@@ -6332,11 +6350,11 @@ async def main():
             set_setting('awaiting_join_interval', '')
             try:
                 val = int(event.raw_text.strip())
-                if 10 <= val <= 600:
+                if 5 <= val <= 300:
                     set_setting('join_interval', str(val))
-                    await event.respond(f"✅ تم ضبط مدة الانضمام إلى {val} ثانية", buttons=get_main_menu())
+                    await event.respond(f"✅ تم ضبط الفاصل بين الروابط إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ بين 10 و 600", buttons=get_main_menu())
+                    await event.respond("❌ بين 5 و 300 ثانية", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -6517,11 +6535,12 @@ async def main():
                     await event.respond(result_msg, buttons=get_main_menu())
                 return
         
-        # إذا كانت هناك روابط لكن عملية انضمام جارية بالفعل
+        # إذا كانت هناك روابط لكن عملية انضمام جارية بالفعل - أضفها للطابور
         if not any_awaiting and is_joining_active:
             auto_detected_links = extract_telegram_links(event.raw_text)
             if len(auto_detected_links) >= 1:
-                await event.respond("⏳ **عملية انضمام جارية بالفعل**\n\n💡 سيتم الانضمام للروابط المكتشفة بعد انتهاء العملية الحالية\n🔗 استخدم زر إلغاء الانضمام إذا أردت إيقاف العملية الحالية")
+                join_queue.extend(auto_detected_links)
+                await event.respond(f"📋 **تم إضافة {len(auto_detected_links)} رابط للطابور**\n\n⏳ عملية انضمام جارية - سيتم الانضمام للروابط تلقائياً بعد الانتهاء\n📋 إجمالي الطابور: {len(join_queue)} رابط")
                 return
 
         if get_setting('awaiting_del_msg') == 'true':
