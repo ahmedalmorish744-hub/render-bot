@@ -5572,6 +5572,104 @@ async def main():
             await event.respond("تم الإلغاء", buttons=get_main_menu())
             return
 
+        # ═══════════════════════════════════════════
+        #  🔴 أولوية قصوى: إضافة حساب (phone/code/password)
+        #  يجب أن تكون أول شيء يُفحص لمنع اعتراض الرسالة
+        # ═══════════════════════════════════════════
+
+        # إضافة حساب - رقم الهاتف
+        if get_setting('awaiting_phone') == 'true':
+            set_setting('awaiting_phone', '')
+            phone = event.raw_text.strip()
+            # تنظيف الرقم: إزالة المسافات والشرطات
+            phone_clean = re.sub(r'[\s\-\(\)]', '', phone)
+            if not re.match(r'^\+?\d{8,15}$', phone_clean):
+                await event.respond("❌ رقم غير صالح! مثال: +966512345678\nأعد الإرسال أو /cancel")
+                set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+                return
+            try:
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+                await client.connect()
+                result = await client.send_code_request(phone_clean)
+                temp_sessions[event.sender_id] = {
+                    "phone": phone_clean,
+                    "client": client,
+                    "phone_code_hash": result.phone_code_hash
+                }
+                set_setting('awaiting_code', 'true')
+                await event.respond(f"📩 تم إرسال الرمز إلى {phone_clean}\nأرسل الرمز:")
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 جرب مرة أخرى أو /cancel")
+                set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+            return
+
+        # إضافة حساب - رمز التحقق
+        if get_setting('awaiting_code') == 'true':
+            set_setting('awaiting_code', '')
+            code = event.raw_text.strip()
+            session_data = temp_sessions.get(event.sender_id)
+            if not session_data:
+                await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+                return
+            try:
+                await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
+                me = await session_data["client"].get_me()
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+                          (session_data["client"].session.save(), me.phone, 'active'))
+                conn.commit()
+                acc_id = c.lastrowid
+                conn.close()
+                user_clients[acc_id] = session_data["client"]
+                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+                del temp_sessions[event.sender_id]
+                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+            except SessionPasswordNeededError:
+                set_setting('awaiting_password', 'true')
+                await event.respond("🔐 الحساب محمي بكلمة مرور\nأرسل كلمة المرور:")
+            except PhoneCodeInvalidError:
+                await event.respond("❌ رمز غير صحيح! أعد الإرسال:")
+                set_setting('awaiting_code', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+            except PhoneCodeExpiredError:
+                await event.respond("❌ انتهت صلاحية الرمز! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+            except FloodWaitError as e:
+                await event.respond(f"⏸ انتظر {e.seconds} ثانية ثم حاول مرة أخرى")
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel")
+                set_setting('awaiting_code', 'true')
+            return
+
+        # إضافة حساب - كلمة المرور
+        if get_setting('awaiting_password') == 'true':
+            set_setting('awaiting_password', '')
+            password = event.raw_text.strip()
+            session_data = temp_sessions.get(event.sender_id)
+            if not session_data:
+                await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+                return
+            try:
+                await session_data["client"].sign_in(password=password)
+                me = await session_data["client"].get_me()
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+                          (session_data["client"].session.save(), me.phone, 'active'))
+                conn.commit()
+                acc_id = c.lastrowid
+                conn.close()
+                user_clients[acc_id] = session_data["client"]
+                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+                del temp_sessions[event.sender_id]
+                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel")
+                set_setting('awaiting_password', 'true')
+            return
+
         # === جدولة النشر (محسنة) ===
         if get_setting('awaiting_schedule') == 'true':
             set_setting('awaiting_schedule', '')
@@ -5983,83 +6081,6 @@ async def main():
                 f"التغييرات غير مرئية للعين - فقط الآلات تكتشفها",
                 buttons=get_main_menu()
             )
-            return
-
-        # إضافة حساب - رقم الهاتف
-        if get_setting('awaiting_phone') == 'true':
-            set_setting('awaiting_phone', '')
-            phone = event.raw_text.strip()
-            if not re.match(r'^\+?\d{8,15}$', phone):
-                await event.respond("❌ رقم غير صالح! مثال: +966512345678")
-                return
-            try:
-                client = TelegramClient(StringSession(), API_ID, API_HASH)
-                await client.connect()
-                result = await client.send_code_request(phone)
-                temp_sessions[event.sender_id] = {
-                    "phone": phone,
-                    "client": client,
-                    "phone_code_hash": result.phone_code_hash
-                }
-                set_setting('awaiting_code', 'true')
-                await event.respond(f"📩 تم إرسال الرمز إلى {phone}\nأرسل الرمز:")
-            except Exception as e:
-                await event.respond(f"❌ {str(e)[:200]}")
-            return
-
-        if get_setting('awaiting_code') == 'true':
-            set_setting('awaiting_code', '')
-            code = event.raw_text.strip()
-            session_data = temp_sessions.get(event.sender_id)
-            if not session_data:
-                await event.respond("❌ انتهت الجلسة")
-                return
-            try:
-                await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
-                me = await session_data["client"].get_me()
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                          (session_data["client"].session.save(), me.phone, 'active'))
-                conn.commit()
-                acc_id = c.lastrowid
-                conn.close()
-                user_clients[acc_id] = session_data["client"]
-                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
-                del temp_sessions[event.sender_id]
-                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
-            except SessionPasswordNeededError:
-                set_setting('awaiting_password', 'true')
-                await event.respond("🔐 أرسل كلمة المرور:")
-            except PhoneCodeInvalidError:
-                await event.respond("❌ رمز غير صحيح!")
-            except Exception as e:
-                await event.respond(f"❌ {str(e)[:200]}")
-            return
-
-        if get_setting('awaiting_password') == 'true':
-            set_setting('awaiting_password', '')
-            password = event.raw_text.strip()
-            session_data = temp_sessions.get(event.sender_id)
-            if not session_data:
-                await event.respond("❌ انتهت الجلسة")
-                return
-            try:
-                await session_data["client"].sign_in(password=password)
-                me = await session_data["client"].get_me()
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                          (session_data["client"].session.save(), me.phone, 'active'))
-                conn.commit()
-                acc_id = c.lastrowid
-                conn.close()
-                user_clients[acc_id] = session_data["client"]
-                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
-                del temp_sessions[event.sender_id]
-                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
-            except Exception as e:
-                await event.respond(f"❌ {e}")
             return
 
         if get_setting('awaiting_slow_join') == 'true':
