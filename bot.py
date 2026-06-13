@@ -314,6 +314,8 @@ def init_db():
         set_setting('rtlo_enabled', 'off')
     if get_setting('edit_hide_enabled') is None:
         set_setting('edit_hide_enabled', 'on')
+    if get_setting('super_encryption_enabled') is None:
+        set_setting('super_encryption_enabled', 'off')
     if get_setting('exponential_backoff') is None:
         set_setting('exponential_backoff', 'on')
     # 🆕 إعدادات نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
@@ -612,6 +614,94 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+
+def prepare_content_for_sending(raw_content, group_id=None):
+    """
+    تجهيز المحتوى قبل الإرسال - الأولوية:
+    1. 💎 التشفير الخارق (أقوى - يكسر كل بوتات الحماية)
+    2. 🔬 تشويش خفي StealthObfuscator
+    3. 🔄 YayText/Messletters
+    4. تشفير عادي
+    
+    يُرجع: (content, use_html)
+    """
+    if not raw_content:
+        return raw_content, False
+    
+    # 💎 الأولوية 1: التشفير الخارق
+    if get_setting('super_encryption_enabled', 'off') == 'on':
+        encrypted = super_encryption.super_encrypt_full(raw_content)
+        # إذا كان هناك روابط، نخفيها في HTML
+        has_urls = bool(re.search(r'https?://\S+', raw_content))
+        if has_urls:
+            # دمج إخفاء الروابط HTML مع التشفير الخارق
+            encrypted_with_html, use_html = _apply_html_links(raw_content, encrypted)
+            return encrypted_with_html, use_html
+        return encrypted, False
+    
+    # 🔬 الأولوية 2: تشويش خفي
+    if get_setting('stealth_obfuscator_enabled', 'on') == 'on':
+        return stealth_obfuscator.obfuscate(raw_content, group_id)
+    
+    # 🔄 الأولوية 3: YayText/Messletters
+    if get_setting('yaytext_messletters_obfuscation', 'on') == 'on':
+        old_style = yaytext_obfuscator._last_style
+        content, use_html = yaytext_obfuscate(raw_content)
+        retries = 0
+        while yaytext_obfuscator._last_style == old_style and retries < 5:
+            content, use_html = yaytext_obfuscate(raw_content)
+            retries += 1
+        return content, use_html
+    
+    # الأولوية 4: تشفير عادي
+    obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
+    varied = vary_text(raw_content)
+    if obfuscation_on:
+        varied = obfuscate_for_humans(varied)
+    content = encrypt_text(varied, group_id)
+    return content, False
+
+
+def _apply_html_links(original_text, encrypted_text):
+    """إخفاء الروابط في HTML داخل النص المشفر بالتشفير الخارق"""
+    # البحث عن الروابط في النص الأصلي
+    links = list(re.finditer(r'https?://\S+', original_text))
+    mentions = list(re.finditer(r'@[a-zA-Z0-9_]{3,}', original_text))
+    
+    if not links and not mentions:
+        return encrypted_text, False
+    
+    # البحث عن الروابط في النص المشفر (لا تزال موجودة لأنها محمية)
+    result = encrypted_text
+    use_html = False
+    
+    for match in links:
+        url = match.group()
+        # إنشاء نص عرض متنوع للرابط
+        display = url  # في التشفير الخارق، الروابط محمية
+        try:
+            display_obf, _ = yaytext_obfuscate(url)
+        except:
+            display_obf = url
+        # استبدال الرابط بـ HTML
+        escaped_display = display_obf.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        result = result.replace(url, f'<a href="{url}">{escaped_display}</a>', 1)
+        use_html = True
+    
+    for match in mentions:
+        mention = match.group()
+        username = mention[1:]
+        # إنشاء نص عرض متنوع للمعرف
+        try:
+            display_obf, _ = yaytext_obfuscate(mention)
+        except:
+            display_obf = mention
+        escaped_display = display_obf.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        result = result.replace(mention, f'<a href="tg://resolve?domain={username}">{escaped_display}</a>', 1)
+        use_html = True
+    
+    return result, use_html
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -3098,6 +3188,244 @@ class AdvancedMessageEncoder:
 advanced_encoder = AdvancedMessageEncoder()
 
 
+# ═══════════════════════════════════════════════════════════════
+#  💎 نظام التشفير الخارق - Super Encryption 2026 💎
+#  أقوى طبقة تشفير: يكسر كشف بوتات الحماية بالكامل
+#  الآلية: حرف + كشيدة + فاصل + كشيدة + حرف
+#  النتيجة: نص مقروء بشرياً لكن مستحيل كشفه آلياً
+# ═══════════════════════════════════════════════════════════════
+class SuperEncryption:
+    """
+    💎 التشفير الخارق - أقوى نظام تشفير ضد بوتات الحماية
+    
+    الآلية المستوحاة من تقنيات التشفير المتقدمة:
+    كل حرف عربي يُحاط بنمط: حرف + كشيدة(ـ) + فاصل + كشيدة(ـ) + حرف تالي
+    
+    مثال: "سلام" ← "سـ...ـلـ...ـاـ...ـم"
+    
+    الفواصل المتاحة:
+    - نقاط: ... (ثلاث نقاط)
+    - شرطات: ─ (خط أفقي)
+    - نجوم: ✦ (نجمة صغيرة)
+    - معين: ◆ (معين)
+    - دائرة: ● (دائرة)
+    - زخرفة: ⟡ (زخرفة)
+    
+    لماذا يعمل:
+    1. بوتات الحماية تبحث عن كلمات كاملة ← الكلمات مكسورة بالفواصل
+    2. Regex لا يطابق كلمة مفرقة بأحرف ← الكشيدة والفاصل يكسران النمط
+    3. البشر يقرؤون الحروف المتصلة بالكشيدة ← مقروء تماماً
+    4. كل رسالة تختلف بالفاصل العشوائي ← لا نمط متكرر
+    """
+    
+    # الفواصل المتاحة (يتم اختيار واحد عشوائياً لكل رسالة)
+    SEPARATORS = [
+        '...',    # نقاط
+        '·',      # نقطة وسط
+        '─',      # خط أفقي
+        '✦',      # نجمة صغيرة
+        '◆',      # معين
+        '●',      # دائرة
+        '⟡',      # زخرفة
+        '⋆',      # نجمة مفتوحة
+        '᠎',      # مانجو (حرف منغولي خفي)
+        '⁞',      # أربعة خطوط عمودية
+        '⸱',      # نقطة كلمة
+        '•',      # نقطة سوداء
+    ]
+    
+    # الأحرف العربية التي تقبل الكشيدة (Tatweel)
+    KASHIDA_ACCEPTING = set('بتثجحخدذرزسشصضطظعغفقكلمنهي')
+    
+    # الأحرف العربية التي لا تتصل بما بعدها (لا نضيف كشيدة بعدها)
+    # لكننا نضيف الفاصل بعد كل حرف بغض النظر
+    
+    # الروابط والمعرفات محمية
+    URL_PATTERN = re.compile(r'https?://\S+')
+    MENTION_PATTERN = re.compile(r'@[a-zA-Z0-9_]{3,}')
+    PHONE_PATTERN = re.compile(r'\+?\d[\d\s\-]{7,}')
+    
+    def _extract_protected_zones(self, text):
+        """استخراج مناطق محمية (روابط، معرفات، أرقام هواتف)"""
+        zones = []
+        for match in self.URL_PATTERN.finditer(text):
+            zones.append((match.start(), match.end()))
+        for match in self.MENTION_PATTERN.finditer(text):
+            if not any(match.start() >= s and match.start() < e for s, e in zones):
+                zones.append((match.start(), match.end()))
+        for match in self.PHONE_PATTERN.finditer(text):
+            if not any(match.start() >= s and match.start() < e for s, e in zones):
+                zones.append((match.start(), match.end()))
+        return zones
+    
+    def _is_arabic_letter(self, char):
+        """التحقق من أن الحرف عربي"""
+        return '\u0600' <= char <= '\u06FF' or '\u0750' <= char <= '\u077F' or '\u08A0' <= char <= '\u08FF' or '\uFB50' <= char <= '\uFDFF' or '\uFE70' <= char <= '\uFEFF'
+    
+    def _is_ignored_char(self, char):
+        """أحرف لا نعالجها (مسافات، علامات ترقيم، تشكيل، أرقام)"""
+        if char.isspace():
+            return True
+        if char in '،.؛:!؟()-[]{}«»""\n\r\t':
+            return True
+        if '\u064B' <= char <= '\u065F':  # تشكيل عربي
+            return True
+        if char.isdigit():
+            return True
+        if char in self.KASHIDA_ACCEPTING:
+            return False
+        if self._is_arabic_letter(char):
+            return False
+        return True  # أحرف لاتينية وأخرى
+    
+    def super_encrypt(self, text, intensity=1.0):
+        """
+        تطبيق التشفير الخارق على النص
+        
+        النتيجة: نص عربي مقروء بشرياً لكنه مكسور آلياً
+        كل حرف عربي يُفصل عن الذي يليه بـ: كشيدة + فاصل + كشيدة
+        
+        intensity: كثافة التشفير (1.0 = كل الحروف، 0.5 = نصفها)
+        """
+        if not text or len(text) < 2:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        
+        def _is_protected(pos):
+            return any(pos >= s and pos < e for s, e in protected)
+        
+        # اختيار فاصل عشوائي لهذه الرسالة
+        separator = random.choice(self.SEPARATORS)
+        
+        result = []
+        i = 0
+        while i < len(text):
+            c = text[i]
+            
+            # حماية الروابط والمعرفات
+            if _is_protected(i):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الأحرف التي لا نعالجها
+            if self._is_ignored_char(c):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الحرف العربي - إضافته
+            result.append(c)
+            
+            # هل نضيف الفاصل بعد هذا الحرف؟
+            if random.random() <= intensity:
+                # البحث عن الحرف العربي التالي
+                next_arabic = None
+                for j in range(i + 1, len(text)):
+                    if not self._is_ignored_char(text[j]) and not _is_protected(j):
+                        if self._is_arabic_letter(text[j]):
+                            next_arabic = j
+                            break
+                        else:
+                            break  # حرف لاتيني - لا نضيف فاصل
+                    elif text[j].isspace() or text[j] in '،.؛:!؟':
+                        break  # نهاية الكلمة - لا فاصل
+                
+                # إضافة الفاصل فقط إذا كان الحرف التالي عربي في نفس الكلمة
+                if next_arabic is not None:
+                    # نمط: كشيدة + فاصل + كشيدة
+                    if c in self.KASHIDA_ACCEPTING:
+                        result.append('\u0640')  # كشيدة قبل الفاصل
+                    result.append(separator)
+                    # كشيدة بعد الفاصل تُضاف مع الحرف التالي تلقائياً
+            
+            i += 1
+        
+        return ''.join(result)
+    
+    def super_encrypt_full(self, text):
+        """
+        التشفير الخارق الكامل - يجمع كل الطبقات:
+        1. تشفير خارق (فاصل بين الحروف)
+        2. أحرف ZWJ غير مرئية
+        3. تنويع عشوائي للفاصل
+        """
+        if not text or len(text) < 2:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        
+        def _is_protected(pos):
+            return any(pos >= s and pos < e for s, e in protected)
+        
+        result = []
+        separator = random.choice(self.SEPARATORS)
+        
+        # أحرف ZWJ للتنويع
+        zwj_chars = ['\u200D', '\u200C', '\u200B']
+        
+        i = 0
+        while i < len(text):
+            c = text[i]
+            
+            # حماية الروابط والمعرفات
+            if _is_protected(i):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الأحرف التي لا نعالجها
+            if self._is_ignored_char(c):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الحرف العربي
+            result.append(c)
+            
+            # البحث عن الحرف العربي التالي في نفس الكلمة
+            next_arabic = None
+            for j in range(i + 1, len(text)):
+                if _is_protected(j):
+                    break
+                if text[j].isspace() or text[j] in '،.؛:!؟\n':
+                    break
+                if self._is_ignored_char(text[j]):
+                    continue  # تشكيل أو رقم داخل الكلمة
+                if self._is_arabic_letter(text[j]):
+                    next_arabic = j
+                    break
+                else:
+                    break  # حرف لاتيني
+            
+            if next_arabic is not None:
+                # إضافة: كشيدة + ZWJ + فاصل + ZWJ + كشيدة
+                if c in self.KASHIDA_ACCEPTING:
+                    result.append('\u0640')  # كشيدة
+                
+                # ZWJ عشوائي (50% احتمال)
+                if random.random() < 0.5:
+                    result.append(random.choice(zwj_chars[:2]))  # ZWJ أو ZWNJ
+                
+                result.append(separator)
+                
+                # ZWJ عشوائي بعد الفاصل (50% احتمال)
+                if random.random() < 0.5:
+                    result.append(random.choice(zwj_chars[:2]))
+            
+            i += 1
+        
+        # إضافة أحرف غير مرئية في البداية للتنويع الإضافي
+        result.insert(0, random.choice(['\u200B', '\u200C', '\uFEFF', '\u2060']))
+        
+        return ''.join(result)
+
+
+# إنشاء مثيل عام لنظام التشفير الخارق
+super_encryption = SuperEncryption()
+
+
 def yaytext_obfuscate(text):
     """
     تطبيق تشويش YayText & Messletters على النص - تُستدعى قبل الإرسال مباشرة
@@ -4118,25 +4446,8 @@ async def fast_post_to_all_groups(messages):
 
                 use_html = False
                 if content:
-                    # 🔬 نظام StealthObfuscator - تشويش خفي 100% (الأساسي)
-                    stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
-                    if stealth_on:
-                        # StealthObfuscator: تشويش غير مرئي يحافظ على المقروئية تماماً
-                        encrypted_content, use_html = stealth_obfuscator.obfuscate(content, gid)
-                    else:
-                        # نظام AntiGuardian القديم (يغير شكل النص)
-                        anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
-                        if anti_guardian_on:
-                            encrypted_content, use_html = anti_guardian.bypass(content, gid)
-                        else:
-                            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                            if yaytext_on:
-                                encrypted_content, use_html = yaytext_obfuscate(content)
-                            else:
-                                varied = vary_text(content)
-                                if obfuscation_on:
-                                    varied = obfuscate_for_humans(varied)
-                                encrypted_content = encrypt_text(varied, gid)
+                    # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
+                    encrypted_content, use_html = prepare_content_for_sending(content, gid)
                 else:
                     encrypted_content = ""
 
@@ -4288,24 +4599,8 @@ async def post_to_all_groups(message):
 
             use_html = False
             if content:
-                # 🔬 نظام StealthObfuscator - تشويش خفي 100% (الأساسي)
-                stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
-                if stealth_on:
-                    encrypted_content, use_html = stealth_obfuscator.obfuscate(content, gid)
-                else:
-                    # نظام AntiGuardian القديم
-                    anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
-                    if anti_guardian_on:
-                        encrypted_content, use_html = anti_guardian.bypass(content, gid)
-                    else:
-                        yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                        if yaytext_on:
-                            encrypted_content, use_html = yaytext_obfuscate(content)
-                        else:
-                            varied = vary_text(content)
-                            if obfuscation_on:
-                                varied = obfuscate_for_humans(varied)
-                            encrypted_content = encrypt_text(varied, gid)
+                # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
+                encrypted_content, use_html = prepare_content_for_sending(content, gid)
             else:
                 encrypted_content = ""
 
@@ -4524,6 +4819,7 @@ def get_main_menu():
     tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
     lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
     stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
+    se_status = "✅" if get_setting('super_encryption_enabled', 'off') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '30')
     fast_delay = get_setting('fast_post_delay', '3')
@@ -4537,8 +4833,8 @@ def get_main_menu():
         [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
         [Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth"),
          Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc")],
-        [Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti"),
-         Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"💎 تشفير خارق {se_status}", b"toggle_super_encryption"),
+         Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
          Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext")],
         [Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax"),
@@ -5138,6 +5434,29 @@ async def main():
             else:
                 await event.answer("🔬 تشويش خفي: معطل")
                 await event.edit("🔬 **تشويش خفي StealthObfuscator: معطل** ❌\n\nالنظام القديم (AntiGuardian/YayText) سيعمل بدلاً منه.", buttons=get_main_menu())
+
+        elif data == 'toggle_super_encryption':
+            current = get_setting('super_encryption_enabled', 'off')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('super_encryption_enabled', new_val)
+            if new_val == 'on':
+                example = "سلام عليكم تابعونا https://wa.me/+966568479168"
+                encrypted = super_encryption.super_encrypt_full(example)
+                await event.answer("💎 التشفير الخارق: مفعل ✨")
+                await event.edit(
+                    f"💎 **التشفير الخارق Super Encryption: مفعل** ✅\n\n"
+                    f"أقوى تشفير ضد بوتات الحماية!\n"
+                    f"كل حرف عربي يُفصل بنمط كشيدة + فاصل + كشيدة\n"
+                    f"النص مقروء بشرياً لكن مستحيل كشفه آلياً 🛡️\n\n"
+                    f"📝 **الأصل:**\n{example}\n\n"
+                    f"💎 **بعد التشفير الخارق:**\n{encrypted}\n\n"
+                    f"💡 الفواصل تُختار عشوائياً لكل رسالة!",
+                    buttons=get_main_menu()
+                )
+            else:
+                await event.answer("💎 التشفير الخارق: معطل")
+                await event.edit("💎 **التشفير الخارق: معطل** ❌\n\nسيتم استخدام التشفير العادي بدلاً منه.", buttons=get_main_menu())
+
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
             new_val = 'off' if current == 'on' else 'on'
@@ -5585,6 +5904,7 @@ async def main():
                 set_setting('anti_detect', 'on')
                 set_setting('obfuscation_enabled', 'on')
                 set_setting('yaytext_messletters_obfuscation', 'on')
+                set_setting('super_encryption_enabled', 'off')
                 await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب",
                                buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
             except Exception as e:
