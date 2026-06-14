@@ -27,7 +27,11 @@ from collections import deque
 
 from telethon import TelegramClient, events, Button
 from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
+from telethon.errors import (
+    SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError,
+    UserAlreadyParticipantError, InviteHashExpiredError, InviteHashInvalidError,
+    ChannelPrivateError, ChannelInvalidError
+)
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import InputMediaContact, Chat, Channel, User
@@ -72,10 +76,10 @@ logger = logging.getLogger(__name__)
 user_clients = {}
 temp_sessions = {}
 is_posting_active = False
-is_joining_active = False
-join_cancelled = False
-join_queue = []  # طابور الروابط
-join_progress_msg = None
+is_joining_active = False  # علم الانضمام التلقائي
+join_progress_msg = None  # رسالة تقدم الانضمام
+join_cancelled = False  # إلغاء الانضمام
+join_queue = []  # طابور الروابط - يحفظ الروابط للانضمام التالي
 scheduled_tasks = {}  # {schedule_id: asyncio.Task}
 
 # ═══════════════════════════════════════════════
@@ -259,7 +263,11 @@ def init_db():
     if get_setting('message_interval') is None:
         set_setting('message_interval', '3')
     if get_setting('join_interval') is None:
-        set_setting('join_interval', '100')
+        set_setting('join_interval', '30')
+    if get_setting('join_per_account_limit') is None:
+        set_setting('join_per_account_limit', '15')
+    if get_setting('join_human_delay') is None:
+        set_setting('join_human_delay', 'on')
     if get_setting('encryption') is None:
         set_setting('encryption', 'on')
     if get_setting('anti_detect') is None:
@@ -307,6 +315,8 @@ def init_db():
         set_setting('rtlo_enabled', 'off')
     if get_setting('edit_hide_enabled') is None:
         set_setting('edit_hide_enabled', 'on')
+    if get_setting('super_encryption_enabled') is None:
+        set_setting('super_encryption_enabled', 'off')
     if get_setting('exponential_backoff') is None:
         set_setting('exponential_backoff', 'on')
     # 🆕 إعدادات نظام AntiGuardian - تجاوز بوتات الحماية المتقدمة
@@ -605,6 +615,94 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(text, group_id)
+
+
+def prepare_content_for_sending(raw_content, group_id=None):
+    """
+    تجهيز المحتوى قبل الإرسال - الأولوية:
+    1. 💎 التشفير الخارق (أقوى - يكسر كل بوتات الحماية)
+    2. 🔬 تشويش خفي StealthObfuscator
+    3. 🔄 YayText/Messletters
+    4. تشفير عادي
+    
+    يُرجع: (content, use_html)
+    """
+    if not raw_content:
+        return raw_content, False
+    
+    # 💎 الأولوية 1: التشفير الخارق
+    if get_setting('super_encryption_enabled', 'off') == 'on':
+        encrypted = super_encryption.super_encrypt_full(raw_content)
+        # إذا كان هناك روابط، نخفيها في HTML
+        has_urls = bool(re.search(r'https?://\S+', raw_content))
+        if has_urls:
+            # دمج إخفاء الروابط HTML مع التشفير الخارق
+            encrypted_with_html, use_html = _apply_html_links(raw_content, encrypted)
+            return encrypted_with_html, use_html
+        return encrypted, False
+    
+    # 🔬 الأولوية 2: تشويش خفي
+    if get_setting('stealth_obfuscator_enabled', 'on') == 'on':
+        return stealth_obfuscator.obfuscate(raw_content, group_id)
+    
+    # 🔄 الأولوية 3: YayText/Messletters
+    if get_setting('yaytext_messletters_obfuscation', 'on') == 'on':
+        old_style = yaytext_obfuscator._last_style
+        content, use_html = yaytext_obfuscate(raw_content)
+        retries = 0
+        while yaytext_obfuscator._last_style == old_style and retries < 5:
+            content, use_html = yaytext_obfuscate(raw_content)
+            retries += 1
+        return content, use_html
+    
+    # الأولوية 4: تشفير عادي
+    obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
+    varied = vary_text(raw_content)
+    if obfuscation_on:
+        varied = obfuscate_for_humans(varied)
+    content = encrypt_text(varied, group_id)
+    return content, False
+
+
+def _apply_html_links(original_text, encrypted_text):
+    """إخفاء الروابط في HTML داخل النص المشفر بالتشفير الخارق"""
+    # البحث عن الروابط في النص الأصلي
+    links = list(re.finditer(r'https?://\S+', original_text))
+    mentions = list(re.finditer(r'@[a-zA-Z0-9_]{3,}', original_text))
+    
+    if not links and not mentions:
+        return encrypted_text, False
+    
+    # البحث عن الروابط في النص المشفر (لا تزال موجودة لأنها محمية)
+    result = encrypted_text
+    use_html = False
+    
+    for match in links:
+        url = match.group()
+        # إنشاء نص عرض متنوع للرابط
+        display = url  # في التشفير الخارق، الروابط محمية
+        try:
+            display_obf, _ = yaytext_obfuscate(url)
+        except:
+            display_obf = url
+        # استبدال الرابط بـ HTML
+        escaped_display = display_obf.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        result = result.replace(url, f'<a href="{url}">{escaped_display}</a>', 1)
+        use_html = True
+    
+    for match in mentions:
+        mention = match.group()
+        username = mention[1:]
+        # إنشاء نص عرض متنوع للمعرف
+        try:
+            display_obf, _ = yaytext_obfuscate(mention)
+        except:
+            display_obf = mention
+        escaped_display = display_obf.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        result = result.replace(mention, f'<a href="tg://resolve?domain={username}">{escaped_display}</a>', 1)
+        use_html = True
+    
+    return result, use_html
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -3091,6 +3189,244 @@ class AdvancedMessageEncoder:
 advanced_encoder = AdvancedMessageEncoder()
 
 
+# ═══════════════════════════════════════════════════════════════
+#  💎 نظام التشفير الخارق - Super Encryption 2026 💎
+#  أقوى طبقة تشفير: يكسر كشف بوتات الحماية بالكامل
+#  الآلية: حرف + كشيدة + فاصل + كشيدة + حرف
+#  النتيجة: نص مقروء بشرياً لكن مستحيل كشفه آلياً
+# ═══════════════════════════════════════════════════════════════
+class SuperEncryption:
+    """
+    💎 التشفير الخارق - أقوى نظام تشفير ضد بوتات الحماية
+    
+    الآلية المستوحاة من تقنيات التشفير المتقدمة:
+    كل حرف عربي يُحاط بنمط: حرف + كشيدة(ـ) + فاصل + كشيدة(ـ) + حرف تالي
+    
+    مثال: "سلام" ← "سـ...ـلـ...ـاـ...ـم"
+    
+    الفواصل المتاحة:
+    - نقاط: ... (ثلاث نقاط)
+    - شرطات: ─ (خط أفقي)
+    - نجوم: ✦ (نجمة صغيرة)
+    - معين: ◆ (معين)
+    - دائرة: ● (دائرة)
+    - زخرفة: ⟡ (زخرفة)
+    
+    لماذا يعمل:
+    1. بوتات الحماية تبحث عن كلمات كاملة ← الكلمات مكسورة بالفواصل
+    2. Regex لا يطابق كلمة مفرقة بأحرف ← الكشيدة والفاصل يكسران النمط
+    3. البشر يقرؤون الحروف المتصلة بالكشيدة ← مقروء تماماً
+    4. كل رسالة تختلف بالفاصل العشوائي ← لا نمط متكرر
+    """
+    
+    # الفواصل المتاحة (يتم اختيار واحد عشوائياً لكل رسالة)
+    SEPARATORS = [
+        '...',    # نقاط
+        '·',      # نقطة وسط
+        '─',      # خط أفقي
+        '✦',      # نجمة صغيرة
+        '◆',      # معين
+        '●',      # دائرة
+        '⟡',      # زخرفة
+        '⋆',      # نجمة مفتوحة
+        '᠎',      # مانجو (حرف منغولي خفي)
+        '⁞',      # أربعة خطوط عمودية
+        '⸱',      # نقطة كلمة
+        '•',      # نقطة سوداء
+    ]
+    
+    # الأحرف العربية التي تقبل الكشيدة (Tatweel)
+    KASHIDA_ACCEPTING = set('بتثجحخدذرزسشصضطظعغفقكلمنهي')
+    
+    # الأحرف العربية التي لا تتصل بما بعدها (لا نضيف كشيدة بعدها)
+    # لكننا نضيف الفاصل بعد كل حرف بغض النظر
+    
+    # الروابط والمعرفات محمية
+    URL_PATTERN = re.compile(r'https?://\S+')
+    MENTION_PATTERN = re.compile(r'@[a-zA-Z0-9_]{3,}')
+    PHONE_PATTERN = re.compile(r'\+?\d[\d\s\-]{7,}')
+    
+    def _extract_protected_zones(self, text):
+        """استخراج مناطق محمية (روابط، معرفات، أرقام هواتف)"""
+        zones = []
+        for match in self.URL_PATTERN.finditer(text):
+            zones.append((match.start(), match.end()))
+        for match in self.MENTION_PATTERN.finditer(text):
+            if not any(match.start() >= s and match.start() < e for s, e in zones):
+                zones.append((match.start(), match.end()))
+        for match in self.PHONE_PATTERN.finditer(text):
+            if not any(match.start() >= s and match.start() < e for s, e in zones):
+                zones.append((match.start(), match.end()))
+        return zones
+    
+    def _is_arabic_letter(self, char):
+        """التحقق من أن الحرف عربي"""
+        return '\u0600' <= char <= '\u06FF' or '\u0750' <= char <= '\u077F' or '\u08A0' <= char <= '\u08FF' or '\uFB50' <= char <= '\uFDFF' or '\uFE70' <= char <= '\uFEFF'
+    
+    def _is_ignored_char(self, char):
+        """أحرف لا نعالجها (مسافات، علامات ترقيم، تشكيل، أرقام)"""
+        if char.isspace():
+            return True
+        if char in '،.؛:!؟()-[]{}«»""\n\r\t':
+            return True
+        if '\u064B' <= char <= '\u065F':  # تشكيل عربي
+            return True
+        if char.isdigit():
+            return True
+        if char in self.KASHIDA_ACCEPTING:
+            return False
+        if self._is_arabic_letter(char):
+            return False
+        return True  # أحرف لاتينية وأخرى
+    
+    def super_encrypt(self, text, intensity=1.0):
+        """
+        تطبيق التشفير الخارق على النص
+        
+        النتيجة: نص عربي مقروء بشرياً لكنه مكسور آلياً
+        كل حرف عربي يُفصل عن الذي يليه بـ: كشيدة + فاصل + كشيدة
+        
+        intensity: كثافة التشفير (1.0 = كل الحروف، 0.5 = نصفها)
+        """
+        if not text or len(text) < 2:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        
+        def _is_protected(pos):
+            return any(pos >= s and pos < e for s, e in protected)
+        
+        # اختيار فاصل عشوائي لهذه الرسالة
+        separator = random.choice(self.SEPARATORS)
+        
+        result = []
+        i = 0
+        while i < len(text):
+            c = text[i]
+            
+            # حماية الروابط والمعرفات
+            if _is_protected(i):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الأحرف التي لا نعالجها
+            if self._is_ignored_char(c):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الحرف العربي - إضافته
+            result.append(c)
+            
+            # هل نضيف الفاصل بعد هذا الحرف؟
+            if random.random() <= intensity:
+                # البحث عن الحرف العربي التالي
+                next_arabic = None
+                for j in range(i + 1, len(text)):
+                    if not self._is_ignored_char(text[j]) and not _is_protected(j):
+                        if self._is_arabic_letter(text[j]):
+                            next_arabic = j
+                            break
+                        else:
+                            break  # حرف لاتيني - لا نضيف فاصل
+                    elif text[j].isspace() or text[j] in '،.؛:!؟':
+                        break  # نهاية الكلمة - لا فاصل
+                
+                # إضافة الفاصل فقط إذا كان الحرف التالي عربي في نفس الكلمة
+                if next_arabic is not None:
+                    # نمط: كشيدة + فاصل + كشيدة
+                    if c in self.KASHIDA_ACCEPTING:
+                        result.append('\u0640')  # كشيدة قبل الفاصل
+                    result.append(separator)
+                    # كشيدة بعد الفاصل تُضاف مع الحرف التالي تلقائياً
+            
+            i += 1
+        
+        return ''.join(result)
+    
+    def super_encrypt_full(self, text):
+        """
+        التشفير الخارق الكامل - يجمع كل الطبقات:
+        1. تشفير خارق (فاصل بين الحروف)
+        2. أحرف ZWJ غير مرئية
+        3. تنويع عشوائي للفاصل
+        """
+        if not text or len(text) < 2:
+            return text
+        
+        protected = self._extract_protected_zones(text)
+        
+        def _is_protected(pos):
+            return any(pos >= s and pos < e for s, e in protected)
+        
+        result = []
+        separator = random.choice(self.SEPARATORS)
+        
+        # أحرف ZWJ للتنويع
+        zwj_chars = ['\u200D', '\u200C', '\u200B']
+        
+        i = 0
+        while i < len(text):
+            c = text[i]
+            
+            # حماية الروابط والمعرفات
+            if _is_protected(i):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الأحرف التي لا نعالجها
+            if self._is_ignored_char(c):
+                result.append(c)
+                i += 1
+                continue
+            
+            # الحرف العربي
+            result.append(c)
+            
+            # البحث عن الحرف العربي التالي في نفس الكلمة
+            next_arabic = None
+            for j in range(i + 1, len(text)):
+                if _is_protected(j):
+                    break
+                if text[j].isspace() or text[j] in '،.؛:!؟\n':
+                    break
+                if self._is_ignored_char(text[j]):
+                    continue  # تشكيل أو رقم داخل الكلمة
+                if self._is_arabic_letter(text[j]):
+                    next_arabic = j
+                    break
+                else:
+                    break  # حرف لاتيني
+            
+            if next_arabic is not None:
+                # إضافة: كشيدة + ZWJ + فاصل + ZWJ + كشيدة
+                if c in self.KASHIDA_ACCEPTING:
+                    result.append('\u0640')  # كشيدة
+                
+                # ZWJ عشوائي (50% احتمال)
+                if random.random() < 0.5:
+                    result.append(random.choice(zwj_chars[:2]))  # ZWJ أو ZWNJ
+                
+                result.append(separator)
+                
+                # ZWJ عشوائي بعد الفاصل (50% احتمال)
+                if random.random() < 0.5:
+                    result.append(random.choice(zwj_chars[:2]))
+            
+            i += 1
+        
+        # إضافة أحرف غير مرئية في البداية للتنويع الإضافي
+        result.insert(0, random.choice(['\u200B', '\u200C', '\uFEFF', '\u2060']))
+        
+        return ''.join(result)
+
+
+# إنشاء مثيل عام لنظام التشفير الخارق
+super_encryption = SuperEncryption()
+
+
 def yaytext_obfuscate(text):
     """
     تطبيق تشويش YayText & Messletters على النص - تُستدعى قبل الإرسال مباشرة
@@ -3332,214 +3668,271 @@ async def get_all_accounts():
     return [a[0] for a in accounts]
 
 # ═══════════════════════════════════════════════
-#  نظام الانضمام التلقائي - كل حساب ينضم لكل قروب
+#  نظام الانضمام التلقائي المتقدم - Anti-Ban
 # ═══════════════════════════════════════════════
 
 def extract_telegram_links(text):
-    """استخراج جميع أنواع روابط تيليجرام من النص"""
+    """استخراج جميع أنواع روابط تيليجرام من النص
+    يدعم:
+    - https://t.me/channel_name
+    - https://t.me/joinchat/XXXXX
+    - https://t.me/+XXXXX
+    - http://t.me/...
+    - @username
+    - t.me/channel_name (بدون https)
+    - روابط دعوة خاصة طويلة
+    - روابط مسبوقة بأرقام أو رموز مثل: 1-https://t.me/... أو *t.me/...
+    """
     links = set()
+    
+    # تنظيف المحارف غير المرئية من النص
     text = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', text)
     
-    # روابط كاملة
-    for p in [
-        r'https?://t\.me/(?:joinchat/)?\+[a-zA-Z0-9_\-]+',
-        r'https?://t\.me/joinchat/[a-zA-Z0-9_\-]+',
-        r'https?://t\.me/[a-zA-Z][a-zA-Z0-9_]{4,}',
-    ]:
-        links.update(re.findall(p, text))
+    # 1. روابط t.me كاملة (https و http) - البحث المباشر بالأنماط
+    pattern_invite = r'https?://t\.me/(?:joinchat/)?\+[a-zA-Z0-9_\-]+'
+    pattern_public = r'https?://t\.me/[a-zA-Z][a-zA-Z0-9_]{4,}'
+    pattern_joinchat = r'https?://t\.me/joinchat/[a-zA-Z0-9_\-]+'
     
-    # @username
-    for u in re.findall(r'@([a-zA-Z][a-zA-Z0-9_]{4,})\b', text):
+    for p in [pattern_invite, pattern_public, pattern_joinchat]:
+        found = re.findall(p, text)
+        links.update(found)
+    
+    # 2. @username (باستخدام word boundary لتجنب الدمج الخاطئ)
+    usernames = re.findall(r'@([a-zA-Z][a-zA-Z0-9_]{4,})\b', text)
+    for u in usernames:
         links.add(f'https://t.me/{u}')
     
-    # فحص كل سطر وكلمة
-    for line in text.split('\n'):
-        cleaned = re.sub(r'^[\d]+[\.\)\-]+\s*', '', line.strip())
-        cleaned = re.sub(r'^[\-*•]+\s*', '', cleaned)
-        for word in cleaned.split():
-            word = word.strip('.,;:!؟،؛()[]{}«»""\'"')
-            if word.startswith('@') and len(word) > 5 and word[1].isalpha():
-                links.add(f'https://t.me/{word[1:]}')
-            elif 't.me/' in word:
-                m = re.search(r'(t\.me/.+)', word)
-                if m:
-                    part = m.group(1)
-                    link = f'https://{part}' if not part.startswith('http') else part
-                    path = link.split('t.me/')[-1].split('?')[0]
-                    if path.startswith('+') or path.startswith('joinchat/') or (len(path) >= 5 and path[0].isalpha()):
-                        links.add(link)
+    # 3. البحث عن t.me/ في أي مكان بالنص (حتى لو كان مسبوقاً برموز)
+    # هذا يلتقط: t.me/xxx, 1-t.me/xxx, *t.me/xxx, -t.me/xxx إلخ
+    tme_pattern = r'(?:^|[\s\-_*•●▶►▷→↳\d\.\)]+)(t\.me/[^\s\-_*•●▶►▷→]+)'
+    for match in re.finditer(tme_pattern, text):
+        found_part = match.group(1)
+        # التأكد من أنها ليست جزءاً من رابط https:// موجود بالفعل
+        if not re.search(r'https?://' + re.escape(found_part), text):
+            full_link = f'https://{found_part}'
+            if re.match(r'https?://t\.me/', full_link):
+                path = full_link.split('t.me/')[-1].split('?')[0]
+                if path.startswith('+') or path.startswith('joinchat/'):
+                    links.add(full_link)
+                elif len(path) >= 5 and path[0].isalpha():
+                    links.add(full_link)
     
-    final = []
+    # 4. فحص كل سطر بشكل مستقل - الطريقة الأكثر دقة
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        
+        # إزالة البادئات الشائعة مثل: 1. 2. 1- 2- * - •
+        cleaned_line = re.sub(r'^[\d]+[\.\)\-]+\s*', '', line)
+        cleaned_line = re.sub(r'^[\-*•●▶►▷→↳]+\s*', '', cleaned_line)
+        
+        # فحص كل كلمة في السطر بشكل مستقل
+        for word in cleaned_line.split():
+            # تنظيف الرموز المحيطة بالكلمة
+            word = word.strip('.,;:!؟،؛()[]{}«»""\'"')
+            if not word:
+                continue
+            
+            if word.startswith('@'):
+                username = word[1:]
+                if len(username) >= 5 and username[0].isalpha():
+                    links.add(f'https://t.me/{username}')
+            elif 't.me/' in word:
+                # استخراج جزء t.me/ من الكلمة (حتى لو كانت مسبوقة برموز)
+                tme_match = re.search(r'(t\.me/.+)', word)
+                if tme_match:
+                    tme_part = tme_match.group(1)
+                    if not tme_part.startswith('http'):
+                        full_link = f'https://{tme_part}'
+                    else:
+                        full_link = tme_part
+                    # التأكد من صحة الرابط
+                    if re.match(r'https?://t\.me/', full_link):
+                        path = full_link.split('t.me/')[-1].split('?')[0]
+                        if path.startswith('+') or path.startswith('joinchat/'):
+                            links.add(full_link)
+                        elif len(path) >= 5 and path[0].isalpha():
+                            links.add(full_link)
+    
+    # 5. تنظيف الروابط النهائية - إزالة أي محارف متبقية غير مرئية
+    final_links = []
     for link in links:
+        link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)
         link = link.strip()
         if link and 't.me/' in link:
             if not link.startswith('http'):
                 link = 'https://' + link
-            final.append(link)
-    return list(set(final))
+            final_links.append(link)
+    
+    return list(set(final_links))
 
 
-async def join_one_link_with_one_account(client, acc_id, link):
-    """محاولة انضمام حساب واحد لرابط واحد - تعيد الحالة"""
-    group_info = None
+def is_already_joined(client, group_id):
+    """التحقق مما إذا كان الحساب منضم بالفعل للمجموعة"""
     try:
-        if "joinchat" in link or "+" in link:
-            hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
-            if not hash_part:
-                return 'failed', None, "رابط غير مكتمل"
-            updates = await client(ImportChatInviteRequest(hash_part))
-            if updates.chats:
-                chat = updates.chats[0]
-                group_info = (chat.id, getattr(chat, 'title', 'غير معروف'))
-        else:
-            username = link.split('/')[-1].split('?')[0]
-            if not username:
-                return 'failed', None, "رابط بدون اسم"
-            entity = await client.get_entity(username)
-            if entity:
-                if hasattr(entity, 'left') and not entity.left:
-                    return 'skipped', None, "منضم بالفعل"
-                await client(JoinChannelRequest(entity))
-                group_info = (entity.id, getattr(entity, 'title', username))
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('SELECT 1 FROM groups WHERE group_id=?', (group_id,))
+        result = c.fetchone()
+        conn.close()
+        return result is not None
+    except:
+        return False
+
+
+def get_join_account_usage(acc_id):
+    """الحصول على عدد الانضمامات الأخيرة للحساب - للتوزيع فقط وليس حد"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        hour_ago = datetime.now() - timedelta(hours=1)
+        c.execute('SELECT COUNT(*) FROM join_history WHERE joined_by=? AND (status="success" OR status="success_retry" OR status="success_after_wait") AND joined_at>?',
+                  (f'account_{acc_id}', hour_ago))
+        count = c.fetchone()[0]
+        conn.close()
+        return count
+    except:
+        return 0
+
+
+# متغير لتتبع آخر حساب مستخدم بالتناوب
+_last_join_acc_index = 0
+
+def get_best_join_account():
+    """اختيار أفضل حساب للانضمام - توزيع بالتناوب بين الحسابات
+    بدون حد ساعة - كل الحسابات تنظم بلا قيود
+    فقط يوزع الروابط بالتناوب لمنع ضغط حساب واحد
+    """
+    global _last_join_acc_index
+    
+    if not user_clients:
+        return None, None
+    
+    acc_ids = list(user_clients.keys())
+    if not acc_ids:
+        return None, None
+    
+    # تحقق من FloodWait - تخطي الحسابات التي في FloodWait
+    for attempt in range(len(acc_ids)):
+        # اختيار الحساب التالي بالتناوب
+        idx = (_last_join_acc_index + attempt) % len(acc_ids)
+        acc_id = acc_ids[idx]
         
-        if group_info:
-            gid, gname = group_info
-            save_join_history(link, gid, gname[:80], 'success', f"account_{acc_id}")
-            add_group_to_db(gid, gname)
-        else:
-            save_join_history(link, 0, "تم الانضمام", 'success', f"account_{acc_id}")
-        return 'success', group_info, None
+        # تحقق من FloodWait
+        flood_remaining = get_setting(f'flood_wait_{acc_id}', '0')
+        if flood_remaining and flood_remaining != '0':
+            flood_time = float(flood_remaining)
+            if time.time() < flood_time:
+                continue  # تخطي هذا الحساب - في FloodWait
+        
+        # هذا الحساب متاح
+        _last_join_acc_index = (idx + 1) % len(acc_ids)
+        return user_clients[acc_id], acc_id
     
-    except FloodWaitError as e:
-        set_setting(f'flood_wait_{acc_id}', str(time.time() + e.seconds))
-        save_join_history(link, 0, "FloodWait", f'flood_wait:{e.seconds}s', f"account_{acc_id}")
-        return 'flood', None, e.seconds
+    # كل الحسابات في FloodWait - أرجع الأقل انتظاراً
+    best_acc = acc_ids[0]
+    best_wait = float('inf')
+    for acc_id in acc_ids:
+        flood_remaining = get_setting(f'flood_wait_{acc_id}', '0')
+        if flood_remaining and flood_remaining != '0':
+            remaining = float(flood_remaining) - time.time()
+            if remaining < best_wait:
+                best_wait = remaining
+                best_acc = acc_id
     
-    except UserAlreadyParticipantError:
-        save_join_history(link, 0, "منضم بالفعل", 'skipped', f"account_{acc_id}")
-        return 'skipped', None, None
-    
-    except InviteHashExpiredError:
-        save_join_history(link, 0, "رابط منتهي", 'failed:expired', f"account_{acc_id}")
-        return 'failed_permanent', None, None
-    
-    except InviteHashInvalidError:
-        save_join_history(link, 0, "رابط غير صالح", 'failed:invalid', f"account_{acc_id}")
-        return 'failed_permanent', None, None
-    
-    except ChannelPrivateError:
-        save_join_history(link, 0, "قناة خاصة", 'failed:private', f"account_{acc_id}")
-        return 'failed_permanent', None, None
-    
-    except Exception as e:
-        error_str = str(e)
-        if 'already' in error_str.lower() or 'ALREADY' in error_str:
-            save_join_history(link, 0, "منضم بالفعل", 'skipped', f"account_{acc_id}")
-            return 'skipped', None, None
-        save_join_history(link, 0, "فشل", f'failed:{error_str[:40]}', f"account_{acc_id}")
-        return 'failed', None, str(e)[:50]
+    _last_join_acc_index = (acc_ids.index(best_acc) + 1) % len(acc_ids)
+    return user_clients[best_acc], best_acc
 
 
 async def auto_join_links(links, progress_callback=None):
-    """نظام الانضمام - كل حساب ينضم لكل قروب قابل للدخول
+    """نظام الانضمام التلقائي - ينضم لكل الروابط بفاصل زمني فقط
     
-    المنطق:
-    1. لكل رابط: يحاول كل الحسابات تنظم
-    2. عند FloodWait: ينتظر ويحاول مرة ثانية
-    3. الروابط تُحفظ في طابور لو في عملية جارية
-    4. الفاصل الزمني بين كل محاولة انضمام
+    الميزات:
+    - ينضم لكل الروابط بدون حد أقصى
+    - فاصل زمني بين كل رابط فقط (بدون تأخيرات إضافية)
+    - توزيع بالتناوب على الحسابات
+    - تبديل تلقائي عند FloodWait
+    - طابور: الروابط تُحفظ وتُعالج بالترتيب
     """
     global is_joining_active, join_cancelled, join_queue
     
-    # لو في عملية جارية - ضيف الروابط للطابور
     if is_joining_active:
+        # إضافة الروابط للطابور بدلاً من رفضها
         join_queue.extend(links)
-        if progress_callback:
-            await progress_callback(f"📋 تم إضافة {len(links)} رابط للطابور (إجمالي: {len(join_queue)})")
-        return 0, 0, f"تم إضافة {len(links)} رابط للطابور"
+        return 0, 0, 0, f"📋 تم إضافة {len(links)} رابط للطابور (سيتم الانضمام بعد الانتهاء من الروابط الحالية)"
     
     is_joining_active = True
     join_cancelled = False
     
     if not user_clients:
         is_joining_active = False
-        return 0, 0, "❌ لا توجد حسابات"
+        return 0, 0, 0, "❌ لا توجد حسابات متصلة"
     
-    # تنظيف الروابط
-    clean_links = []
-    seen = set()
-    for link in links:
-        link = link.strip()
-        if not link:
-            continue
-        link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)
-        if link.startswith('@'):
-            username = link[1:]
-            if len(username) >= 5 and username[0].isalpha():
-                link = f'https://t.me/{username}'
-        if 't.me/' in link and link not in seen:
-            if not link.startswith('http'):
-                link = 'https://' + link
-            seen.add(link)
-            clean_links.append(link)
-    
-    # إضافة روابط الطابور
-    if join_queue:
-        queued = join_queue.copy()
-        join_queue = []
-        for link in queued:
-            link = link.strip()
-            if link and link not in seen:
-                seen.add(link)
-                clean_links.append(link)
-    
-    if not clean_links:
-        is_joining_active = False
-        return 0, 0, "❌ لا توجد روابط صالحة"
-    
-    total_links = len(clean_links)
-    acc_ids = list(user_clients.keys())
-    total_accounts = len(acc_ids)
-    base_interval = int(get_setting('join_interval', '30'))
-    
-    # إحصائيات
-    total_success = 0
-    total_failed = 0
-    total_skipped = 0
-    # مصفوفة تتبع: {link: {acc_id: status}}
-    join_matrix = {}
-    # روابط فاشلة بشكل دائم (منتهي، غير صالح)
-    permanent_failed = set()
-    
-    logger.info(f"🚀 بدء الانضمام: {total_links} رابط × {total_accounts} حساب = {total_links * total_accounts} عملية")
+    success_count = 0
+    failed_count = 0
+    skipped_count = 0
     
     try:
-        join_counter = 0  # عداد المحاولات الكلي
+        # تنظيف الروابط وإزالة المكررات
+        clean_links = []
+        seen = set()
+        for link in links:
+            link = link.strip()
+            if not link:
+                continue
+            # تطبيع الرابط
+            link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)
+            if link.startswith('@'):
+                username = link[1:]
+                if len(username) >= 5 and username[0].isalpha():
+                    link = f'https://t.me/{username}'
+            if 't.me/' in link and link not in seen:
+                if not link.startswith('http'):
+                    link = 'https://' + link
+                seen.add(link)
+                clean_links.append(link)
         
-        for link_idx, link in enumerate(clean_links, 1):
+        if not clean_links:
+            is_joining_active = False
+            return 0, 0, 0, "❌ لا توجد روابط صالحة"
+        
+        total_links = len(clean_links)
+        
+        # الفاصل الزمني فقط - بدون أي تأخير إضافي
+        base_interval = int(get_setting('join_interval', '30'))
+        
+        logger.info(f"🚀 بدء الانضمام لـ {total_links} رابط عبر {len(user_clients)} حساب - فاصل {base_interval}ث")
+        
+        for i, link in enumerate(clean_links, 1):
+            # التحقق من الإلغاء
             if join_cancelled:
+                # إضافة الروابط المتبقية للطابور
+                remaining = clean_links[i-1:]
+                if remaining:
+                    join_queue.extend(remaining)
+                    logger.info(f"📋 تم إضافة {len(remaining)} رابط متبقي للطابور بعد الإلغاء")
+                is_joining_active = False
+                # معالجة الطابور
+                if join_queue:
+                    asyncio.create_task(process_join_queue(progress_callback))
+                return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط - الباقي في الطابور"
+            
+            # اختيار حساب بالتناوب
+            client, acc_id = get_best_join_account()
+            if client is None:
+                logger.warning(f"⚠️ لا يوجد حساب متاح - تخطي الروابط المتبقية ({total_links - i + 1})")
+                failed_count += (total_links - i + 1)
                 break
             
-            # لو الرابط فاشل بشكل دائم - تخطي
-            if link in permanent_failed:
-                continue
-            
-            join_matrix[link] = {}
-            
-            # لكل رابط: حاول كل الحسابات
-            for acc_idx, acc_id in enumerate(acc_ids):
-                if join_cancelled:
-                    break
-                
-                client = user_clients[acc_id]
-                join_counter += 1
-                
-                # الفاصل الزمني (تخطي أول محاولة)
-                if join_counter > 1:
+            # الفاصل الزمني فقط (بدون تأخير بشري) - تخطي للرابط الأول
+            if i > 1:
+                try:
+                    # فقط الفاصل المحدد + تذبذب بسيط ±3 ثواني
                     jitter = random.randint(-3, 3)
                     actual_delay = max(5, base_interval + jitter)
                     
-                    # انتظار FloodWait لو الحساب في انتظار
+                    # انتظار FloodWait إذا كان الحساب في انتظار
                     flood_remaining = get_setting(f'flood_wait_{acc_id}', '0')
                     if flood_remaining and flood_remaining != '0':
                         flood_time = float(flood_remaining)
@@ -3547,115 +3940,239 @@ async def auto_join_links(links, progress_callback=None):
                             wait_more = flood_time - time.time()
                             logger.info(f"⏸ حساب {acc_id} في FloodWait - انتظار {wait_more:.0f}ث")
                             if progress_callback:
-                                await progress_callback(
-                                    f"⏸ FloodWait حساب {acc_id}... {wait_more:.0f}ث\n"
-                                    f"📊 رابط {link_idx}/{total_links} | حساب {acc_idx+1}/{total_accounts}\n"
-                                    f"✅ {total_success} ⏭ {total_skipped} ❌ {total_failed}"
-                                )
-                            await asyncio.sleep(wait_more + 2)
+                                await progress_callback(f"⏸ FloodWait حساب {acc_id}... انتظار {wait_more:.0f}ث\n📊 التقدم: {i}/{total_links}")
+                            await asyncio.sleep(wait_more + 3)
                         set_setting(f'flood_wait_{acc_id}', '0')
                     
+                    logger.info(f"⏸ انتظار {actual_delay}ث قبل الرابط {i}/{total_links} [حساب {acc_id}]")
                     await asyncio.sleep(actual_delay)
                 
-                # محاولة الانضمام
-                status, group_info, error = await join_one_link_with_one_account(client, acc_id, link)
-                join_matrix[link][acc_id] = status
-                
-                if status == 'success':
-                    total_success += 1
-                    logger.info(f"✅ رابط {link_idx}/{total_links} حساب {acc_id} - نجاح")
-                
-                elif status == 'skipped':
-                    total_skipped += 1
-                    logger.info(f"⏭ رابط {link_idx}/{total_links} حساب {acc_id} - منضم")
-                
-                elif status == 'flood':
-                    # FloodWait - انتظر ثم أعد المحاولة
-                    flood_seconds = error if error else 30
-                    wait_time = min(flood_seconds + 3, 120)
-                    logger.info(f"⏸ رابط {link_idx}/{total_links} حساب {acc_id} - FloodWait {flood_seconds}ث")
-                    if progress_callback:
-                        await progress_callback(
-                            f"⏸ FloodWait {flood_seconds}ث - حساب {acc_id}\n"
-                            f"📊 رابط {link_idx}/{total_links} | ⏳ انتظار...\n"
-                            f"✅ {total_success} ⏭ {total_skipped} ❌ {total_failed}"
-                        )
-                    await asyncio.sleep(wait_time)
-                    # إعادة المحاولة بعد الانتظار
-                    status2, _, _ = await join_one_link_with_one_account(client, acc_id, link)
-                    join_matrix[link][acc_id] = status2
-                    if status2 == 'success':
-                        total_success += 1
-                    elif status2 == 'skipped':
-                        total_skipped += 1
-                    else:
-                        total_failed += 1
-                
-                elif status == 'failed_permanent':
-                    # الرابط فاشل بشكل دائم - لا داعي لمحاولة باقي الحسابات
-                    permanent_failed.add(link)
-                    total_failed += 1
-                    logger.warning(f"❌ رابط {link_idx}/{total_links} - فشل دائم: {error}")
-                    break
-                
+                except asyncio.CancelledError:
+                    remaining = clean_links[i-1:]
+                    if remaining:
+                        join_queue.extend(remaining)
+                    is_joining_active = False
+                    return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط - الباقي في الطابور"
+            
+            # محاولة الانضمام
+            group_info = None
+            try:
+                if "joinchat" in link or "+" in link:
+                    hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
+                    if not hash_part:
+                        failed_count += 1
+                        logger.warning(f"❌ [{i}/{total_links}] رابط دعوة بدون كود: {link[:50]}")
+                        save_join_history(link, 0, "رابط غير مكتمل", 'failed:empty_invite', f"account_{acc_id}")
+                        continue
+                    updates = await client(ImportChatInviteRequest(hash_part))
+                    if updates.chats:
+                        chat = updates.chats[0]
+                        group_info = (chat.id, getattr(chat, 'title', 'غير معروف'))
                 else:
-                    total_failed += 1
-                    logger.error(f"❌ رابط {link_idx}/{total_links} حساب {acc_id} - فشل: {error}")
+                    username = link.split('/')[-1].split('?')[0]
+                    if not username:
+                        failed_count += 1
+                        logger.warning(f"❌ [{i}/{total_links}] رابط بدون اسم: {link[:50]}")
+                        save_join_history(link, 0, "رابط غير مكتمل", 'failed:empty_username', f"account_{acc_id}")
+                        continue
+                    entity = await client.get_entity(username)
+                    if entity:
+                        if hasattr(entity, 'left') and not entity.left:
+                            skipped_count += 1
+                            logger.info(f"⏭ [{i}/{total_links}] منضم بالفعل: {username}")
+                            save_join_history(link, entity.id, getattr(entity, 'title', username), 'skipped', f"account_{acc_id}")
+                            continue
+                        
+                        await client(JoinChannelRequest(entity))
+                        group_info = (entity.id, getattr(entity, 'title', username))
                 
-                # تحديث التقدم
-                if progress_callback and (join_counter % 3 == 0 or (acc_idx == total_accounts - 1)):
-                    acc_done = sum(1 for s in join_matrix.get(link, {}).values() if s in ('success', 'skipped', 'failed'))
+                success_count += 1
+                logger.info(f"✅ [{i}/{total_links}] تم الانضمام إلى {link[:60]} [حساب {acc_id}]")
+                
+                if group_info:
+                    group_id, group_name = group_info
+                    save_join_history(link, group_id, group_name[:80], 'success', f"account_{acc_id}")
+                    add_group_to_db(group_id, group_name)
+                else:
+                    save_join_history(link, 0, "تم الانضمام", 'success', f"account_{acc_id}")
+            
+            except FloodWaitError as e:
+                flood_seconds = e.seconds
+                logger.warning(f"⏸ حساب {acc_id} في FloodWait: {flood_seconds}ث - تبديل الحساب")
+                
+                set_setting(f'flood_wait_{acc_id}', str(time.time() + flood_seconds))
+                save_join_history(link, 0, "FloodWait", f'flood_wait:{flood_seconds}s', f"account_{acc_id}")
+                
+                # تبديل الحساب وإعادة المحاولة فوراً
+                client2, acc_id2 = get_best_join_account()
+                if client2 and acc_id2 != acc_id:
                     try:
-                        await progress_callback(
-                            f"🔄 الانضمام: رابط {link_idx}/{total_links} | حساب {acc_idx+1}/{total_accounts}\n"
-                            f"✅ نجاح: {total_success} | ⏭ تخطي: {total_skipped} | ❌ فشل: {total_failed}\n"
-                            f"⏱ متبقي: ~{((total_links - link_idx) * total_accounts * base_interval) // 60}د"
-                        )
-                    except:
-                        pass
+                        logger.info(f"🔄 إعادة محاولة الرابط {i} بحساب {acc_id2}")
+                        await asyncio.sleep(3)  # تأخير بسيط فقط
+                        
+                        if "joinchat" in link or "+" in link:
+                            hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
+                            if not hash_part:
+                                failed_count += 1
+                                save_join_history(link, 0, "رابط غير مكتمل", 'failed:empty_invite_retry', f"account_{acc_id2}")
+                                continue
+                            updates = await client2(ImportChatInviteRequest(hash_part))
+                            if updates.chats:
+                                chat = updates.chats[0]
+                                group_info = (chat.id, getattr(chat, 'title', 'غير معروف'))
+                        else:
+                            username = link.split('/')[-1].split('?')[0]
+                            if not username:
+                                failed_count += 1
+                                save_join_history(link, 0, "رابط غير مكتمل", 'failed:empty_username_retry', f"account_{acc_id2}")
+                                continue
+                            entity = await client2.get_entity(username)
+                            await client2(JoinChannelRequest(entity))
+                            group_info = (entity.id, getattr(entity, 'title', username))
+                        
+                        success_count += 1
+                        if group_info:
+                            gid, gname = group_info
+                            save_join_history(link, gid, gname[:80], 'success_retry', f"account_{acc_id2}")
+                            add_group_to_db(gid, gname)
+                        logger.info(f"✅ [{i}/{total_links}] نجاح بعد تبديل الحساب [حساب {acc_id2}]")
+                    except FloodWaitError as e2:
+                        failed_count += 1
+                        logger.error(f"❌ [{i}/{total_links}] FloodWait على حسابين")
+                        set_setting(f'flood_wait_{acc_id2}', str(time.time() + e2.seconds))
+                        await asyncio.sleep(min(e2.seconds, 60))
+                    except Exception as e3:
+                        failed_count += 1
+                        logger.error(f"❌ [{i}/{total_links}] فشل بعد تبديل الحساب: {e3}")
+                        save_join_history(link, 0, "فشل", f'failed_retry:{str(e3)[:40]}', f"account_{acc_id2}")
+                else:
+                    # حساب واحد فقط - انتظار FloodWait ثم إعادة المحاولة
+                    wait_time = min(flood_seconds + 3, 120)
+                    logger.info(f"⏸ انتظار FloodWait {wait_time}ث ثم إعادة المحاولة")
+                    if progress_callback:
+                        await progress_callback(f"⏸ FloodWait {flood_seconds}ث - انتظار ثم إعادة محاولة...\n📊 التقدم: {i}/{total_links}")
+                    await asyncio.sleep(wait_time)
+                    try:
+                        if "joinchat" in link or "+" in link:
+                            hash_part = link.split('/')[-1].replace('+', '').replace('joinchat/', '')
+                            if not hash_part:
+                                failed_count += 1
+                                continue
+                            updates = await client(ImportChatInviteRequest(hash_part))
+                            if updates.chats:
+                                chat = updates.chats[0]
+                                group_info = (chat.id, getattr(chat, 'title', 'غير معروف'))
+                        else:
+                            username = link.split('/')[-1].split('?')[0]
+                            if not username:
+                                failed_count += 1
+                                continue
+                            entity = await client.get_entity(username)
+                            await client(JoinChannelRequest(entity))
+                            group_info = (entity.id, getattr(entity, 'title', username))
+                        
+                        success_count += 1
+                        if group_info:
+                            gid, gname = group_info
+                            save_join_history(link, gid, gname[:80], 'success_after_wait', f"account_{acc_id}")
+                            add_group_to_db(gid, gname)
+                        logger.info(f"✅ [{i}/{total_links}] نجاح بعد انتظار FloodWait [حساب {acc_id}]")
+                    except UserAlreadyParticipantError:
+                        skipped_count += 1
+                        save_join_history(link, 0, "منضم بالفعل", 'skipped', f"account_{acc_id}")
+                    except Exception as retry_e:
+                        failed_count += 1
+                        logger.error(f"❌ [{i}/{total_links}] فشل بعد انتظار FloodWait: {retry_e}")
+                        save_join_history(link, 0, "فشل بعد انتظار", f'failed_after_wait:{str(retry_e)[:40]}', f"account_{acc_id}")
+            
+            except UserAlreadyParticipantError:
+                skipped_count += 1
+                logger.info(f"⏭ [{i}/{total_links}] منضم بالفعل: {link[:50]}")
+                save_join_history(link, 0, "منضم بالفعل", 'skipped', f"account_{acc_id}")
+            
+            except InviteHashExpiredError:
+                failed_count += 1
+                save_join_history(link, 0, "رابط منتهي", 'failed:expired_invite', f"account_{acc_id}")
+            
+            except InviteHashInvalidError:
+                failed_count += 1
+                save_join_history(link, 0, "رابط غير صالح", 'failed:invalid_invite', f"account_{acc_id}")
+            
+            except ChannelPrivateError:
+                failed_count += 1
+                save_join_history(link, 0, "قناة خاصة", 'failed:private', f"account_{acc_id}")
+            
+            except ChannelInvalidError:
+                failed_count += 1
+                save_join_history(link, 0, "قناة غير صالحة", 'failed:invalid_channel', f"account_{acc_id}")
+            
+            except Exception as e:
+                error_str = str(e)
+                if 'already' in error_str.lower() or 'ALREADY' in error_str:
+                    skipped_count += 1
+                    save_join_history(link, 0, "منضم بالفعل", 'skipped', f"account_{acc_id}")
+                else:
+                    failed_count += 1
+                    logger.error(f"❌ [{i}/{total_links}] فشل: {e} [حساب {acc_id}]")
+                    save_join_history(link, 0, "فشل", f'failed:{error_str[:40]}', f"account_{acc_id}")
+            
+            # تحديث التقدم
+            if progress_callback and (i % 3 == 0 or i == total_links):
+                try:
+                    await progress_callback(
+                        f"🔄 الانضمام: {i}/{total_links}\n"
+                        f"✅ نجاح: {success_count} | ⏭ تخطي: {skipped_count} | ❌ فشل: {failed_count}\n"
+                        f"👤 حساب: {acc_id} | ⏱ متبقي: ~{((total_links - i) * base_interval) // 60}د"
+                    )
+                except:
+                    pass
+        
+        is_joining_active = False
+        
+        result_msg = (
+            f"✅ **اكتمل الانضمام**\n\n"
+            f"📊 الإجمالي: {total_links} رابط\n"
+            f"✅ نجاح: {success_count}\n"
+            f"⏭ تخطي (منضم): {skipped_count}\n"
+            f"❌ فشل: {failed_count}\n"
+            f"📈 نسبة النجاح: {(success_count / max(total_links, 1)) * 100:.1f}%"
+        )
+        
+        # معالجة الطابور بعد الانتهاء
+        if join_queue:
+            asyncio.create_task(process_join_queue(progress_callback))
+        
+        return success_count, failed_count, skipped_count, result_msg
     
     except Exception as outer_e:
-        logger.error(f"❌ خطأ غير متوقع: {outer_e}")
-    
-    is_joining_active = False
-    
-    # معالجة الطابور بعد الانتهاء
-    if join_queue and not join_cancelled:
-        asyncio.create_task(_process_queue(progress_callback))
-    
-    # حساب عدد القروبات المنضم إليها فعلاً
-    groups_joined = sum(1 for link_statuses in join_matrix.values() 
-                       if any(s == 'success' for s in link_statuses.values()))
-    
-    msg = (
-        f"✅ **اكتمل الانضمام**\n\n"
-        f"📊 الروابط: {total_links}\n"
-        f"👥 الحسابات: {total_accounts}\n"
-        f"✅ نجاح (انضمام): {total_success}\n"
-        f"⏭ تخطي (منضم): {total_skipped}\n"
-        f"❌ فشل: {total_failed}\n"
-        f"📢 قروبات جديدة: {groups_joined}\n"
-        f"📈 نسبة النجاح: {(total_success / max(total_success + total_failed, 1)) * 100:.0f}%"
-    )
-    
-    return total_success, total_failed, msg
+        logger.error(f"❌ خطأ غير متوقع في الانضمام: {outer_e}")
+        is_joining_active = False
+        if join_queue:
+            asyncio.create_task(process_join_queue(progress_callback))
+        return success_count, failed_count, skipped_count, f"❌ خطأ غير متوقع: {str(outer_e)[:100]}\n✅ نجاح: {success_count} | ❌ فشل: {failed_count} | ⏭ تخطي: {skipped_count}"
 
 
-async def _process_queue(original_callback=None):
-    """معالجة طابور الروابط"""
+async def process_join_queue(original_callback=None):
+    """معالجة طابور الروابط - ينضم للروابط المحفوظة بعد الانتهاء من الدفعة الحالية"""
     global join_queue
+    
     if not join_queue:
         return
-    queued = join_queue.copy()
+    
+    # أخذ الروابط من الطابور
+    queued_links = join_queue.copy()
     join_queue = []
-    logger.info(f"📋 معالجة طابور {len(queued)} رابط")
-    async def cb(text):
+    
+    logger.info(f"📋 معالجة طابور {len(queued_links)} رابط")
+    
+    async def queue_callback(text):
         if original_callback:
             try:
                 await original_callback(f"📋 [طابور] {text}")
             except:
                 pass
-    await auto_join_links(queued, progress_callback=cb)
+    
+    await auto_join_links(queued_links, progress_callback=queue_callback)
 
 def save_join_history(link, group_id, group_name, status, joined_by):
     conn = sqlite3.connect(DB_PATH)
@@ -3677,12 +4194,14 @@ def get_join_stats():
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM join_history")
     total = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM join_history WHERE status='success'")
+    c.execute("SELECT COUNT(*) FROM join_history WHERE status='success' OR status='success_retry' OR status='success_after_wait'")
     success = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM join_history WHERE status LIKE 'failed%'")
+    c.execute("SELECT COUNT(*) FROM join_history WHERE status LIKE 'failed%' OR status LIKE 'flood_wait%'")
     failed = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM join_history WHERE status='skipped'")
+    skipped = c.fetchone()[0]
     conn.close()
-    return {'total': total, 'success': success, 'failed': failed}
+    return {'total': total, 'success': success, 'failed': failed, 'skipped': skipped}
 
 def get_join_history(limit=30):
     conn = sqlite3.connect(DB_PATH)
@@ -3995,25 +4514,8 @@ async def fast_post_to_all_groups(messages):
 
                 use_html = False
                 if content:
-                    # 🔬 نظام StealthObfuscator - تشويش خفي 100% (الأساسي)
-                    stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
-                    if stealth_on:
-                        # StealthObfuscator: تشويش غير مرئي يحافظ على المقروئية تماماً
-                        encrypted_content, use_html = stealth_obfuscator.obfuscate(content, gid)
-                    else:
-                        # نظام AntiGuardian القديم (يغير شكل النص)
-                        anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
-                        if anti_guardian_on:
-                            encrypted_content, use_html = anti_guardian.bypass(content, gid)
-                        else:
-                            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                            if yaytext_on:
-                                encrypted_content, use_html = yaytext_obfuscate(content)
-                            else:
-                                varied = vary_text(content)
-                                if obfuscation_on:
-                                    varied = obfuscate_for_humans(varied)
-                                encrypted_content = encrypt_text(varied, gid)
+                    # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
+                    encrypted_content, use_html = prepare_content_for_sending(content, gid)
                 else:
                     encrypted_content = ""
 
@@ -4165,24 +4667,8 @@ async def post_to_all_groups(message):
 
             use_html = False
             if content:
-                # 🔬 نظام StealthObfuscator - تشويش خفي 100% (الأساسي)
-                stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
-                if stealth_on:
-                    encrypted_content, use_html = stealth_obfuscator.obfuscate(content, gid)
-                else:
-                    # نظام AntiGuardian القديم
-                    anti_guardian_on = get_setting('anti_guardian_enabled', 'on') == 'on'
-                    if anti_guardian_on:
-                        encrypted_content, use_html = anti_guardian.bypass(content, gid)
-                    else:
-                        yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                        if yaytext_on:
-                            encrypted_content, use_html = yaytext_obfuscate(content)
-                        else:
-                            varied = vary_text(content)
-                            if obfuscation_on:
-                                varied = obfuscate_for_humans(varied)
-                            encrypted_content = encrypt_text(varied, gid)
+                # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
+                encrypted_content, use_html = prepare_content_for_sending(content, gid)
             else:
                 encrypted_content = ""
 
@@ -4401,8 +4887,9 @@ def get_main_menu():
     tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
     lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
     stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
+    se_status = "✅" if get_setting('super_encryption_enabled', 'off') == 'on' else "❌"
     message_interval = get_setting('message_interval', '3')
-    join_interval = get_setting('join_interval', '100')
+    join_interval = get_setting('join_interval', '30')
     fast_delay = get_setting('fast_post_delay', '3')
     pending_sched = len(get_pending_scheduled_posts())
     return [
@@ -4414,8 +4901,8 @@ def get_main_menu():
         [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
         [Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth"),
          Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc")],
-        [Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti"),
-         Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"💎 تشفير خارق {se_status}", b"toggle_super_encryption"),
+         Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
          Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext")],
         [Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax"),
@@ -4430,11 +4917,12 @@ def get_main_menu():
         [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
-        [Button.inline(f"🐢 انضمام ({join_interval}ث)", b"slow_join"),
+        [Button.inline(f"🚀 انضمام تلقائي ({join_interval}ث)", b"auto_join"),
          Button.inline("📋 تقارير الانضمام", b"join_reports")],
+        [Button.inline("⏹ إيقاف الانضمام", b"stop_joining"),
+         Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
         [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval"),
-         Button.inline(f"⚡ سرعة النشر السريع ({fast_delay}ث)", b"set_fast_delay"),
-         Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
+         Button.inline(f"⚡ سرعة النشر السريع ({fast_delay}ث)", b"set_fast_delay")],
         [Button.inline("🚫 القائمة السوداء", b"blacklist")],
         [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
         [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
@@ -4458,6 +4946,16 @@ def get_join_reports_menu():
         [Button.inline("🔙 رجوع", b"back")],
     ]
 
+def get_join_settings_menu():
+    join_interval = get_setting('join_interval', '30')
+    queue_count = len(join_queue)
+    queue_info = f" ({queue_count} في الطابور)" if queue_count > 0 else ""
+    return [
+        [Button.inline(f"⏱ الفاصل بين الروابط ({join_interval}ث)", b"set_join_interval")],
+        [Button.inline(f"📋 الطابور{queue_info}", b"view_join_queue")],
+        [Button.inline("🔙 رجوع", b"back")],
+    ]
+
 def get_settings_menu():
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
@@ -4472,7 +4970,7 @@ def get_settings_menu():
         [Button.inline(f"🔄 تشويش YayText & Messletters {ym_status}", b"toggle_yaytext")],
         [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
         [Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
-        [Button.inline("🐢 مدة الانضمام", b"set_join_interval")],
+        [Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
         [Button.inline("🔙 رجوع", b"back")]
     ]
 
@@ -4702,7 +5200,7 @@ async def main():
 
     @bot.on(events.CallbackQuery)
     async def callback_handler(event):
-        global is_posting_active
+        global is_posting_active, join_cancelled
         if not is_admin(event.sender_id):
             await event.answer("⛔ غير مصرح", alert=True)
             return
@@ -4711,14 +5209,16 @@ async def main():
         if data == 'back':
             groups_count = await get_all_groups_count()
             message_interval = get_setting('message_interval', '3')
-            join_interval = get_setting('join_interval', '100')
+            join_interval = get_setting('join_interval', '30')
             pending_sched = len(get_pending_scheduled_posts())
+            queue_count = len(join_queue)
+            queue_info = f"\n📋 طابور الانضمام: {queue_count} رابط" if queue_count > 0 else ""
             await event.edit(
                 "🛡 **لوحة التحكم**\n\n"
                 f"📢 المجموعات: {groups_count}\n"
                 f"⏱ مدة النشر: {message_interval} ثانية\n"
-                f"🐢 مدة الانضمام: {join_interval} ثانية\n"
-                f"📅 منشورات مجدولة: {pending_sched}",
+                f"🚀 فاصل الانضمام: {join_interval} ثانية\n"
+                f"📅 منشورات مجدولة: {pending_sched}{queue_info}",
                 buttons=get_main_menu()
             )
 
@@ -4959,7 +5459,8 @@ async def main():
                 "⚙️ **الإعدادات**\n\n"
                 f"⏱ مدة النشر العادي: {get_setting('message_interval', '3')} ثانية\n"
                 f"⚡ مدة النشر السريع: {get_setting('fast_post_delay', '3')} ثانية\n"
-                f"🐢 مدة الانضمام: {get_setting('join_interval', '100')} ثانية\n"
+                f"🚀 فاصل الانضمام: {get_setting('join_interval', '30')} ثانية\n"
+                f"📋 طابور الانضمام: {len(join_queue)} رابط\n"
                 f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
                 f"🎭 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
                 f"🎭 تشويش النص: {obf_status}\n"
@@ -4972,7 +5473,7 @@ async def main():
             await event.edit("⏱ أرسل المدة (2-600 ثانية، الحد الأدنى 2):\n/cancel للإلغاء")
             set_setting('awaiting_msg_interval', 'true')
         elif data == 'set_join_interval':
-            await event.edit("🐢 أرسل المدة (30-600 ثانية):\n/cancel للإلغاء")
+            await event.edit("⏱ أرسل الفاصل الزمني بين الروابط (5-300 ثانية، الافتراضي: 30):\n/cancel للإلغاء")
             set_setting('awaiting_join_interval', 'true')
         elif data == 'toggle_enc':
             current = get_setting('encryption', 'on')
@@ -4999,6 +5500,29 @@ async def main():
             else:
                 await event.answer("🔬 تشويش خفي: معطل")
                 await event.edit("🔬 **تشويش خفي StealthObfuscator: معطل** ❌\n\nالنظام القديم (AntiGuardian/YayText) سيعمل بدلاً منه.", buttons=get_main_menu())
+
+        elif data == 'toggle_super_encryption':
+            current = get_setting('super_encryption_enabled', 'off')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('super_encryption_enabled', new_val)
+            if new_val == 'on':
+                example = "سلام عليكم تابعونا https://wa.me/+966568479168"
+                encrypted = super_encryption.super_encrypt_full(example)
+                await event.answer("💎 التشفير الخارق: مفعل ✨")
+                await event.edit(
+                    f"💎 **التشفير الخارق Super Encryption: مفعل** ✅\n\n"
+                    f"أقوى تشفير ضد بوتات الحماية!\n"
+                    f"كل حرف عربي يُفصل بنمط كشيدة + فاصل + كشيدة\n"
+                    f"النص مقروء بشرياً لكن مستحيل كشفه آلياً 🛡️\n\n"
+                    f"📝 **الأصل:**\n{example}\n\n"
+                    f"💎 **بعد التشفير الخارق:**\n{encrypted}\n\n"
+                    f"💡 الفواصل تُختار عشوائياً لكل رسالة!",
+                    buttons=get_main_menu()
+                )
+            else:
+                await event.answer("💎 التشفير الخارق: معطل")
+                await event.edit("💎 **التشفير الخارق: معطل** ❌\n\nسيتم استخدام التشفير العادي بدلاً منه.", buttons=get_main_menu())
+
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
             new_val = 'off' if current == 'on' else 'on'
@@ -5353,21 +5877,52 @@ async def main():
                 f"📢 المجموعات: {grp_count}\n"
                 f"🚫 القائمة السوداء: {blacklist_count}\n"
                 f"✅ نجاح: {success_count}\n❌ فشل: {fail_count}\n"
-                f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})\n"
+                f"🔗 انضمام: {join_stats['total']} (✅{join_stats['success']} ⏭{join_stats.get('skipped', 0)} ❌{join_stats['failed']})\n"
                 f"🎭 تشويش النص: {obf_status}\n"
                 f"📅 مجدولة: {sched_count}",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
 
-        elif data == 'slow_join':
-            await event.edit("🐢 **انضمام بطيء**\n\nأرسل الروابط (كل رابط في سطر):\n/cancel للإلغاء")
-            set_setting('awaiting_slow_join', 'true')
+        elif data == 'auto_join':
+            acc_count = len(user_clients)
+            join_interval = get_setting('join_interval', '30')
+            queue_count = len(join_queue)
+            queue_info = f"\n  📋 روابط في الطابور: {queue_count}" if queue_count > 0 else ""
+            await event.edit(
+                f"🚀 **الانضمام التلقائي**\n\n"
+                f"📤 أرسل الروابط مباشرة (يدعم مئات الروابط)\n"
+                f"🔗 الأنواع المدعومة:\n"
+                f"  • https://t.me/channel\n"
+                f"  • https://t.me/+invite\n"
+                f"  • https://t.me/joinchat/xxx\n"
+                f"  • @username\n"
+                f"\n📊 الإعدادات:\n"
+                f"  ⏱ الفاصل بين الروابط: {join_interval}ث\n"
+                f"  👥 حسابات متاحة: {acc_count}{queue_info}\n\n"
+                f"💡 أرسل الروابط الآن /cancel للإلغاء\n"
+                f"💡 الروابط تُحفظ في الطابور تلقائياً إذا كان هناك انضمام جاري"
+            )
+            set_setting('awaiting_auto_join', 'true')
+        elif data == 'stop_joining':
+            join_cancelled = True
+            await event.edit("⏹ جاري إيقاف الانضمام...", buttons=get_main_menu())
+        elif data == 'join_settings':
+            await event.edit("🔗 **إعدادات الانضمام**", buttons=get_join_settings_menu())
         elif data == 'join_reports':
             await event.edit("🔗 **تقارير الانضمام**", buttons=get_join_reports_menu())
         elif data == 'join_stats':
             stats = get_join_stats()
+            success = stats['success']
+            skipped = stats['skipped']
+            failed = stats['failed']
+            total = success + skipped + failed
             await event.edit(
-                f"📊 **إحصائيات الانضمام**\n\n📌 المجموع: {stats['total']}\n✅ نجاح: {stats['success']}\n❌ فشل: {stats['failed']}\n📈 النسبة: {stats['success']/(stats['total'] or 1)*100:.1f}%",
+                f"📊 **إحصائيات الانضمام**\n\n"
+                f"📌 المجموع: {total}\n"
+                f"✅ نجاح: {success}\n"
+                f"⏭ تخطي (منضم): {skipped}\n"
+                f"❌ فشل: {failed}\n"
+                f"📈 نسبة النجاح: {(success / max(total, 1)) * 100:.1f}%",
                 buttons=get_join_reports_menu()
             )
         elif data == 'join_history':
@@ -5377,9 +5932,33 @@ async def main():
             else:
                 text = "🔗 **آخر عمليات الانضمام:**\n\n"
                 for link, group_name, joined_at, joined_by, status in history[:15]:
-                    icon = "✅" if status == 'success' else "❌"
-                    text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n\n"
+                    if status in ('success', 'success_retry', 'success_after_wait'):
+                        icon = "✅"
+                    elif status == 'skipped':
+                        icon = "⏭"
+                    elif status.startswith('flood_wait'):
+                        icon = "⏸"
+                    else:
+                        icon = "❌"
+                    text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n   👤 {joined_by}\n\n"
                 await event.edit(text, buttons=get_join_reports_menu())
+        elif data == 'set_join_limit':
+            # تم إزالة حد الساعة - الحسابات تنظم بدون حد
+            await event.edit("✅ لا يوجد حد على عدد الانضمامات - الحسابات تنظم بلا قيود\nالفاصل الزمني فقط هو المحدد", buttons=get_join_settings_menu())
+        elif data == 'toggle_join_human_delay':
+            # تم إزالة التأخير البشري - فقط الفاصل الزمني
+            await event.edit("✅ التأخير البشري تمت إزالته\nيُستخدم فقط الفاصل الزمني المحدد بين الروابط", buttons=get_join_settings_menu())
+        elif data == 'view_join_queue':
+            queue_count = len(join_queue)
+            if queue_count == 0:
+                await event.edit("📋 **طابور الروابط**\n\n✅ الطابور فارغ\n💡 أرسل روابط أثناء عملية انضمام جارية وستُحفظ في الطابور تلقائياً", buttons=get_join_settings_menu())
+            else:
+                text = f"📋 **طابور الروابط**\n\n🔢 عدد الروابط: {queue_count}\n\n"
+                for idx, link in enumerate(join_queue[:20], 1):
+                    text += f"{idx}. {link[:50]}\n"
+                if queue_count > 20:
+                    text += f"\n... و{queue_count - 20} رابط آخر"
+                await event.edit(text, buttons=get_join_settings_menu())
 
         elif data == 'clean_db':
             await event.edit(
@@ -5391,11 +5970,14 @@ async def main():
                 saved = clean_database_keep_accounts()
                 set_setting('message_interval', '3')
                 set_setting('fast_post_delay', '3')
-                set_setting('join_interval', '100')
+                set_setting('join_interval', '30')
+                set_setting('join_per_account_limit', '15')
+                set_setting('join_human_delay', 'on')
                 set_setting('encryption', 'on')
                 set_setting('anti_detect', 'on')
                 set_setting('obfuscation_enabled', 'on')
                 set_setting('yaytext_messletters_obfuscation', 'on')
+                set_setting('super_encryption_enabled', 'off')
                 await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب",
                                buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
             except Exception as e:
@@ -5408,7 +5990,7 @@ async def main():
             return
         if event.raw_text == '/cancel':
             for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
-                       'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc',
+                       'awaiting_slow_join', 'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_del_msg', 'awaiting_del_acc',
                        'awaiting_msg_interval', 'awaiting_join_interval',
                        'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
                        'awaiting_schedule', 'awaiting_schedule_delete',
@@ -5422,6 +6004,104 @@ async def main():
                     pass
                 del temp_sessions[event.sender_id]
             await event.respond("تم الإلغاء", buttons=get_main_menu())
+            return
+
+        # ═══════════════════════════════════════════
+        #  🔴 أولوية قصوى: إضافة حساب (phone/code/password)
+        #  يجب أن تكون أول شيء يُفحص لمنع اعتراض الرسالة
+        # ═══════════════════════════════════════════
+
+        # إضافة حساب - رقم الهاتف
+        if get_setting('awaiting_phone') == 'true':
+            set_setting('awaiting_phone', '')
+            phone = event.raw_text.strip()
+            # تنظيف الرقم: إزالة المسافات والشرطات
+            phone_clean = re.sub(r'[\s\-\(\)]', '', phone)
+            if not re.match(r'^\+?\d{8,15}$', phone_clean):
+                await event.respond("❌ رقم غير صالح! مثال: +966512345678\nأعد الإرسال أو /cancel")
+                set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+                return
+            try:
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+                await client.connect()
+                result = await client.send_code_request(phone_clean)
+                temp_sessions[event.sender_id] = {
+                    "phone": phone_clean,
+                    "client": client,
+                    "phone_code_hash": result.phone_code_hash
+                }
+                set_setting('awaiting_code', 'true')
+                await event.respond(f"📩 تم إرسال الرمز إلى {phone_clean}\nأرسل الرمز:")
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 جرب مرة أخرى أو /cancel")
+                set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+            return
+
+        # إضافة حساب - رمز التحقق
+        if get_setting('awaiting_code') == 'true':
+            set_setting('awaiting_code', '')
+            code = event.raw_text.strip()
+            session_data = temp_sessions.get(event.sender_id)
+            if not session_data:
+                await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+                return
+            try:
+                await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
+                me = await session_data["client"].get_me()
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+                          (session_data["client"].session.save(), me.phone, 'active'))
+                conn.commit()
+                acc_id = c.lastrowid
+                conn.close()
+                user_clients[acc_id] = session_data["client"]
+                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+                del temp_sessions[event.sender_id]
+                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+            except SessionPasswordNeededError:
+                set_setting('awaiting_password', 'true')
+                await event.respond("🔐 الحساب محمي بكلمة مرور\nأرسل كلمة المرور:")
+            except PhoneCodeInvalidError:
+                await event.respond("❌ رمز غير صحيح! أعد الإرسال:")
+                set_setting('awaiting_code', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+            except PhoneCodeExpiredError:
+                await event.respond("❌ انتهت صلاحية الرمز! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+            except FloodWaitError as e:
+                await event.respond(f"⏸ انتظر {e.seconds} ثانية ثم حاول مرة أخرى")
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel")
+                set_setting('awaiting_code', 'true')
+            return
+
+        # إضافة حساب - كلمة المرور
+        if get_setting('awaiting_password') == 'true':
+            set_setting('awaiting_password', '')
+            password = event.raw_text.strip()
+            session_data = temp_sessions.get(event.sender_id)
+            if not session_data:
+                await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+                return
+            try:
+                await session_data["client"].sign_in(password=password)
+                me = await session_data["client"].get_me()
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+                          (session_data["client"].session.save(), me.phone, 'active'))
+                conn.commit()
+                acc_id = c.lastrowid
+                conn.close()
+                user_clients[acc_id] = session_data["client"]
+                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+                del temp_sessions[event.sender_id]
+                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel")
+                set_setting('awaiting_password', 'true')
             return
 
         # === جدولة النشر (محسنة) ===
@@ -5670,11 +6350,11 @@ async def main():
             set_setting('awaiting_join_interval', '')
             try:
                 val = int(event.raw_text.strip())
-                if 30 <= val <= 600:
+                if 5 <= val <= 300:
                     set_setting('join_interval', str(val))
-                    await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
+                    await event.respond(f"✅ تم ضبط الفاصل بين الروابط إلى {val} ثانية", buttons=get_main_menu())
                 else:
-                    await event.respond("❌ بين 30 و 600", buttons=get_main_menu())
+                    await event.respond("❌ بين 5 و 300 ثانية", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
@@ -5709,30 +6389,24 @@ async def main():
                 await event.respond("❌ معرف غير صالح", buttons=get_main_menu())
             return
 
-        # الروابط - انضمام تلقائي بكل الحسابات
-        extracted_links = extract_telegram_links(event.raw_text)
-        if not extracted_links:
-            extracted_links = [l.strip() for l in event.raw_text.split('\n') if l.strip() and 't.me/' in l]
-        if extracted_links and user_clients and not get_setting('awaiting_msg'):
-            progress_msg = await event.respond(
-                f"🚀 **انضمام تلقائي بكل الحسابات**\n\n"
-                f"📡 روابط: {len(extracted_links)}\n"
-                f"👥 حسابات: {len(user_clients)}\n"
-                f"📊 عمليات: {len(extracted_links) * len(user_clients)}\n"
-                f"⏱ فاصل: {get_setting('join_interval', '30')}ث\n\n"
-                f"⏳ جاري المعالجة..."
-            )
-            async def update_join_progress(text):
-                try:
-                    await progress_msg.edit(text)
-                except:
-                    pass
-            success, failed, msg = await auto_join_links(extracted_links, progress_callback=update_join_progress)
+        # 🆕 حد الانضمام لكل حساب
+        if get_setting('awaiting_join_limit') == 'true':
+            set_setting('awaiting_join_limit', '')
             try:
-                await progress_msg.edit(msg, buttons=get_main_menu())
+                val = int(event.raw_text.strip())
+                if 5 <= val <= 50:
+                    set_setting('join_per_account_limit', str(val))
+                    await event.respond(f"✅ تم ضبط حد الانضمام إلى {val} لكل حساب/ساعة", buttons=get_main_menu())
+                else:
+                    await event.respond("❌ بين 5 و 50", buttons=get_main_menu())
             except:
-                await event.respond(msg, buttons=get_main_menu())
+                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
             return
+
+        # ═══════════════════════════════════════════
+        #  🟡 أولوية ثانية: إضافة رسالة (قبل الروابط!)
+        #  يجب أن يكون قبل كشف الروابط التلقائي
+        # ═══════════════════════════════════════════
 
         # إضافة رسالة
         if get_setting('awaiting_msg') == 'true':
@@ -5795,103 +6469,79 @@ async def main():
             )
             return
 
-        # إضافة حساب - رقم الهاتف
-        if get_setting('awaiting_phone') == 'true':
-            set_setting('awaiting_phone', '')
-            phone = event.raw_text.strip()
-            if not re.match(r'^\+?\d{8,15}$', phone):
-                await event.respond("❌ رقم غير صالح! مثال: +966512345678")
-                return
-            try:
-                client = TelegramClient(StringSession(), API_ID, API_HASH)
-                await client.connect()
-                result = await client.send_code_request(phone)
-                temp_sessions[event.sender_id] = {
-                    "phone": phone,
-                    "client": client,
-                    "phone_code_hash": result.phone_code_hash
-                }
-                set_setting('awaiting_code', 'true')
-                await event.respond(f"📩 تم إرسال الرمز إلى {phone}\nأرسل الرمز:")
-            except Exception as e:
-                await event.respond(f"❌ {str(e)[:200]}")
-            return
-
-        if get_setting('awaiting_code') == 'true':
-            set_setting('awaiting_code', '')
-            code = event.raw_text.strip()
-            session_data = temp_sessions.get(event.sender_id)
-            if not session_data:
-                await event.respond("❌ انتهت الجلسة")
-                return
-            try:
-                await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
-                me = await session_data["client"].get_me()
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                          (session_data["client"].session.save(), me.phone, 'active'))
-                conn.commit()
-                acc_id = c.lastrowid
-                conn.close()
-                user_clients[acc_id] = session_data["client"]
-                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
-                del temp_sessions[event.sender_id]
-                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
-            except SessionPasswordNeededError:
-                set_setting('awaiting_password', 'true')
-                await event.respond("🔐 أرسل كلمة المرور:")
-            except PhoneCodeInvalidError:
-                await event.respond("❌ رمز غير صحيح!")
-            except Exception as e:
-                await event.respond(f"❌ {str(e)[:200]}")
-            return
-
-        if get_setting('awaiting_password') == 'true':
-            set_setting('awaiting_password', '')
-            password = event.raw_text.strip()
-            session_data = temp_sessions.get(event.sender_id)
-            if not session_data:
-                await event.respond("❌ انتهت الجلسة")
-                return
-            try:
-                await session_data["client"].sign_in(password=password)
-                me = await session_data["client"].get_me()
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                          (session_data["client"].session.save(), me.phone, 'active'))
-                conn.commit()
-                acc_id = c.lastrowid
-                conn.close()
-                user_clients[acc_id] = session_data["client"]
-                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
-                del temp_sessions[event.sender_id]
-                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
-            except Exception as e:
-                await event.respond(f"❌ {e}")
-            return
-
-        if get_setting('awaiting_slow_join') == 'true':
-            set_setting('awaiting_slow_join', '')
-            links = extract_telegram_links(event.raw_text)
-            if not links:
-                links = [l.strip() for l in event.raw_text.split('\n') if l.strip() and 't.me/' in l]
-            if links:
+        # 🚀 الانضمام التلقائي المتقدم
+        if get_setting('awaiting_auto_join') == 'true':
+            set_setting('awaiting_auto_join', '')
+            # استخراج الروابط المتقدمة
+            extracted_links = extract_telegram_links(event.raw_text)
+            # محاولة بسيطة: كل سطر يحتوي على t.me/
+            if not extracted_links:
+                extracted_links = [l.strip() for l in event.raw_text.split('\n') if l.strip() and 't.me/' in l]
+            if extracted_links:
                 progress_msg = await event.respond(
-                    f"🚀 **انضمام بكل الحسابات**\n\n📡 {len(links)} رابط\n👥 {len(user_clients)} حساب\n⏳ جاري..."
+                    f"🚀 **بدء الانضمام التلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(extracted_links)} رابط\n"
+                    f"👥 حسابات متاحة: {len(user_clients)}\n"
+                    f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
+                    f"⏳ جاري المعالجة..."
                 )
-                async def slow_join_cb(text):
+                # دالة تحديث التقدم
+                async def update_progress(text):
                     try:
                         await progress_msg.edit(text)
                     except:
                         pass
-                success, failed, msg = await auto_join_links(links, progress_callback=slow_join_cb)
+                
+                success, failed, skipped, result_msg = await auto_join_links(extracted_links, progress_callback=update_progress)
                 try:
-                    await progress_msg.edit(msg, buttons=get_main_menu())
+                    await progress_msg.edit(result_msg, buttons=get_main_menu())
                 except:
-                    await event.respond(msg, buttons=get_main_menu())
+                    await event.respond(result_msg, buttons=get_main_menu())
+            else:
+                await event.respond("❌ لم يتم العثور على روابط تيليجرام صالحة\n💡 أرسل الروابط مرة أخرى أو /cancel", buttons=get_main_menu())
+                set_setting('awaiting_auto_join', 'true')  # إعادة التفعيل
             return
+
+        # الروابط - انضمام تلقائي مباشر (إرسال روابط بدون الضغط على زر)
+        # فقط إذا لم يكن هناك أي حالة انتظار مفعلة
+        any_awaiting = any(get_setting(k) == 'true' for k in [
+            'awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
+            'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_slow_join',
+            'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_msg_interval',
+            'awaiting_join_interval', 'awaiting_fast_delay', 'awaiting_add_blacklist',
+            'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete'
+        ])
+        if not any_awaiting and user_clients and not is_joining_active:
+            auto_detected_links = extract_telegram_links(event.raw_text)
+            # إذا كانت الرسالة تحتوي على رابط تيليجرام واحد أو أكثر - انضمام تلقائي فوري
+            if len(auto_detected_links) >= 1:
+                progress_msg = await event.respond(
+                    f"🚀 **انضمام تلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
+                    f"👥 حسابات: {len(user_clients)}\n"
+                    f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
+                    f"⏳ جاري المعالجة..."
+                )
+                async def update_progress2(text):
+                    try:
+                        await progress_msg.edit(text)
+                    except:
+                        pass
+                
+                success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress2)
+                try:
+                    await progress_msg.edit(result_msg, buttons=get_main_menu())
+                except:
+                    await event.respond(result_msg, buttons=get_main_menu())
+                return
+        
+        # إذا كانت هناك روابط لكن عملية انضمام جارية بالفعل - أضفها للطابور
+        if not any_awaiting and is_joining_active:
+            auto_detected_links = extract_telegram_links(event.raw_text)
+            if len(auto_detected_links) >= 1:
+                join_queue.extend(auto_detected_links)
+                await event.respond(f"📋 **تم إضافة {len(auto_detected_links)} رابط للطابور**\n\n⏳ عملية انضمام جارية - سيتم الانضمام للروابط تلقائياً بعد الانتهاء\n📋 إجمالي الطابور: {len(join_queue)} رابط")
+                return
 
         if get_setting('awaiting_del_msg') == 'true':
             set_setting('awaiting_del_msg', '')
