@@ -39,6 +39,9 @@ from telethon.tl.functions.channels import GetParticipantsRequest
 from telethon.tl.types import ChannelParticipantsSearch
 from flask import Flask, jsonify
 
+# محرك التشفير الخارق (18 طبقة متقدمة)
+from hyper_encryption import HyperEncryptionEngine
+
 # ═══════════════════════════════════════════════
 #  الإعدادات الأساسية
 # ═══════════════════════════════════════════════
@@ -81,6 +84,7 @@ join_progress_msg = None  # رسالة تقدم الانضمام
 join_cancelled = False  # إلغاء الانضمام
 join_queue = []  # طابور الروابط - يحفظ الروابط للانضمام التالي
 scheduled_tasks = {}  # {schedule_id: asyncio.Task}
+hyper_encryption = None  # يُهيّأ في init_db()
 
 # ═══════════════════════════════════════════════
 #  إعدادات النشر الشبحي 👻
@@ -331,6 +335,19 @@ def init_db():
     # 🆕 إعدادات نظام StealthObfuscator - تشويش خفي 100%
     if get_setting('stealth_obfuscator_enabled') is None:
         set_setting('stealth_obfuscator_enabled', 'on')
+    # 🆕 محرك التشفير الخارق (HyperEncryptionEngine) - 18 طبقة
+    if get_setting('encryption_strength') is None:
+        set_setting('encryption_strength', 'medium')  # light/medium/aggressive/insane
+    if get_setting('hyper_encryption_enabled') is None:
+        set_setting('hyper_encryption_enabled', 'on')
+
+    # تهيئة محرك التشفير الخارق
+    global hyper_encryption
+    hyper_encryption = HyperEncryptionEngine(
+        settings_getter=get_setting,
+        settings_setter=set_setting
+    )
+    logger.info(f"🛡 محرك التشفير الخارق جاهز (المستوى: {get_setting('encryption_strength', 'medium')})")
 
     conn.commit()
     conn.close()
@@ -614,6 +631,18 @@ class UltimateAntiDetection:
 anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
+    """
+    🔐 التشفير الخارق - 18 طبقة من التمويه غير المرئي
+    يتجاوز بوتات الحماية (anti-spam) على تيليجرام.
+    النص يبقى مقروءاً 100% للمستخدم العادي.
+    """
+    # 1) التشفير الخارق الجديد (متعدد الطبقات - الطبقة الخارجية الأقوى)
+    if hyper_encryption is not None and get_setting('hyper_encryption_enabled', 'on') == 'on':
+        try:
+            return hyper_encryption.encrypt(text, group_id=group_id)
+        except Exception as e:
+            logger.error(f"⚠️ خطأ في HyperEncryptionEngine، الرجوع للنظام القديم: {e}")
+    # 2) النظام القديم (احتياطي)
     return anti_detection.generate_ultimate_variation(text, group_id)
 
 
@@ -4888,6 +4917,9 @@ def get_main_menu():
     lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
     stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
     se_status = "✅" if get_setting('super_encryption_enabled', 'off') == 'on' else "❌"
+    he_status = "✅" if get_setting('hyper_encryption_enabled', 'on') == 'on' else "❌"
+    enc_strength = get_setting('encryption_strength', 'medium')
+    strength_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(enc_strength, '🟡')
     message_interval = get_setting('message_interval', '3')
     join_interval = get_setting('join_interval', '30')
     fast_delay = get_setting('fast_post_delay', '3')
@@ -4899,20 +4931,23 @@ def get_main_menu():
          Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
         [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
-        [Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth"),
-         Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc")],
-        [Button.inline(f"💎 تشفير خارق {se_status}", b"toggle_super_encryption"),
+        [Button.inline(f"🔥 HyperEncryption {he_status}", b"toggle_hyper_enc"),
+         Button.inline(f"{strength_emoji} قوة التشفير: {enc_strength}", b"enc_strength")],
+        [Button.inline("🧪 اختبار التشفير الخارق", b"enc_test"),
+         Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth")],
+        [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
-         Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext")],
-        [Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax"),
-         Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida")],
-        [Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph"),
-         Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs")],
-        [Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag"),
-         Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm")],
-        [Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay"),
-         Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
+        [Button.inline(f"💎 تشفير خارق قديم {se_status}", b"toggle_super_encryption"),
+         Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
+        [Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext"),
+         Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax")],
+        [Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida"),
+         Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph")],
+        [Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs"),
+         Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag")],
+        [Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm"),
+         Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
+        [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
         [Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
         [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
@@ -5080,13 +5115,43 @@ async def main():
             text = "اشترك في قناتنا للحصول على عروض حصرية"
         varied = vary_text(text)
         obfuscated = obfuscate_for_humans(varied)
-        encrypted = encrypt_text(obfuscated)
+        encrypted = encrypt_text(obfuscated, group_id=-1001234567890)
+        level = get_setting('encryption_strength', 'medium')
+        he_on = get_setting('hyper_encryption_enabled', 'on') == 'on'
+        info = hyper_encryption.get_strength_info() if (hyper_encryption and he_on) else None
+        from hyper_encryption import char_analysis as _ca
+        counts = _ca(encrypted)
+        invisible = sum(v for k, v in counts.items() if k != 'visible')
+        he_line = f"• 🔥 HyperEncryption: ✅ {level} ({info['active_count']}/{info['total_count']} طبقة)\n" if info else "• 🔥 HyperEncryption: ❌ معطل\n"
         await event.respond(
             f"📝 **النص الأصلي:**\n{text}\n\n"
             f"🔀 **بعد التشويش:**\n{obfuscated}\n\n"
-            f"🛡 **بعد التشفير:**\n{encrypted}\n\n"
-            f"💡 ملاحظة: التغييرات غير مرئية للمستخدم العادي\nفقط الآلات تستطيع اكتشافها!"
+            f"🛡 **بعد التشفير الخارق** ({len(encrypted)} حرف، {invisible} غير مرئي):\n{encrypted}\n\n"
+            f"📊 **الحالة:**\n{he_line}"
+            f"💡 النص يبدو متطابقاً بصرياً - الفرق فقط في الأحرف غير المرئية التي تكسر بوتات الحماية!\n\n"
+            f"جرّب أيضاً: /encrypt_test <text> لعرض كل المستويات الأربعة"
         )
+
+    @bot.on(events.NewMessage(pattern='/encrypt_test'))
+    async def encrypt_test_cmd(event):
+        """اختبار شامل - يعرض النص مشفر بكل المستويات الأربعة"""
+        if not is_admin(event.sender_id):
+            return
+        text = event.raw_text.replace('/encrypt_test', '').strip()
+        if not text:
+            text = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
+        from hyper_encryption import HyperEncryptionEngine as _HEE, char_analysis as _ca
+        msg = f"🧪 **اختبار HyperEncryption - 4 مستويات**\n\n📝 **النص الأصلي:**\n{text}\n\n"
+        for level in ['light', 'medium', 'aggressive', 'insane']:
+            eng = _HEE(settings_getter=lambda k, d, _lvl=level: _lvl if k == 'encryption_strength' else ('on' if k == 'encryption' else get_setting(k, d)))
+            enc = eng.encrypt(text, group_id=-1001234567890, strength=level)
+            counts = _ca(enc)
+            invisible = sum(v for k, v in counts.items() if k != 'visible')
+            emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[level]
+            active_n = len(_HEE.STRENGTH_LEVELS[level])
+            msg += f"{emoji} **{level.upper()}** ({active_n} طبقة، {len(enc)} حرف، {invisible} غير مرئي):\n{enc}\n\n"
+        msg += "💡 كل النصوص تبدو متطابقة بصرياً مع الأصل!\n\nللتبديل: اضغط زر 'قوة التشفير' في القائمة الرئيسية"
+        await event.respond(msg)
 
     @bot.on(events.NewMessage(pattern='/check'))
     async def check_handler(event):
@@ -5097,12 +5162,18 @@ async def main():
         all_accs = await get_all_accounts()
         obf_status = '✅ مفعل' if get_setting('obfuscation_enabled', 'on') == 'on' else '❌ معطل'
         pending_sched = len(get_pending_scheduled_posts())
+        enc_level = get_setting('encryption_strength', 'medium')
+        he_on = get_setting('hyper_encryption_enabled', 'on') == 'on'
+        info = hyper_encryption.get_strength_info() if (hyper_encryption and he_on) else None
+        he_line = f"• 🔥 HyperEncryption: ✅ {enc_level} ({info['active_count']}/{info['total_count']} طبقة)\n" if info else "• 🔥 HyperEncryption: ❌ معطل\n"
         await event.respond(
             f"📊 **حالة البوت:**\n"
             f"• المجموعات: {groups}\n• الرسائل: {msgs}\n"
             f"• إجمالي الحسابات: {len(all_accs)}\n"
+            f"• الحسابات المتصلة: {len(user_clients)}\n"
             f"• النشر: {'🟢 نشط' if is_posting_active else '🔴 متوقف'}\n"
             f"• التشفير: {'✅ مفعل' if get_setting('encryption', 'on') == 'on' else '❌ معطل'}\n"
+            f"{he_line}"
             f"• مكافحة الكشف: {'✅ مفعلة' if get_setting('anti_detect', 'on') == 'on' else '❌ معطلة'}\n"
             f"• تشويش النص: {obf_status}\n"
             f"• 📅 منشورات مجدولة معلقة: {pending_sched}"
@@ -5522,6 +5593,87 @@ async def main():
             else:
                 await event.answer("💎 التشفير الخارق: معطل")
                 await event.edit("💎 **التشفير الخارق: معطل** ❌\n\nسيتم استخدام التشفير العادي بدلاً منه.", buttons=get_main_menu())
+
+        elif data == 'toggle_hyper_enc':
+            current = get_setting('hyper_encryption_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('hyper_encryption_enabled', new_val)
+            if new_val == 'on':
+                example = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
+                encrypted = encrypt_text(example, group_id=-1001234567890)
+                info = hyper_encryption.get_strength_info() if hyper_encryption else {}
+                from hyper_encryption import char_analysis as _ca
+                counts = _ca(encrypted)
+                invisible = sum(v for k, v in counts.items() if k != 'visible')
+                await event.answer("🔥 HyperEncryption: مفعل ✨")
+                await event.edit(
+                    f"🔥 **HyperEncryptionEngine: مفعل** ✅\n\n"
+                    f"محرك تشفير خارق بـ 18 طبقة متقدمة:\n"
+                    f"• Homoglyph (عربي + لاتيني + أرقام)\n"
+                    f"• Zero-width chars (5 أنواع)\n"
+                    f"• Tatweel + Harakat عربي\n"
+                    f"• Combining diacritical marks\n"
+                    f"• Space variants (7 أنواع)\n"
+                    f"• Directional marks (LRM/RLM)\n"
+                    f"• Variation selectors\n"
+                    f"• Link + Mention obfuscation\n"
+                    f"• Per-group hash + trailing invisibles\n"
+                    f"• Mid-word ZWSP (يكسر keyword matching)\n"
+                    f"• Keyword heavy + Numeric + Punctuation subs\n\n"
+                    f"📊 المستوى الحالي: **{info.get('level', 'medium')}** ({info.get('active_count', '?')}/{info.get('total_count', 18)} طبقة)\n\n"
+                    f"📝 **الأصل:**\n{example}\n\n"
+                    f"🔥 **بعد HyperEncryption** ({len(encrypted)} حرف، {invisible} غير مرئي):\n{encrypted}\n\n"
+                    f"💡 النص يبدو متطابقاً بصرياً - الفرق فقط في الأحرف غير المرئية!",
+                    buttons=get_main_menu()
+                )
+            else:
+                await event.answer("🔥 HyperEncryption: معطل")
+                await event.edit("🔥 **HyperEncryptionEngine: معطل** ❌\n\nسيتم استخدام UltimateAntiDetection القديم.", buttons=get_main_menu())
+
+        elif data == 'enc_strength':
+            current = get_setting('encryption_strength', 'medium')
+            levels = ['light', 'medium', 'aggressive', 'insane']
+            try:
+                idx = levels.index(current)
+            except ValueError:
+                idx = 1
+            new_level = levels[(idx + 1) % len(levels)]
+            set_setting('encryption_strength', new_level)
+            # تحديث المحرك لالتقاط الإعداد الجديد
+            global hyper_encryption
+            if hyper_encryption is not None:
+                hyper_encryption.get_setting = get_setting
+            info = hyper_encryption.get_strength_info() if hyper_encryption else {}
+            emojis = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}
+            descriptions = {
+                'light': 'أخف تمويه - 7 طبقات (للحسابات الحساسة)',
+                'medium': 'متوازن - 13 طبقة (افتراضي)',
+                'aggressive': 'قوي - 16 طبقة (يكسر بوتات قوية)',
+                'insane': 'أقصى تمويه - 18 طبقة (كل الطبقات مفعلة)',
+            }
+            await event.answer(f"{emojis[new_level]} قوة التشفير: {new_level}")
+            await event.edit(
+                f"{emojis[new_level]} **قوة التشفير: {new_level}**\n\n"
+                f"📊 الطبقات المفعلة: {info.get('active_count', '?')}/{info.get('total_count', 18)}\n"
+                f"📝 {descriptions[new_level]}\n\n"
+                f"اضغط الزر مرة أخرى للتبديل للمستوى التالي.",
+                buttons=get_main_menu()
+            )
+
+        elif data == 'enc_test':
+            sample = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
+            from hyper_encryption import HyperEncryptionEngine as _HEE, char_analysis as _ca
+            msg = f"🧪 **اختبار HyperEncryption - 4 مستويات**\n\n📝 **النص الأصلي:**\n{sample}\n\n"
+            for level in ['light', 'medium', 'aggressive', 'insane']:
+                eng = _HEE(settings_getter=lambda k, d, _lvl=level: _lvl if k == 'encryption_strength' else ('on' if k == 'encryption' else get_setting(k, d)))
+                enc = eng.encrypt(sample, group_id=-1001234567890, strength=level)
+                counts = _ca(enc)
+                invisible = sum(v for k, v in counts.items() if k != 'visible')
+                emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[level]
+                active_n = len(_HEE.STRENGTH_LEVELS[level])
+                msg += f"{emoji} **{level.upper()}** ({active_n} طبقة، {len(enc)} حرف، {invisible} غير مرئي):\n{enc}\n\n"
+            msg += "💡 كل النصوص تبدو متطابقة بصرياً مع الأصل!\n\nاختر مستوى القوة من زر 'قوة التشفير' في القائمة الرئيسية."
+            await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
