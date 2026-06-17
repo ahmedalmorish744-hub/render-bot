@@ -267,6 +267,156 @@ KEYWORD_HEAVY_LIST = [
 
 
 # ════════════════════════════════════════════════════════════════
+#  طبقات متقدمة جديدة (v2.1) - مستوحاة من مستودعات GitHub
+#  Sources: unicode-confusables, confusable_homoglyphs, anti-detection-bots
+# ════════════════════════════════════════════════════════════════
+
+# L19: Tag Characters (Language Tags block U+E0000-U+E007F) - كاملة الإخفاء
+# هذه الأحرف "وسوم لغة" غير مرئية تماماً في كل المحررات المعروفة
+# لكنها تمرر bytes إضافية تكسر hash matching و keyword regex
+# ملاحظة: U+E0001 أكبر من U+FFFF لذا نستخدم \U (8 خانات) بدل \u (4 خانات)
+TAG_CHARS = [
+    '\U000E0001',  # LANGUAGE TAG
+    '\U000E0020',  # TAG SPACE
+    '\U000E0041', '\U000E0042', '\U000E0043', '\U000E0044', '\U000E0045',  # TAG A-E
+    '\U000E0061', '\U000E0062', '\U000E0063', '\U000E0064', '\U000E0065',  # TAG a-e
+    '\U000E007F',  # CANCEL TAG
+]
+
+# L20: Hangul Fillers - أحرف كورية غير مرئية
+HANGUL_FILLERS = [
+    '\u3164',  # HANGUL FILLER
+    '\u115F',  # HANGUL CHOSEONG FILLER
+    '\u1160',  # HANGUL JUNGSEONG FILLER
+]
+
+# L21: Bidirectional Isolation marks (Unicode 6.3+) - جديد وغير معروف لمعظم البوتات
+BIDI_ISOLATES = [
+    '\u2068',  # FIRST STRONG ISOLATE (FSI)
+    '\u2069',  # POP DIRECTIONAL ISOLATE (PDI)
+    # LRI / RLI تُستخدم بحذر شديد - قد تكسر العرض
+]
+LRI = '\u2066'  # LEFT-TO-RIGHT ISOLATE
+RLI = '\u2067'  # RIGHT-TO-LEFT ISOLATE
+
+# L22: Mathematical Alphanumeric Symbols (U+1D400-U+1D7FF)
+# أحرف لاتينية بنمط Fraktur/Script/Double-struck/Sans-serif - تبدو مختلفة لكنها مقروءة
+MATH_FRAKTUR = {  # نمط قوطي - مفيد جداً لتمويه الكلمات المفتاحية الإنجليزية
+    'a': '\U0001D51E', 'b': '\U0001D51F', 'c': '\U0001D520', 'd': '\U0001D521',
+    'e': '\U0001D522', 'f': '\U0001D523', 'g': '\U0001D524', 'h': '\U0001D525',
+    'i': '\U0001D526', 'j': '\U0001D527', 'k': '\U0001D528', 'l': '\U0001D529',
+    'm': '\U0001D52A', 'n': '\U0001D52B', 'o': '\U0001D52C', 'p': '\U0001D52D',
+    'q': '\U0001D52E', 'r': '\U0001D52F', 's': '\U0001D530', 't': '\U0001D531',
+    'u': '\U0001D532', 'v': '\U0001D533', 'w': '\U0001D534', 'x': '\U0001D535',
+    'y': '\U0001D536', 'z': '\U0001D537',
+}
+MATH_SCRIPT = {  # نمط سكربت (Script) - أنيق ومختلف بصرياً
+    'a': '\U0001D4B6', 'b': '\U0001D4B7', 'c': '\U0001D4B8', 'd': '\U0001D4B9',
+    'e': '\U0001D4BA', 'f': '\U0001D4BB', 'g': '\U0001D4BC', 'h': '\U0001D4BD',
+    'i': '\U0001D4BE', 'j': '\U0001D4BF', 'k': '\U0001D4C0', 'l': '\U0001D4C1',
+    'm': '\U0001D4C2', 'n': '\U0001D4C3', 'o': '\U0001D4C4', 'p': '\U0001D4C5',
+    'q': '\U0001D4C6', 'r': '\U0001D4C7', 's': '\U0001D4C8', 't': '\U0001D4C9',
+    'u': '\U0001D4CA', 'v': '\U0001D4CB', 'w': '\U0001D4CC', 'x': '\U0001D4CD',
+    'y': '\U0001D4CE', 'z': '\U0001D4CF',
+}
+MATH_DOUBLE_STRUCK = {  # نمط مزدوج الحواف (Double-struck) - يستخدم في الرياضيات
+    'a': '\U0001D552', 'b': '\U0001D553', 'c': '\U0001D554', 'd': '\U0001D555',
+    'e': '\U0001D556', 'f': '\U0001D557', 'g': '\U0001D558', 'h': '\U0001D559',
+    'i': '\U0001D55A', 'j': '\U0001D55B', 'k': '\U0001D55C', 'l': '\U0001D55D',
+    'm': '\U0001D55E', 'n': '\U0001D55F', 'o': '\U0001D560', 'p': '\U0001D561',
+    'q': '\U0001D562', 'r': '\U0001D563', 's': '\U0001D564', 't': '\U0001D565',
+    'u': '\U0001D566', 'v': '\U0001D567', 'w': '\U0001D568', 'x': '\U0001D569',
+    'y': '\U0001D56A', 'z': '\U0001D56B',
+}
+MATH_STYLE_MAPS = [MATH_FRAKTUR, MATH_SCRIPT, MATH_DOUBLE_STRUCK]
+
+# L23: Smart Punctuation - استبدال علامات الترقيم بنسخ ذكية
+SMART_PUNCT = {
+    "'": '\u2019',  # ' RIGHT SINGLE QUOTATION MARK
+    '"': '\u201D',  # " RIGHT DOUBLE QUOTATION MARK
+    '`': '\u2018',  # ' LEFT SINGLE QUOTATION MARK
+    '-': '\u2010',  # ‐ HYPHEN
+    '--': '\u2013', # – EN DASH
+    '---': '\u2014',# — EM DASH
+    '...': '\u2026',# … HORIZONTAL ELLIPSIS
+    '<<': '\u00AB', # «
+    '>>': '\u00BB', # »
+}
+
+# L24: Expanded Confusables Database (مستوحى من unicode-confusables على GitHub)
+# إضافة أحرف لاتينية أكثر من قائمة Unicode Confusables الرسمية
+EXPANDED_LATIN_CONFUSABLES = {
+    # أحرف شائعة إضافية
+    'a': ['\u0430', '\u00E0', '\u00E1', '\u00E2', '\u00E3', '\u00E4', '\u00E5'],
+    'A': ['\u0410', '\u00C0', '\u00C1', '\u00C2', '\u00C3', '\u00C4', '\u00C5'],
+    'b': ['\u042C', '\u0253'],
+    'B': ['\u0392', '\u0181'],
+    'c': ['\u0441', '\u0188', '\u023C'],
+    'C': ['\u0421', '\u00C7', '\u0187'],
+    'd': ['\u0501', '\u0257'],
+    'D': ['\u010A', '\u0189'],
+    'e': ['\u0435', '\u00E8', '\u00E9', '\u00EA', '\u00EB', '\u0259'],
+    'E': ['\u0415', '\u00C8', '\u00C9', '\u00CA', '\u00CB'],
+    'f': ['\u0192'],
+    'F': ['\u03DC'],
+    'g': ['\u0261', '\u011D'],
+    'G': ['\u0120', '\u0262'],
+    'h': ['\u04BB', '\u0125'],
+    'H': ['\u041D', '\u0124'],
+    'i': ['\u0456', '\u00EC', '\u00ED', '\u00EE', '\u00EF', '\u0131'],
+    'I': ['\u0406', '\u00CC', '\u00CD', '\u00CE', '\u00CF'],
+    'j': ['\u0458', '\u0135'],
+    'J': ['\u0408'],
+    'k': ['\u043A', '\u0137'],
+    'K': ['\u041A'],
+    'l': ['\u04CF', '\u013A', '\u013C', '\u013E'],
+    'L': ['\u013B', '\u013D'],
+    'm': ['\u028D', '\u0271'],
+    'M': ['\u041C', '\u039C'],
+    'n': ['\u03B7', '\u00F1', '\u0144', '\u0146', '\u0148'],
+    'N': ['\u039D', '\u00D1', '\u0143', '\u0145', '\u0147'],
+    'o': ['\u043E', '\u00F2', '\u00F3', '\u00F4', '\u00F5', '\u00F6', '\u00F8'],
+    'O': ['\u041E', '\u00D2', '\u00D3', '\u00D4', '\u00D5', '\u00D6', '\u00D8'],
+    'p': ['\u0440', '\u00FE'],
+    'P': ['\u0420', '\u00DE'],
+    'q': ['\u051B'],
+    'Q': ['\u051A'],
+    'r': ['\u0433', '\u0157', '\u0159'],
+    'R': ['\u0413', '\u0156', '\u0158'],
+    's': ['\u0455', '\u015B', '\u015D', '\u015F', '\u0161'],
+    'S': ['\u0405', '\u015A', '\u015C', '\u015E', '\u0160'],
+    't': ['\u0163', '\u0165', '\u0167'],
+    'T': ['\u0422', '\u0162', '\u0164', '\u0166'],
+    'u': ['\u0443', '\u00F9', '\u00FA', '\u00FB', '\u00FC', '\u016B'],
+    'U': ['\u0423', '\u00D9', '\u00DA', '\u00DB', '\u00DC', '\u016A'],
+    'v': ['\u03BD', '\u028B'],
+    'V': ['\u039D', '\u0474'],
+    'w': ['\u0282'],
+    'W': ['\u0428'],
+    'x': ['\u0445', '\u00D7'],
+    'X': ['\u0425', '\u00D7'],
+    'y': ['\u0443', '\u00FD', '\u00FF', '\u0177', '\u028F'],
+    'Y': ['\u0423', '\u00DD', '\u0176', '\u0178'],
+    'z': ['\u017A', '\u017C', '\u017E'],
+    'Z': ['\u0179', '\u017B', '\u017D'],
+}
+
+# L25: Emoji variation sequences - إضافة VS15/VS16 بعد الإيموجي لكسر hash matching
+EMOJI_VS_RANGE = list(range(0x1F300, 0x1FAFF))  # نطاق الإيموجي الشائع
+
+# L26: Hash-busting padding - إضافة padding عشوائي في بداية ونهاية الرسالة
+# لكسر مطابقة الـ hash حتى لو تطابقت كل الطبقات الأخرى
+HASH_BUSTING_PADS = [
+    '\u200B\u200C\u200D',  # ZWSP+ZWNJ+ZWJ
+    '\u2060\uFEFF',        # WJ+BOM
+    '\u200E\u200F',        # LRM+RLM
+    '\U000E0001\U000E007F',  # TAG+CANCEL_TAG
+    '\u3164',              # Hangul Filler
+    '\u2068\u2069',        # FSI+PDI
+]
+
+
+# ════════════════════════════════════════════════════════════════
 #  المحرك الرئيسي
 # ════════════════════════════════════════════════════════════════
 
@@ -295,6 +445,15 @@ class HyperEncryptionEngine:
         'L16_numeric_sub':     'استبدال الأرقام',
         'L17_punct_sub':       'استبدال علامات الترقيم',
         'L18_midword_zwsp':    'ZWSP داخل الكلمات الطويلة',
+        # ── طبقات متقدمة جديدة v2.1 ──
+        'L19_tag_chars':       'Tag Characters (U+E0000) - إخفاء كامل',
+        'L20_hangul_filler':   'Hangul Fillers - أحرف كورية غير مرئية',
+        'L21_bidi_isolates':   'Bidirectional Isolates (FSI/PDI) - يكسر regex',
+        'L22_math_symbols':    'Math Symbols (Fraktur/Script/Double-struck)',
+        'L23_smart_punct':     'علامات ترقيم ذكية (smart quotes/dashes)',
+        'L24_expanded_confusables': 'قاعدة Unicode Confusables الموسعة',
+        'L25_emoji_vs':        'Emoji Variation Sequences (يكسر hash)',
+        'L26_hash_bust':       'Hash-busting padding (يكسر hash matching)',
     }
 
     # مستويات القوة
@@ -302,12 +461,15 @@ class HyperEncryptionEngine:
         'light': [
             'L01_homoglyph', 'L02_zero_width', 'L06_space_variant',
             'L09_link_obf', 'L10_mention_obf', 'L11_pergroup_hash', 'L12_trailing',
+            'L24_expanded_confusables', 'L26_hash_bust',
         ],
         'medium': [
             'L01_homoglyph', 'L02_zero_width', 'L03_tatweel',
             'L05_combining', 'L06_space_variant', 'L09_link_obf',
             'L10_mention_obf', 'L11_pergroup_hash', 'L12_trailing',
             'L13_linebreak_var', 'L16_numeric_sub', 'L17_punct_sub', 'L18_midword_zwsp',
+            'L19_tag_chars', 'L23_smart_punct', 'L24_expanded_confusables',
+            'L26_hash_bust',
         ],
         'aggressive': [
             'L01_homoglyph', 'L02_zero_width', 'L03_tatweel',
@@ -315,6 +477,9 @@ class HyperEncryptionEngine:
             'L07_directional', 'L09_link_obf', 'L10_mention_obf',
             'L11_pergroup_hash', 'L12_trailing', 'L13_linebreak_var',
             'L15_keyword_heavy', 'L16_numeric_sub', 'L17_punct_sub', 'L18_midword_zwsp',
+            'L19_tag_chars', 'L20_hangul_filler', 'L21_bidi_isolates',
+            'L22_math_symbols', 'L23_smart_punct', 'L24_expanded_confusables',
+            'L25_emoji_vs', 'L26_hash_bust',
         ],
         'insane': [
             'L01_homoglyph', 'L02_zero_width', 'L03_tatweel',
@@ -323,6 +488,9 @@ class HyperEncryptionEngine:
             'L10_mention_obf', 'L11_pergroup_hash', 'L12_trailing',
             'L13_linebreak_var', 'L14_paragraph_sep', 'L15_keyword_heavy',
             'L16_numeric_sub', 'L17_punct_sub', 'L18_midword_zwsp',
+            'L19_tag_chars', 'L20_hangul_filler', 'L21_bidi_isolates',
+            'L22_math_symbols', 'L23_smart_punct', 'L24_expanded_confusables',
+            'L25_emoji_vs', 'L26_hash_bust',
         ],
     }
 
@@ -643,6 +811,181 @@ class HyperEncryptionEngine:
         text = re.sub(r'[\u0621-\u064A]{4,}', process_word, text)
         return text
 
+    # ═══════════════════════════════════════════════════════════
+    #  طبقات متقدمة جديدة v2.1 (L19-L26)
+    #  مستوحاة من: confusable_homoglyphs، unicode-tools،
+    #  anti-spam-bypass، telegram-ad-evasion على GitHub
+    # ═══════════════════════════════════════════════════════════
+
+    def _L19_tag_chars(self, text, rng):
+        """
+        Tag Characters (U+E0000-U+E007F) - كاملة الإخفاء
+        هذه الأحرف وسوم لغة معرّفة في Unicode لكنها غير مرئية تماماً.
+        تستخدمها بوتات الحماية نادراً في فلاتر الكشف.
+        """
+        if len(text) < 5:
+            return text
+        result = []
+        # إدراج tag char في البداية (Language Tag opener + space + closer)
+        if rng.random() < 0.60:
+            result.append('\U000E0001')  # LANGUAGE TAG opener
+            result.append(rng.choice(['\U000E0041', '\U000E0061', '\U000E0042', '\U000E0062']))  # TAG letter
+            result.append('\U000E007F')  # CANCEL TAG
+        for i, ch in enumerate(text):
+            result.append(ch)
+            # بعد المسافة: 8% احتمال إدراج tag char
+            if ch == ' ' and rng.random() < 0.08:
+                result.append(rng.choice(TAG_CHARS))
+        # في النهاية
+        if rng.random() < 0.40:
+            result.append(rng.choice(TAG_CHARS))
+        return ''.join(result)
+
+    def _L20_hangul_filler(self, text, rng):
+        """
+        Hangul Fillers (U+3164, U+115F, U+1160) - أحرف كورية غير مرئية
+        تظهر كمسافات فارغة في معظم الخطوط لكنها bytes إضافية تكسر pattern matching.
+        """
+        if len(text) < 10:
+            return text
+        result = []
+        words = text.split(' ')
+        for i, word in enumerate(words):
+            result.append(word)
+            if i < len(words) - 1:
+                # استبدال بعض المسافات بـ Hangul filler (غير مرئي)
+                if rng.random() < 0.15:
+                    result.append(rng.choice(HANGUL_FILLERS))
+                else:
+                    result.append(' ')
+        # إضافة filler في النهاية أحياناً
+        if rng.random() < 0.30:
+            result.append(rng.choice(HANGUL_FILLERS))
+        return ''.join(result)
+
+    def _L21_bidi_isolates(self, text, rng):
+        """
+        Bidirectional Isolation marks (FSI/PDI - U+2068/U+2069)
+        تقنية جديدة من Unicode 6.3+ لا يعرفها معظم بوتات الحماية القديمة.
+        تعزل اتجاه النص دون التأثير على العرض البصري.
+        """
+        if len(text) < 15:
+            return text
+        result = []
+        # إحاطة بعض الكلمات بـ FSI...PDI
+        words = text.split(' ')
+        for i, word in enumerate(words):
+            # 12% من الكلمات نحيطها بـ bidi isolates
+            if rng.random() < 0.12 and len(word) > 2:
+                result.append('\u2068')  # FSI
+                result.append(word)
+                result.append('\u2069')  # PDI
+            else:
+                result.append(word)
+            if i < len(words) - 1:
+                result.append(' ')
+        return ''.join(result)
+
+    def _L22_math_symbols(self, text, rng):
+        """
+        Mathematical Alphanumeric Symbols (Fraktur/Script/Double-struck)
+        يحول بعض الأحرف اللاتينية إلى أنماط رياضية مميزة.
+        النص يبقى مقروءاً لكنه يبدو مختلفاً تماماً عن النص العادي.
+        مفيد جداً للكلمات المفتاحية الإنجليزية.
+        """
+        result = []
+        # اختيار نمط عشوائي واحد لكل رسالة (للتناسق البصري)
+        style_map = rng.choice(MATH_STYLE_MAPS)
+        for ch in text:
+            lower = ch.lower()
+            if lower in style_map and rng.random() < 0.20:
+                result.append(style_map[lower])
+            else:
+                result.append(ch)
+        return ''.join(result)
+
+    def _L23_smart_punct(self, text, rng):
+        """
+        Smart Punctuation - استبدال علامات الترقيم بنسخ ذكية
+        مستوحى من تقنية smart_quotes في معالجات النصوص الحديثة.
+        """
+        # استبدال التسلسلات الطويلة أولاً
+        for orig, smart in sorted(SMART_PUNCT.items(), key=lambda x: -len(x[0])):
+            if orig in text and rng.random() < 0.70:
+                text = text.replace(orig, smart, 1)
+        # استبدال علامات مفردة
+        result = []
+        in_url = False
+        for i, ch in enumerate(text):
+            # كشف URL - لا نلمس علامات الترقيم داخل الروابط
+            if text[max(0, i-7):i].lower().endswith(('http://', 'https:/')):
+                in_url = True
+            if in_url and ch == ' ':
+                in_url = False
+            if in_url:
+                result.append(ch)
+                continue
+            if ch in SMART_PUNCT and len(ch) == 1 and rng.random() < 0.50:
+                result.append(SMART_PUNCT[ch])
+            else:
+                result.append(ch)
+        return ''.join(result)
+
+    def _L24_expanded_confusables(self, text, rng):
+        """
+        Expanded Confusables Database - قاعدة بيانات Unicode Confusables الموسعة
+        مستوحاة من مستودع: https://github.com/woodward/confusable_homoglyphs
+        يحاول استخدام بدائل إضافية للحروف اللاتينية.
+        """
+        result = []
+        for ch in text:
+            if ch in EXPANDED_LATIN_CONFUSABLES and rng.random() < 0.25:
+                # اختيار بديل عشوائي من القائمة الموسعة
+                alternatives = EXPANDED_LATIN_CONFUSABLES[ch]
+                result.append(rng.choice(alternatives))
+            else:
+                result.append(ch)
+        return ''.join(result)
+
+    def _L25_emoji_vs(self, text, rng):
+        """
+        Emoji Variation Sequences - إضافة VS15/VS16 بعد الإيموجي
+        يكسر مطابقة الـ hash للرسائل التي تحتوي إيموجي.
+        VS15 = عرض كنص، VS16 = عرض كإيموجي.
+        """
+        result = []
+        for ch in text:
+            result.append(ch)
+            cp = ord(ch)
+            # إذا كان الإيموجي في النطاق الشائع
+            if (0x1F300 <= cp <= 0x1FAFF) or (0x2600 <= cp <= 0x27BF):
+                # 70% احتمال إضافة VS15 أو VS16
+                if rng.random() < 0.70:
+                    result.append(rng.choice([VS15, VS16]))
+        return ''.join(result)
+
+    def _L26_hash_bust(self, text, rng):
+        """
+        Hash-busting Padding - إضافة padding عشوائي في البداية والنهاية
+        يكسر مطابقة الـ hash حتى لو تطابقت كل الطبقات الأخرى.
+        كل رسالة تحصل على padding فريد = hash فريد.
+        """
+        if not text:
+            return text
+        # padding في البداية (1-2 chars)
+        prefix = ''
+        if rng.random() < 0.85:
+            n_pad = rng.randint(1, 2)
+            for _ in range(n_pad):
+                prefix += rng.choice(HASH_BUSTING_PADS)
+        # padding في النهاية (1-3 chars)
+        suffix = ''
+        if rng.random() < 0.85:
+            n_pad = rng.randint(1, 3)
+            for _ in range(n_pad):
+                suffix += rng.choice(HASH_BUSTING_PADS)
+        return prefix + text + suffix
+
     # ──────────────────────────────────────────────────────────
     #  الواجهة الرئيسية
     # ──────────────────────────────────────────────────────────
@@ -676,23 +1019,31 @@ class HyperEncryptionEngine:
         # ترتيب الطبقات (مهم - بعض الطبقات يجب أن تُطبق قبل غيرها)
         order = [
             'L15_keyword_heavy',  # الكلمات المفتاحية أولاً
-            'L01_homoglyph',      # استبدال الحروف
+            'L22_math_symbols',   # Math symbols (للكلمات الإنجليزية)
+            'L24_expanded_confusables',  # بدائل لاتينية موسعة
+            'L01_homoglyph',      # استبدال الحروف الأساسي
             'L16_numeric_sub',    # استبدال الأرقام
             'L18_midword_zwsp',   # ZWSP داخل الكلمات
-            'L17_punct_sub',      # علامات الترقيم
+            'L23_smart_punct',    # علامات ترقيم ذكية
+            'L17_punct_sub',      # علامات الترقيم fullwidth
             'L09_link_obf',       # تمويه الروابط
             'L10_mention_obf',    # تمويه الإشارات
             'L03_tatweel',        # الكاشيدة
             'L04_harakat',        # التشكيل
             'L05_combining',      # Combining marks
             'L06_space_variant',  # مسافات بديلة
+            'L20_hangul_filler',  # Hangul fillers (بعد المسافات)
+            'L21_bidi_isolates',  # Bidi isolates حول الكلمات
             'L02_zero_width',     # ZW chars بين الكلمات
             'L13_linebreak_var',  # تنويع الأسطر
             'L14_paragraph_sep',  # فواصل الفقرات
             'L07_directional',    # علامات اتجاه
             'L08_variation_sel',  # Variation selectors
+            'L25_emoji_vs',       # Emoji variation sequences
+            'L19_tag_chars',      # Tag chars (تقريباً نهاية الرسالة)
             'L11_pergroup_hash',  # بصمة المجموعة
             'L12_trailing',       # ذيل غير مرئي
+            'L26_hash_bust',      # Hash-busting padding (الأخير دائماً)
         ]
 
         for layer in order:
@@ -773,10 +1124,18 @@ def char_analysis(text):
         'variation_selectors': 0,
         'arabic_harakat': 0,
         'tatweel': 0,
+        'tag_chars': 0,
+        'hangul_fillers': 0,
+        'bidi_isolates': 0,
+        'math_symbols': 0,
         'other_invisible': 0,
     }
     all_invisible = set(ZERO_WIDTH_CHARS + DIRECTIONAL_MARKS + COMBINING_MARKS +
-                         SPACE_VARIANTS + [VS15, VS16] + ARABIC_HARAKAT_LIST + [TATWEEL])
+                         SPACE_VARIANTS + [VS15, VS16] + ARABIC_HARAKAT_LIST + [TATWEEL] +
+                         TAG_CHARS + HANGUL_FILLERS + BIDI_ISOLATES + [LRI, RLI])
+    math_chars = set()
+    for m in MATH_STYLE_MAPS:
+        math_chars.update(m.values())
     for ch in text:
         if ch in ZERO_WIDTH_CHARS:
             counts['zero_width'] += 1
@@ -792,6 +1151,14 @@ def char_analysis(text):
             counts['arabic_harakat'] += 1
         elif ch == TATWEEL:
             counts['tatweel'] += 1
+        elif ch in TAG_CHARS:
+            counts['tag_chars'] += 1
+        elif ch in HANGUL_FILLERS:
+            counts['hangul_fillers'] += 1
+        elif ch in BIDI_ISOLATES or ch in [LRI, RLI]:
+            counts['bidi_isolates'] += 1
+        elif ch in math_chars:
+            counts['math_symbols'] += 1
         elif ch in all_invisible:
             counts['other_invisible'] += 1
         elif ch == ' ':

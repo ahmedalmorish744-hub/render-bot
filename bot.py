@@ -632,7 +632,7 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     """
-    🔐 التشفير الخارق - 18 طبقة من التمويه غير المرئي
+    🔐 التشفير الخارق v2.1 - 26 طبقة من التمويه غير المرئي
     يتجاوز بوتات الحماية (anti-spam) على تيليجرام.
     النص يبقى مقروءاً 100% للمستخدم العادي.
     """
@@ -5271,7 +5271,7 @@ async def main():
 
     @bot.on(events.CallbackQuery)
     async def callback_handler(event):
-        global is_posting_active, join_cancelled
+        global is_posting_active, join_cancelled, hyper_encryption
         if not is_admin(event.sender_id):
             await event.answer("⛔ غير مصرح", alert=True)
             return
@@ -5607,8 +5607,8 @@ async def main():
                 invisible = sum(v for k, v in counts.items() if k != 'visible')
                 await event.answer("🔥 HyperEncryption: مفعل ✨")
                 await event.edit(
-                    f"🔥 **HyperEncryptionEngine: مفعل** ✅\n\n"
-                    f"محرك تشفير خارق بـ 18 طبقة متقدمة:\n"
+                    f"🔥 **HyperEncryptionEngine v2.1: مفعل** ✅\n\n"
+                    f"محرك تشفير خارق بـ 26 طبقة متقدمة (8 طبقات جديدة!):\n"
                     f"• Homoglyph (عربي + لاتيني + أرقام)\n"
                     f"• Zero-width chars (5 أنواع)\n"
                     f"• Tatweel + Harakat عربي\n"
@@ -5619,8 +5619,17 @@ async def main():
                     f"• Link + Mention obfuscation\n"
                     f"• Per-group hash + trailing invisibles\n"
                     f"• Mid-word ZWSP (يكسر keyword matching)\n"
-                    f"• Keyword heavy + Numeric + Punctuation subs\n\n"
-                    f"📊 المستوى الحالي: **{info.get('level', 'medium')}** ({info.get('active_count', '?')}/{info.get('total_count', 18)} طبقة)\n\n"
+                    f"• Keyword heavy + Numeric + Punctuation subs\n"
+                    f"🆕 **طبقات v2.1 الجديدة:**\n"
+                    f"• L19: Tag Characters (U+E0000) - إخفاء كامل\n"
+                    f"• L20: Hangul Fillers - أحرف كورية غير مرئية\n"
+                    f"• L21: Bidi Isolates (FSI/PDI) - يكسر regex\n"
+                    f"• L22: Math Symbols (Fraktur/Script/Double-struck)\n"
+                    f"• L23: Smart Punctuation (smart quotes/dashes)\n"
+                    f"• L24: Expanded Confusables Database\n"
+                    f"• L25: Emoji Variation Sequences\n"
+                    f"• L26: Hash-busting Padding (يكسر hash matching)\n\n"
+                    f"📊 المستوى الحالي: **{info.get('level', 'medium')}** ({info.get('active_count', '?')}/{info.get('total_count', 26)} طبقة)\n\n"
                     f"📝 **الأصل:**\n{example}\n\n"
                     f"🔥 **بعد HyperEncryption** ({len(encrypted)} حرف، {invisible} غير مرئي):\n{encrypted}\n\n"
                     f"💡 النص يبدو متطابقاً بصرياً - الفرق فقط في الأحرف غير المرئية!",
@@ -5640,21 +5649,20 @@ async def main():
             new_level = levels[(idx + 1) % len(levels)]
             set_setting('encryption_strength', new_level)
             # تحديث المحرك لالتقاط الإعداد الجديد
-            global hyper_encryption
             if hyper_encryption is not None:
                 hyper_encryption.get_setting = get_setting
             info = hyper_encryption.get_strength_info() if hyper_encryption else {}
             emojis = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}
             descriptions = {
-                'light': 'أخف تمويه - 7 طبقات (للحسابات الحساسة)',
-                'medium': 'متوازن - 13 طبقة (افتراضي)',
-                'aggressive': 'قوي - 16 طبقة (يكسر بوتات قوية)',
-                'insane': 'أقصى تمويه - 18 طبقة (كل الطبقات مفعلة)',
+                'light': 'أخف تمويه - 9 طبقات (للحسابات الحساسة)',
+                'medium': 'متوازن - 17 طبقة (افتراضي)',
+                'aggressive': 'قوي - 24 طبقة (يكسر بوتات قوية)',
+                'insane': 'أقصى تمويه - 26 طبقة (كل الطبقات مفعلة)',
             }
             await event.answer(f"{emojis[new_level]} قوة التشفير: {new_level}")
             await event.edit(
                 f"{emojis[new_level]} **قوة التشفير: {new_level}**\n\n"
-                f"📊 الطبقات المفعلة: {info.get('active_count', '?')}/{info.get('total_count', 18)}\n"
+                f"📊 الطبقات المفعلة: {info.get('active_count', '?')}/{info.get('total_count', 26)}\n"
                 f"📝 {descriptions[new_level]}\n\n"
                 f"اضغط الزر مرة أخرى للتبديل للمستوى التالي.",
                 buttons=get_main_menu()
