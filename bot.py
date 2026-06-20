@@ -39,8 +39,11 @@ from telethon.tl.functions.channels import GetParticipantsRequest
 from telethon.tl.types import ChannelParticipantsSearch
 from flask import Flask, jsonify
 
-# محرك التشفير الخارق (18 طبقة متقدمة)
+# محرك التشفير الخارق (26 طبقة متقدمة)
 from hyper_encryption import HyperEncryptionEngine
+
+# محرك الأنماط النصية الخارق (26 نمط بصري مستوحى من FSymbols)
+from fancy_text import FancyTextEngine, fancy_engine
 
 # ═══════════════════════════════════════════════
 #  الإعدادات الأساسية
@@ -341,6 +344,14 @@ def init_db():
     if get_setting('hyper_encryption_enabled') is None:
         set_setting('hyper_encryption_enabled', 'on')
 
+    # 🆕 محرك الأنماط النصية الخارق (FancyTextEngine) - 26 نمط بصري
+    if get_setting('fancy_text_enabled') is None:
+        set_setting('fancy_text_enabled', 'on')
+    if get_setting('fancy_text_style') is None:
+        set_setting('fancy_text_style', 'strikethrough')  # النمط الافتراضي
+    if get_setting('fancy_text_zalgo_intensity') is None:
+        set_setting('fancy_text_zalgo_intensity', 'medium')  # light/medium/heavy/insane
+
     # تهيئة محرك التشفير الخارق
     global hyper_encryption
     hyper_encryption = HyperEncryptionEngine(
@@ -348,6 +359,7 @@ def init_db():
         settings_setter=set_setting
     )
     logger.info(f"🛡 محرك التشفير الخارق جاهز (المستوى: {get_setting('encryption_strength', 'medium')})")
+    logger.info(f"✨ محرك الأنماط النصية جاهز ({len(fancy_engine.STYLES)} نمط، الحالي: {get_setting('fancy_text_style', 'strikethrough')})")
 
     conn.commit()
     conn.close()
@@ -632,18 +644,37 @@ anti_detection = UltimateAntiDetection()
 
 def encrypt_text(text, group_id=None):
     """
-    🔐 التشفير الخارق v2.1 - 26 طبقة من التمويه غير المرئي
+    🔐 التشفير الخارق v2.1 - 26 طبقة من التمويه غير المرئي + 26 نمط Fancy Text
     يتجاوز بوتات الحماية (anti-spam) على تيليجرام.
     النص يبقى مقروءاً 100% للمستخدم العادي.
     """
-    # 1) التشفير الخارق الجديد (متعدد الطبقات - الطبقة الخارجية الأقوى)
+    if not text:
+        return text
+
+    result = text
+
+    # 0) ✨ Fancy Text - تطبيق النمط البصري أولاً (إذا كان مفعلاً)
+    if get_setting('fancy_text_enabled', 'on') == 'on':
+        try:
+            style = get_setting('fancy_text_style', 'strikethrough')
+            if style == 'zalgo':
+                intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
+                result = fancy_engine.zalgo(result, intensity=intensity)
+            else:
+                result = fancy_engine.apply_style(result, style)
+        except Exception as e:
+            logger.error(f"⚠️ خطأ في FancyTextEngine: {e}")
+
+    # 1) HyperEncryption - التشفير الخارق (متعدد الطبقات - يضاف فوق Fancy Text)
     if hyper_encryption is not None and get_setting('hyper_encryption_enabled', 'on') == 'on':
         try:
-            return hyper_encryption.encrypt(text, group_id=group_id)
+            result = hyper_encryption.encrypt(result, group_id=group_id)
+            return result
         except Exception as e:
             logger.error(f"⚠️ خطأ في HyperEncryptionEngine، الرجوع للنظام القديم: {e}")
+
     # 2) النظام القديم (احتياطي)
-    return anti_detection.generate_ultimate_variation(text, group_id)
+    return anti_detection.generate_ultimate_variation(result, group_id)
 
 
 def prepare_content_for_sending(raw_content, group_id=None):
@@ -4918,6 +4949,11 @@ def get_main_menu():
     stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
     se_status = "✅" if get_setting('super_encryption_enabled', 'off') == 'on' else "❌"
     he_status = "✅" if get_setting('hyper_encryption_enabled', 'on') == 'on' else "❌"
+    ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
+    ft_style = get_setting('fancy_text_style', 'strikethrough')
+    # أيقونة النمط الحالي
+    ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
+    ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
     enc_strength = get_setting('encryption_strength', 'medium')
     strength_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(enc_strength, '🟡')
     message_interval = get_setting('message_interval', '3')
@@ -4931,10 +4967,16 @@ def get_main_menu():
          Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
         [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
+        # ✨ Fancy Text - ميزة جديدة (بديل HyperEncryption)
+        [Button.inline(f"✨ Fancy Text {ft_status}", b"toggle_fancy_text"),
+         Button.inline(f"{ft_icon} النمط: {ft_name}", b"fancy_text_menu")],
+        [Button.inline("🧪 معاينة كل الأنماط (26)", b"fancy_text_preview"),
+         Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth")],
+        # HyperEncryption يبقى متاح كزر منفصل
         [Button.inline(f"🔥 HyperEncryption {he_status}", b"toggle_hyper_enc"),
          Button.inline(f"{strength_emoji} قوة التشفير: {enc_strength}", b"enc_strength")],
         [Button.inline("🧪 اختبار التشفير الخارق", b"enc_test"),
-         Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth")],
+         Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
         [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
         [Button.inline(f"💎 تشفير خارق قديم {se_status}", b"toggle_super_encryption"),
@@ -4948,7 +4990,6 @@ def get_main_menu():
         [Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm"),
          Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
         [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
-        [Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
         [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
         [Button.inline("⚙️ الإعدادات", b"settings"),
          Button.inline("📊 الإحصائيات", b"stats")],
@@ -5123,11 +5164,29 @@ async def main():
         counts = _ca(encrypted)
         invisible = sum(v for k, v in counts.items() if k != 'visible')
         he_line = f"• 🔥 HyperEncryption: ✅ {level} ({info['active_count']}/{info['total_count']} طبقة)\n" if info else "• 🔥 HyperEncryption: ❌ معطل\n"
+        # حالة Fancy Text
+        ft_enabled = get_setting('fancy_text_enabled', 'on') == 'on'
+        ft_style_name = fancy_engine.STYLES.get(get_setting('fancy_text_style', 'strikethrough'), {}).get('name', 'Strikethrough')
+        ft_line = f"• ✨ Fancy Text: ✅ {ft_style_name}\n" if ft_enabled else "• ✨ Fancy Text: ❌ معطل\n"
+        # تطبيق Fancy Text على النص الأصلي للعرض
+        ft_preview = ""
+        if ft_enabled:
+            try:
+                style_id = get_setting('fancy_text_style', 'strikethrough')
+                if style_id == 'zalgo':
+                    intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
+                    ft_preview_text = fancy_engine.zalgo(text, intensity=intensity)
+                else:
+                    ft_preview_text = fancy_engine.apply_style(text, style_id)
+                ft_preview = f"✨ **بعد Fancy Text** ({ft_style_name}):\n{ft_preview_text}\n\n"
+            except Exception:
+                pass
         await event.respond(
             f"📝 **النص الأصلي:**\n{text}\n\n"
+            f"{ft_preview}"
             f"🔀 **بعد التشويش:**\n{obfuscated}\n\n"
             f"🛡 **بعد التشفير الخارق** ({len(encrypted)} حرف، {invisible} غير مرئي):\n{encrypted}\n\n"
-            f"📊 **الحالة:**\n{he_line}"
+            f"📊 **الحالة:**\n{he_line}{ft_line}"
             f"💡 النص يبدو متطابقاً بصرياً - الفرق فقط في الأحرف غير المرئية التي تكسر بوتات الحماية!\n\n"
             f"جرّب أيضاً: /encrypt_test <text> لعرض كل المستويات الأربعة"
         )
@@ -5166,6 +5225,10 @@ async def main():
         he_on = get_setting('hyper_encryption_enabled', 'on') == 'on'
         info = hyper_encryption.get_strength_info() if (hyper_encryption and he_on) else None
         he_line = f"• 🔥 HyperEncryption: ✅ {enc_level} ({info['active_count']}/{info['total_count']} طبقة)\n" if info else "• 🔥 HyperEncryption: ❌ معطل\n"
+        # Fancy Text status
+        ft_on = get_setting('fancy_text_enabled', 'on') == 'on'
+        ft_style_name = fancy_engine.STYLES.get(get_setting('fancy_text_style', 'strikethrough'), {}).get('name', 'Strikethrough')
+        ft_line = f"• ✨ Fancy Text: ✅ {ft_style_name}\n" if ft_on else "• ✨ Fancy Text: ❌ معطل\n"
         await event.respond(
             f"📊 **حالة البوت:**\n"
             f"• المجموعات: {groups}\n• الرسائل: {msgs}\n"
@@ -5173,7 +5236,7 @@ async def main():
             f"• الحسابات المتصلة: {len(user_clients)}\n"
             f"• النشر: {'🟢 نشط' if is_posting_active else '🔴 متوقف'}\n"
             f"• التشفير: {'✅ مفعل' if get_setting('encryption', 'on') == 'on' else '❌ معطل'}\n"
-            f"{he_line}"
+            f"{he_line}{ft_line}"
             f"• مكافحة الكشف: {'✅ مفعلة' if get_setting('anti_detect', 'on') == 'on' else '❌ معطلة'}\n"
             f"• تشويش النص: {obf_status}\n"
             f"• 📅 منشورات مجدولة معلقة: {pending_sched}"
@@ -5682,6 +5745,173 @@ async def main():
                 msg += f"{emoji} **{level.upper()}** ({active_n} طبقة، {len(enc)} حرف، {invisible} غير مرئي):\n{enc}\n\n"
             msg += "💡 كل النصوص تبدو متطابقة بصرياً مع الأصل!\n\nاختر مستوى القوة من زر 'قوة التشفير' في القائمة الرئيسية."
             await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"back")]])
+
+        # ═══════════════════════════════════════════════════════════
+        #  ✨ Fancy Text - محرك الأنماط النصية الخارق (26 نمط)
+        # ═══════════════════════════════════════════════════════════
+
+        elif data == 'toggle_fancy_text':
+            current = get_setting('fancy_text_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('fancy_text_enabled', new_val)
+            current_style = get_setting('fancy_text_style', 'strikethrough')
+            style_info = fancy_engine.STYLES.get(current_style, {})
+            if new_val == 'on':
+                example = "اشترك في قناتنا https://t.me/example عروض حصرية!"
+                transformed = fancy_engine.apply_style(example, current_style)
+                await event.answer("✨ Fancy Text: مفعل")
+                await event.edit(
+                    f"✨ **FancyTextEngine: مفعل** ✅\n\n"
+                    f"محرك 26 نمط بصري مستوحى من FSymbols:\n"
+                    f"• 8 أنماط تشكيل (Strikethrough/Underline/Overline...)\n"
+                    f"• 4 أنماط إحاطة (Boxed/Circled/Squared/Bubble)\n"
+                    f"• 9 أنماط استبدال (Fraktur/Script/Monospace...)\n"
+                    f"• 5 أنماط متقدمة (Mirrored/Upside Down/Zalgo...)\n\n"
+                    f"📊 النمط الحالي: **{style_info.get('name', current_style)}** ({style_info.get('ar', '')})\n\n"
+                    f"📝 **الأصل:**\n{example}\n\n"
+                    f"✨ **بعد التطبيق:**\n{transformed}\n\n"
+                    f"💡 اختر نمطاً مختلفاً من زر 'النمط' في القائمة الرئيسية.",
+                    buttons=get_main_menu()
+                )
+            else:
+                await event.answer("✨ Fancy Text: معطل")
+                await event.edit("✨ **FancyTextEngine: معطل** ❌\n\nسيتم استخدام HyperEncryption فقط.", buttons=get_main_menu())
+
+        elif data == 'fancy_text_menu':
+            # قائمة اختيار النمط - مقسمة حسب التصنيف
+            current_style = get_setting('fancy_text_style', 'strikethrough')
+            current_intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
+            # بناء الأزرار حسب التصنيف
+            buttons = []
+            categories = fancy_engine.get_categories()
+            for cat_id, cat_name in categories.items():
+                # عنوان التصنيف
+                buttons.append([Button.inline(f"── {cat_name} ──", b"fancy_text_noop")])
+                # أنماط هذا التصنيف (زر لكل اثنين)
+                styles_in_cat = [(k, v) for k, v in fancy_engine.STYLES.items() if v['category'] == cat_id]
+                row = []
+                for style_id, style_info in styles_in_cat:
+                    mark = "✅" if style_id == current_style else "  "
+                    btn_text = f"{style_info['icon']} {style_info['name']}"
+                    if len(btn_text) > 22:
+                        btn_text = btn_text[:22]
+                    row.append(Button.inline(btn_text, f"fts_{style_id}".encode()))
+                    if len(row) == 2:
+                        buttons.append(row)
+                        row = []
+                if row:
+                    buttons.append(row)
+            # شريط التحكم بالشدة لـ Zalgo
+            buttons.append([Button.inline(f"⚡ شدة Zalgo: {current_intensity}", b"fancy_text_zalgo_level")])
+            buttons.append([Button.inline("🔙 رجوع للقائمة الرئيسية", b"back")])
+            await event.edit(
+                f"✨ **اختيار نمط Fancy Text**\n\n"
+                f"📊 النمط الحالي: **{fancy_engine.STYLES.get(current_style, {}).get('name', current_style)}**\n"
+                f"⚡ شدة Zalgo: **{current_intensity}**\n\n"
+                f"اختر نمطاً من القائمة أدناه:",
+                buttons=buttons
+            )
+
+        elif data == 'fancy_text_zalgo_level':
+            current = get_setting('fancy_text_zalgo_intensity', 'medium')
+            levels = ['light', 'medium', 'heavy', 'insane']
+            try:
+                idx = levels.index(current)
+            except ValueError:
+                idx = 1
+            new_level = levels[(idx + 1) % len(levels)]
+            set_setting('fancy_text_zalgo_intensity', new_level)
+            await event.answer(f"⚡ شدة Zalgo: {new_level}")
+            # إعادة عرض قائمة Fancy Text
+            current_style = get_setting('fancy_text_style', 'strikethrough')
+            buttons = []
+            categories = fancy_engine.get_categories()
+            for cat_id, cat_name in categories.items():
+                buttons.append([Button.inline(f"── {cat_name} ──", b"fancy_text_noop")])
+                styles_in_cat = [(k, v) for k, v in fancy_engine.STYLES.items() if v['category'] == cat_id]
+                row = []
+                for style_id, style_info in styles_in_cat:
+                    mark = "✅" if style_id == current_style else "  "
+                    btn_text = f"{style_info['icon']} {style_info['name']}"
+                    if len(btn_text) > 22:
+                        btn_text = btn_text[:22]
+                    row.append(Button.inline(btn_text, f"fts_{style_id}".encode()))
+                    if len(row) == 2:
+                        buttons.append(row)
+                        row = []
+                if row:
+                    buttons.append(row)
+            buttons.append([Button.inline(f"⚡ شدة Zalgo: {new_level}", b"fancy_text_zalgo_level")])
+            buttons.append([Button.inline("🔙 رجوع للقائمة الرئيسية", b"back")])
+            await event.edit(
+                f"✨ **اختيار نمط Fancy Text**\n\n"
+                f"📊 النمط الحالي: **{fancy_engine.STYLES.get(current_style, {}).get('name', current_style)}**\n"
+                f"⚡ شدة Zalgo: **{new_level}**\n\n"
+                f"اختر نمطاً من القائمة أدناه:",
+                buttons=buttons
+            )
+
+        elif data == 'fancy_text_noop':
+            # زر غير قابل للنقر (عنوان فقط)
+            await event.answer("علامة تبويب", alert=False)
+
+        elif data == 'fancy_text_preview':
+            # معاينة كل الأنماط على نص تجريبي
+            sample = "اشترك في قناتنا https://t.me/example عروض حصرية! Hello World"
+            current_style = get_setting('fancy_text_style', 'strikethrough')
+            current_intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
+            msg = f"🧪 **معاينة كل الأنماط (26 نمط)**\n\n📝 **النص الأصلي:**\n{sample}\n\n"
+            categories = fancy_engine.get_categories()
+            for cat_id, cat_name in categories.items():
+                msg += f"\n📂 **{cat_name}**\n"
+                styles_in_cat = [(k, v) for k, v in fancy_engine.STYLES.items() if v['category'] == cat_id]
+                for style_id, style_info in styles_in_cat:
+                    try:
+                        if style_id == 'zalgo':
+                            transformed = fancy_engine.zalgo(sample, intensity=current_intensity)
+                        else:
+                            transformed = fancy_engine.apply_style(sample, style_id)
+                        mark = "✅" if style_id == current_style else "  "
+                        msg += f"\n{mark} {style_info['icon']} **{style_info['name']}** ({style_info['ar']}):\n{transformed}\n"
+                    except Exception as e:
+                        msg += f"\n❌ {style_info['name']}: خطأ - {e}\n"
+            msg += f"\n💡 النمط الحالي محدد بـ ✅. اضغط 'اختيار النمط' للتغيير."
+            await event.edit(
+                msg,
+                buttons=[
+                    [Button.inline("🎯 اختيار نمط", b"fancy_text_menu"),
+                     Button.inline("⚡ شدة Zalgo", b"fancy_text_zalgo_level")],
+                    [Button.inline("🔙 رجوع", b"back")]
+                ]
+            )
+
+        elif data.startswith('fts_'):
+            # اختيار نمط معين
+            style_id = data[4:]  # إزالة بادئة 'fts_'
+            if style_id in fancy_engine.STYLES:
+                set_setting('fancy_text_style', style_id)
+                style_info = fancy_engine.STYLES[style_id]
+                # تطبيق النمط على نص تجريبي
+                example = "اشترك في قناتنا https://t.me/example عروض حصرية! Hello"
+                if style_id == 'zalgo':
+                    intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
+                    transformed = fancy_engine.zalgo(example, intensity=intensity)
+                else:
+                    transformed = fancy_engine.apply_style(example, style_id)
+                await event.answer(f"✅ تم اختيار: {style_info['name']}")
+                await event.edit(
+                    f"✅ **تم اختيار النمط: {style_info['name']}**\n\n"
+                    f"📊 الوصف: {style_info['ar']}\n"
+                    f"📂 التصنيف: {fancy_engine.get_categories().get(style_info['category'], '')}\n\n"
+                    f"📝 **النص الأصلي:**\n{example}\n\n"
+                    f"✨ **بعد التطبيق ({style_info['name']}):**\n{transformed}\n\n"
+                    f"💡 هذا النمط سيُطبق على كل الإعلانات المنشورة.",
+                    buttons=[
+                        [Button.inline("🧪 معاينة كل الأنماط", b"fancy_text_preview"),
+                         Button.inline("🎯 اختيار نمط آخر", b"fancy_text_menu")],
+                        [Button.inline("🔙 رجوع للقائمة الرئيسية", b"back")]
+                    ]
+                )
 
         elif data == 'toggle_anti':
             current = get_setting('anti_detect', 'on')
