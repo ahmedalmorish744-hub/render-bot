@@ -357,170 +357,308 @@ class FancyTextEngine:
     """محرك الأنماط النصية الخارق - 26 نمط بصري مختلف"""
 
     # أسماء الأنماط مع وصفها وأيقونتها
+    # readable: هل النص يبقى مقروءاً للبشر بعد التطبيق؟ (مهم لباقي الأعضاء)
+    # arabic_compatible: هل النمط يعمل على الأحرف العربية (لا يتركها كما هي)؟
     STYLES = {
         # ── تشكيل فوق/تحت الحروف (Combining Marks) ──
+        # هذه الأنماط مقروءة تماماً وتعمل على العربية واللاتيني
         'strikethrough': {
             'name': 'Strikethrough',
             'ar': 'خط في منتصف النص',
             'icon': '✘',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'long_strikethrough': {
             'name': 'Long Strikethrough',
             'ar': 'خط طويل في المنتصف',
             'icon': '━',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'underline': {
             'name': 'Underline',
             'ar': 'خط سفلي',
             'icon': '▁',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'double_underline': {
             'name': 'Double Underline',
             'ar': 'خط سفلي مزدوج',
             'icon': '‗',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'overline': {
             'name': 'Overline',
             'ar': 'خط علوي',
             'icon': '¯',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'double_overline': {
             'name': 'Double Overline',
             'ar': 'خط علوي مزدوج',
             'icon': '̿',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'slash_through': {
             'name': 'Slash Through',
             'ar': 'شريط مائل',
             'icon': '/',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'x_above': {
             'name': 'X Above',
             'ar': 'X فوق الحرف',
             'icon': '̽',
             'category': 'combining',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء - قد يبدو مزعجاً قليلاً لكن مفهوم',
         },
         'boxed': {
             'name': 'Boxed Text',
             'ar': 'نص في صندوق',
             'icon': '☐',
             'category': 'enclosing',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'circled': {
             'name': 'Circled Text',
             'ar': 'نص في دائرة',
             'icon': '◯',
             'category': 'enclosing',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'squared': {
             'name': 'Squared Text',
             'ar': 'نص في مربع',
             'icon': '◻',
             'category': 'enclosing',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         'bubble': {
             'name': 'Bubble Text',
             'ar': 'نص فقاعي',
             'icon': 'ⓞ',
             'category': 'enclosing',
+            'readable': True,
+            'arabic_compatible': True,
+            'human_note': 'مقروء تماماً - يعمل على العربية والإنجليزية',
         },
         # ── استبدال كامل للحروف (Letter Substitution) ──
+        # هذه الأنماط تعمل فقط على الأحرف اللاتينية - العربية تبقى كما هي
         'small_caps': {
             'name': 'Small Caps',
             'ar': 'أحرف صغيرة كبيرة',
             'icon': 'A',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (العربية لا تتغير)',
         },
         'superscript': {
             'name': 'Superscript',
             'ar': 'أحرف علوية',
             'icon': 'ˣ',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (النص يصبح صغيراً)',
         },
         'subscript': {
             'name': 'Subscript',
             'ar': 'أحرف سفلية',
             'icon': 'ₓ',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (النص يصبح صغيراً)',
         },
         'monospace': {
             'name': 'Monospace',
             'ar': 'أحرف أحادية المسافة',
             'icon': '𝚡',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (العربية لا تتغير)',
         },
         'fraktur': {
             'name': 'Fraktur',
             'ar': 'خط قوطي',
             'icon': '𝔵',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (شكل قوطي مميز)',
         },
         'double_struck': {
             'name': 'Double Struck',
             'ar': 'خط مزدوج الحواف',
             'icon': '𝕩',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (حروف مفرغة)',
         },
         'script': {
             'name': 'Script',
             'ar': 'خط سكربت',
             'icon': '𝓍',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (خط مزخرف)',
         },
         'bold_script': {
             'name': 'Bold Script',
             'ar': 'سكربت عريض',
             'icon': '𝓏',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (خط مزخرف عريض)',
         },
         'fullwidth': {
             'name': 'Fullwidth',
             'ar': 'أحرف عريضة كاملة',
             'icon': 'ｘ',
             'category': 'substitution',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (أحرف عريضة)',
         },
         # ── تحويلات متقدمة (Advanced Transforms) ──
+        # تحذير: هذه الأنماط تجعل النص صعب القراءة للبشر!
         'mirrored': {
             'name': 'Mirrored Text',
             'ar': 'نص معكوس أفقي',
             'icon': '꓅',
             'category': 'advanced',
+            'readable': False,
+            'arabic_compatible': False,
+            'human_note': '⚠️ صعب القراءة للبشر - لا يوصى به للنشر العام',
         },
         'upside_down': {
             'name': 'Upside Down',
             'ar': 'نص مقلوب رأسياً',
             'icon': 'ʇ',
             'category': 'advanced',
+            'readable': False,
+            'arabic_compatible': False,
+            'human_note': '⚠️ صعب القراءة للبشر - لا يوصى به للنشر العام',
         },
         'vaporwave': {
             'name': 'Vaporwave',
             'ar': 'نص فابرويف',
             'icon': 'ｖ',
             'category': 'advanced',
+            'readable': True,
+            'arabic_compatible': False,
+            'human_note': 'مقروء - لاتيني فقط (أحرف عريضة + مسافات واسعة)',
         },
         'flip': {
             'name': 'Flip Text',
             'ar': 'نص مقلوب',
             'icon': 'Ԑ',
             'category': 'advanced',
+            'readable': False,
+            'arabic_compatible': False,
+            'human_note': '⚠️ صعب القراءة للبشر - لا يوصى به للنشر العام',
         },
         'zalgo': {
             'name': 'Glitch/Zalgo',
             'ar': 'نص معطب (زالجو)',
             'icon': '͓̽',
             'category': 'advanced',
+            'readable': False,  # يعتمد على الشدة - افتراضياً غير مقروء
+            'arabic_compatible': True,
+            'human_note': '⚠️ يعتمد على الشدة: light=مقروء، medium=مقبول، heavy/insane=صعب',
         },
     }
 
     def __init__(self):
         pass
+
+    # ──────────────────────────────────────────────────────────
+    #  دوال فحص القراءة (مهمة لباقي الأعضاء)
+    # ──────────────────────────────────────────────────────────
+
+    def is_readable(self, style_id):
+        """
+        هل النمط يُنتج نصاً مقروءاً للبشر؟
+        مهم: المستخدم يريد أن يستطيع باقي الأعضاء قراءة النص المنشور.
+        """
+        info = self.STYLES.get(style_id, {})
+        return info.get('readable', False)
+
+    def is_arabic_compatible(self, style_id):
+        """هل النمط يعمل على الأحرف العربية (لا يتركها كما هي)؟"""
+        info = self.STYLES.get(style_id, {})
+        return info.get('arabic_compatible', False)
+
+    def get_human_note(self, style_id):
+        """ملاحظة للمستخدم حول قابلية القراءة"""
+        info = self.STYLES.get(style_id, {})
+        return info.get('human_note', '')
+
+    def get_readable_styles(self):
+        """إرجاع فقط الأنماط المقروءة (الموصى بها للنشر العام)"""
+        return {k: v for k, v in self.STYLES.items() if v.get('readable', False)}
+
+    def get_unreadable_styles(self):
+        """إرجاع الأنماط غير المقروءة (تحتاج تحذير للمستخدم)"""
+        return {k: v for k, v in self.STYLES.items() if not v.get('readable', False)}
+
+    def get_recommended_styles(self, has_arabic=True):
+        """
+        إرجاع الأنماط الموصى بها:
+        - مقروءة للبشر
+        - تعمل على العربية (إذا النص يحتوي عربية)
+        """
+        result = {}
+        for k, v in self.STYLES.items():
+            if not v.get('readable', False):
+                continue
+            if has_arabic and not v.get('arabic_compatible', False):
+                # نُدرجها لكن مع ملاحظة أنها لاتينية فقط
+                pass
+            result[k] = v
+        return result
+
+    def has_arabic(self, text):
+        """فحص هل النص يحتوي على أحرف عربية"""
+        if not text:
+            return False
+        for ch in text:
+            if self._is_arabic_char(ch):
+                return True
+        return False
 
     # ──────────────────────────────────────────────────────────
     #  دوال مساعدة

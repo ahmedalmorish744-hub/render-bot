@@ -5779,36 +5779,50 @@ async def main():
 
         elif data == 'fancy_text_menu':
             # قائمة اختيار النمط - مقسمة حسب التصنيف
+            # الأنماط غير المقروءة تظهر مع علامة ⚠️ (مهم: باقي الأعضاء يجب أن يقرؤوا النص)
             current_style = get_setting('fancy_text_style', 'strikethrough')
             current_intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
-            # بناء الأزرار حسب التصنيف
             buttons = []
             categories = fancy_engine.get_categories()
             for cat_id, cat_name in categories.items():
-                # عنوان التصنيف
                 buttons.append([Button.inline(f"── {cat_name} ──", b"fancy_text_noop")])
-                # أنماط هذا التصنيف (زر لكل اثنين)
                 styles_in_cat = [(k, v) for k, v in fancy_engine.STYLES.items() if v['category'] == cat_id]
                 row = []
                 for style_id, style_info in styles_in_cat:
-                    mark = "✅" if style_id == current_style else "  "
-                    btn_text = f"{style_info['icon']} {style_info['name']}"
-                    if len(btn_text) > 22:
-                        btn_text = btn_text[:22]
+                    selected_mark = "✅ " if style_id == current_style else ""
+                    readable = style_info.get('readable', False)
+                    arabic_ok = style_info.get('arabic_compatible', False)
+                    # علامة التحذير للأنماط غير المقروءة
+                    warn = "⚠️ " if not readable else ""
+                    # علامة للأنماط التي لا تعمل على العربية
+                    lang_mark = "" if arabic_ok else "🌐 "  # 🌐 = لاتيني فقط
+                    btn_text = f"{selected_mark}{warn}{lang_mark}{style_info['icon']} {style_info['name']}"
+                    if len(btn_text) > 28:
+                        btn_text = btn_text[:28]
                     row.append(Button.inline(btn_text, f"fts_{style_id}".encode()))
                     if len(row) == 2:
                         buttons.append(row)
                         row = []
                 if row:
                     buttons.append(row)
-            # شريط التحكم بالشدة لـ Zalgo
             buttons.append([Button.inline(f"⚡ شدة Zalgo: {current_intensity}", b"fancy_text_zalgo_level")])
             buttons.append([Button.inline("🔙 رجوع للقائمة الرئيسية", b"back")])
+            # إعداد رسالة توضيحية
+            current_info = fancy_engine.STYLES.get(current_style, {})
+            current_readable = current_info.get('readable', False)
+            current_arabic = current_info.get('arabic_compatible', False)
+            status_emoji = "✅" if current_readable else "⚠️"
+            status_text = "مقروء للبشر" if current_readable else "⚠️ غير مقروء للبشر"
+            arabic_text = "✓ يدعم العربية" if current_arabic else "لاتيني فقط"
             await event.edit(
                 f"✨ **اختيار نمط Fancy Text**\n\n"
-                f"📊 النمط الحالي: **{fancy_engine.STYLES.get(current_style, {}).get('name', current_style)}**\n"
+                f"📊 النمط الحالي: **{current_info.get('name', current_style)}**\n"
+                f"👁️ قابلية القراءة: {status_emoji} {status_text}\n"
+                f"🔤 العربية: {arabic_text}\n"
                 f"⚡ شدة Zalgo: **{current_intensity}**\n\n"
-                f"اختر نمطاً من القائمة أدناه:",
+                f"ℹ️ **مفتاح الرموز:**\n"
+                f"✅ = محدد | ⚠️ = صعب القراءة | 🌐 = لاتيني فقط\n\n"
+                f"⚠️ **تنبيه:** اختر نمطاً مقروءاً لكي يستطيع باقي الأعضاء قراءة منشوراتك.",
                 buttons=buttons
             )
 
@@ -5822,7 +5836,7 @@ async def main():
             new_level = levels[(idx + 1) % len(levels)]
             set_setting('fancy_text_zalgo_intensity', new_level)
             await event.answer(f"⚡ شدة Zalgo: {new_level}")
-            # إعادة عرض قائمة Fancy Text
+            # إعادة عرض قائمة Fancy Text (نفس منطق fancy_text_menu)
             current_style = get_setting('fancy_text_style', 'strikethrough')
             buttons = []
             categories = fancy_engine.get_categories()
@@ -5831,10 +5845,14 @@ async def main():
                 styles_in_cat = [(k, v) for k, v in fancy_engine.STYLES.items() if v['category'] == cat_id]
                 row = []
                 for style_id, style_info in styles_in_cat:
-                    mark = "✅" if style_id == current_style else "  "
-                    btn_text = f"{style_info['icon']} {style_info['name']}"
-                    if len(btn_text) > 22:
-                        btn_text = btn_text[:22]
+                    selected_mark = "✅ " if style_id == current_style else ""
+                    readable = style_info.get('readable', False)
+                    arabic_ok = style_info.get('arabic_compatible', False)
+                    warn = "⚠️ " if not readable else ""
+                    lang_mark = "" if arabic_ok else "🌐 "
+                    btn_text = f"{selected_mark}{warn}{lang_mark}{style_info['icon']} {style_info['name']}"
+                    if len(btn_text) > 28:
+                        btn_text = btn_text[:28]
                     row.append(Button.inline(btn_text, f"fts_{style_id}".encode()))
                     if len(row) == 2:
                         buttons.append(row)
@@ -5847,7 +5865,9 @@ async def main():
                 f"✨ **اختيار نمط Fancy Text**\n\n"
                 f"📊 النمط الحالي: **{fancy_engine.STYLES.get(current_style, {}).get('name', current_style)}**\n"
                 f"⚡ شدة Zalgo: **{new_level}**\n\n"
-                f"اختر نمطاً من القائمة أدناه:",
+                f"ℹ️ **مفتاح الرموز:**\n"
+                f"✅ = محدد | ⚠️ = صعب القراءة | 🌐 = لاتيني فقط\n\n"
+                f"⚠️ **تنبيه:** اختر نمطاً مقروءاً لكي يستطيع باقي الأعضاء قراءة منشوراتك.",
                 buttons=buttons
             )
 
@@ -5861,6 +5881,7 @@ async def main():
             current_style = get_setting('fancy_text_style', 'strikethrough')
             current_intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
             msg = f"🧪 **معاينة كل الأنماط (26 نمط)**\n\n📝 **النص الأصلي:**\n{sample}\n\n"
+            msg += "ℹ️ الرموز: ✅ = محدد | ⚠️ = صعب القراءة للبشر | 🌐 = لاتيني فقط\n"
             categories = fancy_engine.get_categories()
             for cat_id, cat_name in categories.items():
                 msg += f"\n📂 **{cat_name}**\n"
@@ -5871,11 +5892,14 @@ async def main():
                             transformed = fancy_engine.zalgo(sample, intensity=current_intensity)
                         else:
                             transformed = fancy_engine.apply_style(sample, style_id)
-                        mark = "✅" if style_id == current_style else "  "
-                        msg += f"\n{mark} {style_info['icon']} **{style_info['name']}** ({style_info['ar']}):\n{transformed}\n"
+                        selected = "✅" if style_id == current_style else "  "
+                        readable_mark = "⚠️ " if not style_info.get('readable', False) else "✅ "
+                        lang_mark = "🌐 " if not style_info.get('arabic_compatible', False) else ""
+                        msg += f"\n{selected} {readable_mark}{lang_mark}{style_info['icon']} **{style_info['name']}** ({style_info['ar']}):\n{transformed}\n"
                     except Exception as e:
                         msg += f"\n❌ {style_info['name']}: خطأ - {e}\n"
             msg += f"\n💡 النمط الحالي محدد بـ ✅. اضغط 'اختيار النمط' للتغيير."
+            msg += f"\n⚠️ تجنب الأنماط ⚠️ لكي يقرأ باقي الأعضاء منشوراتك."
             await event.edit(
                 msg,
                 buttons=[
@@ -5898,11 +5922,23 @@ async def main():
                     transformed = fancy_engine.zalgo(example, intensity=intensity)
                 else:
                     transformed = fancy_engine.apply_style(example, style_id)
+                # فحص قابلية القراءة لعرض تحذير
+                readable = style_info.get('readable', False)
+                arabic_ok = style_info.get('arabic_compatible', False)
+                human_note = style_info.get('human_note', '')
+                if readable:
+                    if arabic_ok:
+                        readability_msg = "✅ **مقروء للبشر** ✓ يدعم العربية\nالنص يبقى مفهوماً لباقي الأعضاء."
+                    else:
+                        readability_msg = "✅ **مقروء للبشر** ⚠️ لاتيني فقط\nالعربية تبقى كما هي، اللاتيني يتحول فقط."
+                else:
+                    readability_msg = f"⚠️ **تحذير: غير مقروء للبشر**\n{human_note}\n\n🚫 باقي الأعضاء لن يستطيعوا قراءة النص بسهولة!"
                 await event.answer(f"✅ تم اختيار: {style_info['name']}")
                 await event.edit(
                     f"✅ **تم اختيار النمط: {style_info['name']}**\n\n"
                     f"📊 الوصف: {style_info['ar']}\n"
                     f"📂 التصنيف: {fancy_engine.get_categories().get(style_info['category'], '')}\n\n"
+                    f"👁️ **قابلية القراءة:**\n{readability_msg}\n\n"
                     f"📝 **النص الأصلي:**\n{example}\n\n"
                     f"✨ **بعد التطبيق ({style_info['name']}):**\n{transformed}\n\n"
                     f"💡 هذا النمط سيُطبق على كل الإعلانات المنشورة.",
