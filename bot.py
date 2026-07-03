@@ -4933,7 +4933,7 @@ def clean_database_keep_accounts():
 #  القوائم والأزرار
 # ═══════════════════════════════════════════════
 def get_main_menu():
-    """القائمة الرئيسية المبسطة - 10 أزرار بدل 39"""
+    """القائمة الرئيسية المبسطة - الانضمام التلقائي شغال دائماً"""
     ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
     ft_style = get_setting('fancy_text_style', 'strikethrough')
     ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
@@ -4941,22 +4941,23 @@ def get_main_menu():
     pending_sched = len(get_pending_scheduled_posts())
     queue_count = len(join_queue)
     queue_info = f" ({queue_count})" if queue_count > 0 else ""
+    join_stop_btn = [Button.inline("⏹ إيقاف الانضمام", b"stop_joining")] if is_joining_active else []
     return [
         # ── النشر ──
         [Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
-        [Button.inline("⚡ نشر سريع للكل", b"fast_posting"),
+        [Button.inline("⚡ نشر سريع", b"fast_posting"),
          Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
         # ── المحتوى ──
-        [Button.inline("📝 إدارة الرسائل", b"messages"),
-         Button.inline("👥 إدارة الحسابات", b"accounts")],
+        [Button.inline("📝 الرسائل", b"messages"),
+         Button.inline("👥 الحسابات", b"accounts")],
         [Button.inline(f"✨ أنماط النص {ft_status}", b"fancy_text_menu"),
          Button.inline(f"{ft_icon} {ft_name}", b"fancy_text_menu")],
         # ── الحماية الموحدة ──
         [Button.inline("🛡️ التشفير والحماية", b"protection_menu")],
-        # ── الانضمام (تلقائي - فقط تقارير وإعدادات) ──
-        [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports"),
-         Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
+        # ── الانضمام التلقائي (شغال دائماً - فقط إيقاف وتقارير) ──
+        *([join_stop_btn] if join_stop_btn else []),
+        [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports")],
         # ── عام ──
         [Button.inline("🚫 القائمة السوداء", b"blacklist"),
          Button.inline("📊 الإحصائيات", b"stats")],
@@ -6299,27 +6300,6 @@ async def main():
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
 
-        elif data == 'auto_join':
-            # الانضمام التلقائي - مُفعّل دائماً، فقط أرسل رابط
-            acc_count = len(user_clients)
-            join_interval = get_setting('join_interval', '30')
-            queue_count = len(join_queue)
-            queue_info = f"\n  📋 روابط في الطابور: {queue_count}" if queue_count > 0 else ""
-            await event.edit(
-                f"🚀 **الانضمام التلقائي**\n\n"
-                f"✅ الانضمام مُفعّل تلقائياً!\n"
-                f"📤 أرسل أي رابط تيليجرام مباشرة وسينضم البوت فوراً\n"
-                f"🔗 الأنواع المدعومة:\n"
-                f"  • https://t.me/channel\n"
-                f"  • https://t.me/+invite\n"
-                f"  • https://t.me/joinchat/xxx\n"
-                f"  • @username\n"
-                f"\n📊 الإعدادات:\n"
-                f"  ⏱ الفاصل بين الروابط: {join_interval}ث\n"
-                f"  👥 حسابات متاحة: {acc_count}{queue_info}\n\n"
-                f"💡 الروابط تُحفظ في الطابور تلقائياً إذا كان هناك انضمام جاري",
-                buttons=get_main_menu()
-            )
         elif data == 'stop_joining':
             join_cancelled = True
             await event.edit("⏹ جاري إيقاف الانضمام...", buttons=get_main_menu())
