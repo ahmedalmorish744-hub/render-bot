@@ -1,0 +1,2002 @@
+     1→     1→#!/usr/bin/env python3
+     2→     2→# -*- coding: utf-8 -*-
+     3→     3→
+     4→     4→"""
+     5→     5→╔═══════════════════════════════════════════════════════════════╗
+     6→     6→║     🤖 بوت النشر الخارق - نسخة الجدولة المتقدمة 📅⚡         ║
+     7→     7→║     نشر سريع + جدولة حقيقية + تشفير غير مرئي               ║
+     8→     8→╚═══════════════════════════════════════════════════════════════╝
+     9→     9→"""
+    10→    10→
+    11→    11→import os
+    12→    12→import re
+    13→    13→import json
+    14→    14→import time
+    15→    15→import random
+    16→    16→import sqlite3
+    17→    17→import asyncio
+    18→    18→import logging
+    19→    19→import urllib.request
+    20→    20→from threading import Thread
+    21→    21→from datetime import datetime, timedelta
+    22→    22→from collections import deque
+    23→    23→
+    24→    24→from telethon import TelegramClient, events, Button
+    25→    25→from telethon.sessions import StringSession
+    26→    26→from telethon.errors import SessionPasswordNeededError, FloodWaitError, PhoneCodeInvalidError, PhoneCodeExpiredError
+    27→    27→from telethon.tl.functions.messages import ImportChatInviteRequest
+    28→    28→from telethon.tl.functions.channels import JoinChannelRequest
+    29→    29→from telethon.tl.types import InputMediaContact, Chat, Channel, User
+    30→    30→from telethon.tl.functions.channels import GetParticipantsRequest
+    31→    31→from telethon.tl.types import ChannelParticipantsSearch
+    32→    32→from flask import Flask, jsonify
+    33→    33→
+    34→    34→# ═══════════════════════════════════════════════
+    35→    35→#  الإعدادات الأساسية
+    36→    36→# ═══════════════════════════════════════════════
+    37→    37→API_ID = int(os.environ.get('API_ID', '0'))
+    38→    38→API_HASH = os.environ.get('API_HASH', '')
+    39→    39→BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
+    40→    40→PORT = int(os.environ.get('PORT', '10000'))
+    41→    41→
+    42→    42→ADMIN_IDS_RAW = os.environ.get('ADMIN_IDS', os.environ.get('ADMIN_ID', '0'))
+    43→    43→ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(',') if x.strip().isdigit()]
+    44→    44→
+    45→    45→def is_admin(user_id):
+    46→    46→    return user_id in ADMIN_IDS
+    47→    47→
+    48→    48→if not ADMIN_IDS:
+    49→    49→    logging.error("⚠️ يجب تعيين ADMIN_IDS أو ADMIN_ID في متغيرات البيئة")
+    50→    50→    exit(1)
+    51→    51→
+    52→    52→if not all([API_ID, API_HASH, BOT_TOKEN]):
+    53→    53→    logging.error("⚠️ يجب تعيين API_ID, API_HASH, BOT_TOKEN")
+    54→    54→    exit(1)
+    55→    55→
+    56→    56→# ═══════════════════════════════════════════════
+    57→    57→#  إعداد السجلات
+    58→    58→# ═══════════════════════════════════════════════
+    59→    59→logging.basicConfig(
+    60→    60→    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    61→    61→    level=logging.INFO
+    62→    62→)
+    63→    63→logger = logging.getLogger(__name__)
+    64→    64→
+    65→    65→# ═══════════════════════════════════════════════
+    66→    66→#  المتغيرات العامة
+    67→    67→# ═══════════════════════════════════════════════
+    68→    68→user_clients = {}
+    69→    69→temp_sessions = {}
+    70→    70→is_posting_active = False
+    71→    71→is_joining_active = False
+    72→    72→scheduled_tasks = {}  # {schedule_id: asyncio.Task}
+    73→    73→
+    74→    74→# ═══════════════════════════════════════════════
+    75→    75→#  إعدادات النشر الشبحي 👻
+    76→    76→# ═══════════════════════════════════════════════
+    77→    77→GHOST_POST_ENABLED = True        # تفعيل النشر الشبحي
+    78→    78→GHOST_POST_LIFETIME = 20         # ثواني قبل التعديل/الحذف
+    79→    79→GHOST_POST_MODE = 'replace'      # 'replace' = تعديل بنص مختلف | 'delete' = حذف | 'empty' = تفريغ
+    80→    80→
+    81→    81→# ═══════════════════════════════════════════════
+    82→    82→#  قاعدة البيانات
+    83→    83→# ═══════════════════════════════════════════════
+    84→    84→DB_PATH = os.environ.get('DB_PATH', 'bot_database.db')
+    85→    85→
+    86→    86→def init_db():
+    87→    87→    conn = sqlite3.connect(DB_PATH)
+    88→    88→    c = conn.cursor()
+    89→    89→    c.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
+    90→    90→    c.execute('''CREATE TABLE IF NOT EXISTS messages (
+    91→    91→        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    92→    92→        content TEXT, media_path TEXT, msg_type TEXT DEFAULT 'text',
+    93→    93→        media_data TEXT,
+    94→    94→        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    95→    95→    c.execute('''CREATE TABLE IF NOT EXISTS accounts (
+    96→    96→        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    97→    97→        session_string TEXT, phone TEXT,
+    98→    98→        status TEXT DEFAULT 'active',
+    99→    99→        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+   100→   100→    c.execute('''CREATE TABLE IF NOT EXISTS groups (
+   101→   101→        id INTEGER PRIMARY KEY AUTOINCREMENT,
+   102→   102→        group_id INTEGER, group_name TEXT,
+   103→   103→        username TEXT, member_count INTEGER,
+   104→   104→        added_by TEXT,
+   105→   105→        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+   106→   106→    c.execute('''CREATE TABLE IF NOT EXISTS posting_history (
+   107→   107→        id INTEGER PRIMARY KEY AUTOINCREMENT,
+   108→   108→        account_id INTEGER, group_id INTEGER,
+   109→   109→        message_id INTEGER, status TEXT,
+   110→   110→        posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+   111→   111→    c.execute('''CREATE TABLE IF NOT EXISTS join_history (
+   112→   112→        id INTEGER PRIMARY KEY AUTOINCREMENT,
+   113→   113→        link TEXT, group_id INTEGER, group_name TEXT,
+   114→   114→        status TEXT, joined_by TEXT,
+   115→   115→        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+   116→   116→    c.execute('''CREATE TABLE IF NOT EXISTS blacklist (
+   117→   117→        group_id TEXT PRIMARY KEY,
+   118→   118→        group_name TEXT,
+   119→   119→        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+   120→   120→    c.execute('''CREATE TABLE IF NOT EXISTS scheduled_posts (
+   121→   121→        id INTEGER PRIMARY KEY AUTOINCREMENT,
+   122→   122→        message_id INTEGER,
+   123→   123→        post_time TEXT NOT NULL,
+   124→   124→        repeat_type TEXT DEFAULT 'once',
+   125→   125→        repeat_interval INTEGER DEFAULT 0,
+   126→   126→        post_mode TEXT DEFAULT 'fast',
+   127→   127→        status TEXT DEFAULT 'pending',
+   128→   128→        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+   129→   129→        last_run TEXT DEFAULT NULL,
+   130→   130→        next_run TEXT DEFAULT NULL)''')
+   131→   131→    if get_setting('fast_post_delay') is None:
+   132→   132→        set_setting('fast_post_delay', '3')
+   133→   133→    if get_setting('message_interval') is None:
+   134→   134→        set_setting('message_interval', '3')
+   135→   135→    if get_setting('join_interval') is None:
+   136→   136→        set_setting('join_interval', '100')
+   137→   137→    if get_setting('encryption') is None:
+   138→   138→        set_setting('encryption', 'on')
+   139→   139→    if get_setting('anti_detect') is None:
+   140→   140→        set_setting('anti_detect', 'on')
+   141→   141→    if get_setting('use_jitter') is None:
+   142→   142→        set_setting('use_jitter', 'on')
+   143→   143→    if get_setting('obfuscation_enabled') is None:
+   144→   144→        set_setting('obfuscation_enabled', 'on')
+   145→   145→    if get_setting('yaytext_messletters_obfuscation') is None:
+   146→   146→        set_setting('yaytext_messletters_obfuscation', 'on')
+   147→   147→    if get_setting('ghost_post_enabled') is None:
+   148→   148→        set_setting('ghost_post_enabled', 'on')
+   149→   149→    if get_setting('ghost_post_lifetime') is None:
+   150→   150→        set_setting('ghost_post_lifetime', '20')
+   151→   151→    if get_setting('ghost_post_mode') is None:
+   152→   152→        set_setting('ghost_post_mode', 'replace')
+   153→   153→
+   154→   154→    conn.commit()
+   155→   155→    conn.close()
+   156→   156→    logger.info("✅ قاعدة البيانات جاهزة")
+   157→   157→
+   158→   158→def get_setting(key, default=None):
+   159→   159→    conn = sqlite3.connect(DB_PATH)
+   160→   160→    c = conn.cursor()
+   161→   161→    c.execute('SELECT value FROM settings WHERE key=?', (key,))
+   162→   162→    row = c.fetchone()
+   163→   163→    conn.close()
+   164→   164→    return row[0] if row else default
+   165→   165→
+   166→   166→def set_setting(key, value):
+   167→   167→    conn = sqlite3.connect(DB_PATH)
+   168→   168→    c = conn.cursor()
+   169→   169→    c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+   170→   170→    conn.commit()
+   171→   171→    conn.close()
+   172→   172→
+   173→   173→# ═══════════════════════════════════════════════
+   174→   174→#  Blacklist helper functions
+   175→   175→# ═══════════════════════════════════════════════
+   176→   176→def add_to_blacklist(group_id, group_name=""):
+   177→   177→    conn = sqlite3.connect(DB_PATH)
+   178→   178→    c = conn.cursor()
+   179→   179→    c.execute('INSERT OR IGNORE INTO blacklist (group_id, group_name, added_at) VALUES (?, ?, ?)',
+   180→   180→              (str(group_id), group_name, datetime.now().isoformat()))
+   181→   181→    conn.commit()
+   182→   182→    conn.close()
+   183→   183→
+   184→   184→def remove_from_blacklist(group_id):
+   185→   185→    conn = sqlite3.connect(DB_PATH)
+   186→   186→    c = conn.cursor()
+   187→   187→    c.execute('DELETE FROM blacklist WHERE group_id=?', (str(group_id),))
+   188→   188→    conn.commit()
+   189→   189→    conn.close()
+   190→   190→
+   191→   191→def get_blacklisted_groups():
+   192→   192→    conn = sqlite3.connect(DB_PATH)
+   193→   193→    c = conn.cursor()
+   194→   194→    c.execute("SELECT group_id, group_name, added_at FROM blacklist ORDER BY added_at DESC")
+   195→   195→    rows = c.fetchall()
+   196→   196→    conn.close()
+   197→   197→    return rows
+   198→   198→
+   199→   199→def is_group_blacklisted(group_id):
+   200→   200→    conn = sqlite3.connect(DB_PATH)
+   201→   201→    c = conn.cursor()
+   202→   202→    c.execute('SELECT 1 FROM blacklist WHERE group_id=?', (str(group_id),))
+   203→   203→    row = c.fetchone()
+   204→   204→    conn.close()
+   205→   205→    return row is not None
+   206→   206→
+   207→   207→# ═══════════════════════════════════════════════
+   208→   208→#  Scheduled Posts helper functions (محسنة)
+   209→   209→# ═══════════════════════════════════════════════
+   210→   210→def add_scheduled_post(message_id, post_time, repeat_type='once', repeat_interval=0, post_mode='fast'):
+   211→   211→    conn = sqlite3.connect(DB_PATH)
+   212→   212→    c = conn.cursor()
+   213→   213→    c.execute('''INSERT INTO scheduled_posts (message_id, post_time, repeat_type, repeat_interval, post_mode, status, next_run)
+   214→   214→                 VALUES (?, ?, ?, ?, ?, 'pending', ?)''',
+   215→   215→              (message_id, post_time, repeat_type, repeat_interval, post_mode, post_time))
+   216→   216→    conn.commit()
+   217→   217→    sched_id = c.lastrowid
+   218→   218→    conn.close()
+   219→   219→    return sched_id
+   220→   220→
+   221→   221→def get_pending_scheduled_posts():
+   222→   222→    conn = sqlite3.connect(DB_PATH)
+   223→   223→    c = conn.cursor()
+   224→   224→    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run FROM scheduled_posts WHERE status='pending'")
+   225→   225→    rows = c.fetchall()
+   226→   226→    conn.close()
+   227→   227→    return rows
+   228→   228→
+   229→   229→def get_all_scheduled_posts():
+   230→   230→    conn = sqlite3.connect(DB_PATH)
+   231→   231→    c = conn.cursor()
+   232→   232→    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, status, last_run, next_run FROM scheduled_posts ORDER BY post_time ASC")
+   233→   233→    rows = c.fetchall()
+   234→   234→    conn.close()
+   235→   235→    return rows
+   236→   236→
+   237→   237→def update_scheduled_post(sched_id, **kwargs):
+   238→   238→    conn = sqlite3.connect(DB_PATH)
+   239→   239→    c = conn.cursor()
+   240→   240→    for key, value in kwargs.items():
+   241→   241→        c.execute(f'UPDATE scheduled_posts SET {key}=? WHERE id=?', (value, sched_id))
+   242→   242→    conn.commit()
+   243→   243→    conn.close()
+   244→   244→
+   245→   245→def update_scheduled_post_status(sched_id, status, last_run=None):
+   246→   246→    conn = sqlite3.connect(DB_PATH)
+   247→   247→    c = conn.cursor()
+   248→   248→    if last_run:
+   249→   249→        c.execute('UPDATE scheduled_posts SET status=?, last_run=? WHERE id=?', (status, last_run, sched_id))
+   250→   250→    else:
+   251→   251→        c.execute('UPDATE scheduled_posts SET status=? WHERE id=?', (status, sched_id))
+   252→   252→    conn.commit()
+   253→   253→    conn.close()
+   254→   254→
+   255→   255→def delete_scheduled_post(sched_id):
+   256→   256→    conn = sqlite3.connect(DB_PATH)
+   257→   257→    c = conn.cursor()
+   258→   258→    c.execute('DELETE FROM scheduled_posts WHERE id=?', (sched_id,))
+   259→   259→    conn.commit()
+   260→   260→    conn.close()
+   261→   261→    if sched_id in scheduled_tasks:
+   262→   262→        try:
+   263→   263→            scheduled_tasks[sched_id].cancel()
+   264→   264→        except:
+   265→   265→            pass
+   266→   266→        del scheduled_tasks[sched_id]
+   267→   267→
+   268→   268→def get_scheduled_post_by_id(sched_id):
+   269→   269→    conn = sqlite3.connect(DB_PATH)
+   270→   270→    c = conn.cursor()
+   271→   271→    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, status, last_run, next_run FROM scheduled_posts WHERE id=?", (sched_id,))
+   272→   272→    row = c.fetchone()
+   273→   273→    conn.close()
+   274→   274→    return row
+   275→   275→
+   276→   276→# ═══════════════════════════════════════════════
+   277→   277→#  خادم الويب
+   278→   278→# ═══════════════════════════════════════════════
+   279→   279→app = Flask(__name__)
+   280→   280→
+   281→   281→@app.route('/')
+   282→   282→def home():
+   283→   283→    return jsonify({
+   284→   284→        "status": "running",
+   285→   285→        "bot": "Super Poster Bot - Advanced Scheduling + Fast Post",
+   286→   286→        "uptime": datetime.now().isoformat()
+   287→   287→    })
+   288→   288→
+   289→   289→@app.route('/health')
+   290→   290→def health():
+   291→   291→    return jsonify({"status": "healthy"}), 200
+   292→   292→
+   293→   293→def run_web():
+   294→   294→    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+   295→   295→
+   296→   296→# ═══════════════════════════════════════════════
+   297→   297→#  نظام الإبقاء على البوت نشطاً
+   298→   298→# ═══════════════════════════════════════════════
+   299→   299→async def keep_alive_ping():
+   300→   300→    url = f"http://localhost:{PORT}/health"
+   301→   301→    while True:
+   302→   302→        try:
+   303→   303→            urllib.request.urlopen(url, timeout=10)
+   304→   304→            logger.info("🔄 [Keep Alive] البوت نشط")
+   305→   305→        except Exception as e:
+   306→   306→            logger.error(f"❌ [Keep Alive] خطأ: {e}")
+   307→   307→        await asyncio.sleep(240)
+   308→   308→
+   309→   309→# ═══════════════════════════════════════════════
+   310→   310→#  نظام التشفير المتطور (الحفاظ على المحتوى)
+   311→   311→# ═══════════════════════════════════════════════
+   312→   312→class UltimateAntiDetection:
+   313→   313→    """
+   314→   314→    نظام مكافحة الكشف المتطور - النص يبقى كما هو للمستخدم العادي
+   315→   315→    الروابط والمعرفات تبقى قابلة للنقر تماماً
+   316→   316→    التغييرات غير مرئية للعين المجردة فقط:
+   317→   317→    - أحرف غير مرئية بين الكلمات (ليس داخل الروابط)
+   318→   318→    - مسافات بديلة بدل المسافة العادية (ليس داخل الروابط)
+   319→   319→    - حروف لاتينية متشابهة (homoglyphs) بنسبة منخفضة (ليس داخل الروابط)
+   320→   320→    - الروابط والمعرفات تترك كما هي تماماً بدون أي تعديل
+   321→   321→    """
+   322→   322→    def __init__(self):
+   323→   323→        self.invisible_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF']
+   324→   324→        self.homoglyphs = {
+   325→   325→            'a': '\u0430', 'e': '\u0435', 'o': '\u043E',
+   326→   326→            'c': '\u0441', 'p': '\u0440', 'x': '\u0445',
+   327→   327→            'i': '\u0456', 'j': '\u0458',
+   328→   328→        }
+   329→   329→        self.sent_messages_cache = deque(maxlen=500)
+   330→   330→
+   331→   331→    def _extract_protected_segments(self, text):
+   332→   332→        """استخراج الروابط والمعرفات لحمايتها من أي تعديل"""
+   333→   333→        protected = []
+   334→   334→        for match in re.finditer(r'https?://\S+', text):
+   335→   335→            protected.append((match.start(), match.end(), match.group()))
+   336→   336→        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+   337→   337→            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+   338→   338→            if not overlaps:
+   339→   339→                protected.append((match.start(), match.end(), match.group()))
+   340→   340→        protected.sort(key=lambda x: x[0])
+   341→   341→        clean = []
+   342→   342→        for seg in protected:
+   343→   343→            if not clean:
+   344→   344→                clean.append(seg)
+   345→   345→            elif seg[0] >= clean[-1][1]:
+   346→   346→                clean.append(seg)
+   347→   347→        return clean
+   348→   348→
+   349→   349→    def _split_text_protected(self, text):
+   350→   350→        """تقسيم النص إلى أجزاء محمية (روابط/معرفات) وأجزاء عادية"""
+   351→   351→        protected = self._extract_protected_segments(text)
+   352→   352→        segments = []
+   353→   353→        last_end = 0
+   354→   354→        for start, end, original in protected:
+   355→   355→            if start > last_end:
+   356→   356→                segments.append(('text', text[last_end:start]))
+   357→   357→            segments.append(('protected', original))
+   358→   358→            last_end = end
+   359→   359→        if last_end < len(text):
+   360→   360→            segments.append(('text', text[last_end:]))
+   361→   361→        return segments
+   362→   362→
+   363→   363→    def _apply_to_text_only(self, text, func):
+   364→   364→        """تطبيق دالة تحويل على النص العادي فقط بدون الروابط والمعرفات"""
+   365→   365→        segments = self._split_text_protected(text)
+   366→   366→        result = []
+   367→   367→        for seg_type, seg_text in segments:
+   368→   368→            if seg_type == 'protected':
+   369→   369→                result.append(seg_text)  # لا نعدل الروابط والمعرفات أبداً
+   370→   370→            else:
+   371→   371→                result.append(func(seg_text))
+   372→   372→        return ''.join(result)
+   373→   373→
+   374→   374→    def apply_homoglyphs(self, text, intensity=0.06):
+   375→   375→        def _apply(seg):
+   376→   376→            result = []
+   377→   377→            for char in seg:
+   378→   378→                if char in self.homoglyphs and random.random() < intensity:
+   379→   379→                    result.append(self.homoglyphs[char])
+   380→   380→                else:
+   381→   381→                    result.append(char)
+   382→   382→            return ''.join(result)
+   383→   383→        return self._apply_to_text_only(text, _apply)
+   384→   384→
+   385→   385→    def add_invisible_between_words(self, text, intensity=0.15):
+   386→   386→        def _apply(seg):
+   387→   387→            if not seg or len(seg) < 5:
+   388→   388→                return seg
+   389→   389→            result = list(seg)
+   390→   390→            space_positions = [i for i, c in enumerate(result) if c == ' ']
+   391→   391→            if not space_positions:
+   392→   392→                return seg
+   393→   393→            insert_positions = []
+   394→   394→            for pos in space_positions:
+   395→   395→                if random.random() < intensity:
+   396→   396→                    insert_positions.append(pos + 1)
+   397→   397→            for pos in reversed(insert_positions):
+   398→   398→                inv = random.choice(self.invisible_chars)
+   399→   399→                result.insert(pos, inv)
+   400→   400→            return ''.join(result)
+   401→   401→        return self._apply_to_text_only(text, _apply)
+   402→   402→
+   403→   403→    def replace_some_spaces(self, text, intensity=0.3):
+   404→   404→        def _apply(seg):
+   405→   405→            result = list(seg)
+   406→   406→            space_positions = [i for i, c in enumerate(result) if c == ' ']
+   407→   407→            for pos in space_positions:
+   408→   408→                if random.random() < intensity:
+   409→   409→                    replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
+   410→   410→                    result[pos] = replacement
+   411→   411→            return ''.join(result)
+   412→   412→        return self._apply_to_text_only(text, _apply)
+   413→   413→
+   414→   414→    def is_duplicate_message(self, text, group_id):
+   415→   415→        cache_key = f"{group_id}:{hash(text)}"
+   416→   416→        if cache_key in self.sent_messages_cache:
+   417→   417→            return True
+   418→   418→        self.sent_messages_cache.append(cache_key)
+   419→   419→        return False
+   420→   420→
+   421→   421→    def generate_ultimate_variation(self, text, group_id=None):
+   422→   422→        if get_setting('anti_detect', 'on') != 'on':
+   423→   423→            return text
+   424→   424→        if group_id and self.is_duplicate_message(text, group_id):
+   425→   425→            text = '\u200B' + text
+   426→   426→        result = text
+   427→   427→        # الروابط والمعرفات لا يتم تعديلها أبداً - تبقى قابلة للنقر
+   428→   428→        result = self.apply_homoglyphs(result, intensity=0.06)
+   429→   429→        result = self.replace_some_spaces(result, intensity=0.3)
+   430→   430→        result = self.add_invisible_between_words(result, intensity=0.15)
+   431→   431→        return result
+   432→   432→
+   433→   433→anti_detection = UltimateAntiDetection()
+   434→   434→
+   435→   435→def encrypt_text(text, group_id=None):
+   436→   436→    return anti_detection.generate_ultimate_variation(text, group_id)
+   437→   437→
+   438→   438→class YayTextMesslettersObfuscator:
+   439→   439→    """
+   440→   440→    نظام تشويش وتشفير مدمج خارق من 6 مصادر:
+   441→   441→    - fancy-fonts-generator: 27 نمط خط Unicode
+   442→   442→    - text_unicoder: تحويلات رونية + يونانية + مقلوبة + أجزاء
+   443→   443→    - telegram-fancy-fonts-bot: أنماط Cherokee + CJK + Cyrillic
+   444→   444→    - convert-case: Zalgo + يتوسطه خط + مسطر + مقلوب
+   445→   445→    - YayText + Messletters: أنماط إضافية
+   446→   446→    - تقنيات مخصصة: أحرف غير مرئية + مسافات بديلة + تشويش عربي
+   447→   447→    
+   448→   448→    إجمالي: 45+ نمط تحويل مختلف
+   449→   449→    كل رسالة تحصل على تركيبة عشوائية مختلفة
+   450→   450→    يستحيل على بوتات الحماية التعرف على النص
+   451→   451→    """
+   452→   452→
+   453→   453→    # ══════════════════════════════════════════════
+   454→   454→    #  خريطة الحروف اللاتينية (A-Z, a-z, 0-9)
+   455→   455→    #  لكل نمط من أنماط Unicode
+   456→   456→    # ══════════════════════════════════════════════
+   457→   457→    
+   458→   458→    # ─── Mathematical Alphanumeric Symbols (11 نمط) ───
+   459→   459→    BOLD_MAP = {}
+   460→   460→    ITALIC_MAP = {}
+   461→   461→    BOLD_ITALIC_MAP = {}
+   462→   462→    MONOSPACE_MAP = {}
+   463→   463→    SCRIPT_MAP = {}
+   464→   464→    BOLD_SCRIPT_MAP = {}
+   465→   465→    FRAKTUR_MAP = {}
+   466→   466→    BOLD_FRAKTUR_MAP = {}
+   467→   467→    DOUBLE_STRUCK_MAP = {}
+   468→   468→    SANS_MAP = {}
+   469→   469→    SANS_BOLD_MAP = {}
+   470→   470→    SANS_ITALIC_MAP = {}
+   471→   471→    SANS_BOLD_ITALIC_MAP = {}
+   472→   472→    SANS_MONO_MAP = {}
+   473→   473→    
+   474→   474→    # ─── أنماط Messletters / Fancy Fonts الإضافية ───
+   475→   475→    FULLWIDTH_MAP = {}
+   476→   476→    SMALL_CAPS_MAP = {}
+   477→   477→    SUPERSCRIPT_MAP = {}
+   478→   478→    BUBBLES_MAP = {}
+   479→   479→    BUBBLE_BLACK_MAP = {}
+   480→   480→    PARENTHESIS_MAP = {}
+   481→   481→    SQUARED_MAP = {}
+   482→   482→    
+   483→   483→    # ─── أنماط Cross-Script (من telegram-fancy-fonts-bot) ───
+   484→   484→    RUSSIAN_MAP = {}
+   485→   485→    JAPANESE_MAP = {}
+   486→   486→    ARABIC_STYLE_MAP = {}  # الآن تستخدم Latin Extended آمنة (بدون Thai/Hebrew)
+   487→   487→    FAIRY_MAP = {}
+   488→   488→    WIZARD_MAP = {}
+   489→   489→    FUNKY_MAP = {}
+   490→   490→    
+   491→   491→    # ─── أنماط Diacritical (من fancy-fonts-generator) ───
+   492→   492→    ACUTE_MAP = {}
+   493→   493→    ROCK_DOTS_MAP = {}
+   494→   494→    STROKED_MAP = {}
+   495→   495→    INVERTED_MAP = {}
+   496→   496→    
+   497→   497→    # ─── أنماط آمنة جديدة (لا تكتشفها بوتات الحماية) ───
+   498→   498→    LATIN_EXTENDED_MAP = {}     # Latin Extended-A/B - تبدو طبيعية تماماً
+   499→   499→    ENCLOSED_MAP = {}           # Enclosed Alphanumerics
+   500→   500→    MEDIEVAL_MAP = {}           # Latin Extended-D Medieval
+   501→   501→    DOUBLE_STRUCK_DIGIT_MAP = {} # أرقام مزدوجة
+   502→   502→    
+   503→   503→    # ─── جداول أرقام Unicode ───
+   504→   504→    DIGIT_BOLD_MAP = {}
+   505→   505→    DIGIT_DOUBLE_STRUCK_MAP = {}
+   506→   506→    DIGIT_SANS_MAP = {}
+   507→   507→    DIGIT_SANS_BOLD_MAP = {}
+   508→   508→    DIGIT_MONO_MAP = {}
+   509→   509→    DIGIT_FULLWIDTH_MAP = {}
+   510→   510→    DIGIT_SUPERSCRIPT_MAP = {}
+   511→   511→    DIGIT_BUBBLES_MAP = {}
+   512→   512→    DIGIT_INVERTED_MAP = {}
+   513→   513→    
+   514→   514→    # ─── أنماط آمنة إضافية ضد بوتات الحماية ───
+   515→   515→    MEDIEVAL_LATIN_MAP = {}     # Latin Extended-D (أحرف قديمة آمنة)
+   516→   516→    PHONETIC_MAP = {}           # IPA Phonetic (آمنة ومتنوعة)
+   517→   517→    REGIONAL_MAP = {}           # Regional Indicator Symbols
+   518→   518→    
+   519→   519→    # ─── خريطة المقلوب (Upside-down) من text_unicoder ───
+   520→   520→    UPSIDE_DOWN_MAP = {}
+   521→   521→    
+   522→   522→    # ─── خريطة اليونانية الصوتية من text_unicoder ───
+   523→   523→    GREEK_MAP = {}
+   524→   524→    
+   525→   525→    # ─── خريطة الرونية من text_unicoder ───
+   526→   526→    RUNE_MAP = {}
+   527→   527→
+   528→   528→    def __init__(self):
+   529→   529→        self._build_maps()
+   530→   530→        self._last_style = -1
+   531→   531→        self._build_styles_list()
+   532→   532→
+   533→   533→    def _build_maps(self):
+   534→   534→        """بناء كل جداول التحويل"""
+   535→   535→        
+   536→   536→        # ═══ Mathematical Bold (U+1D400) ═══
+   537→   537→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   538→   538→            self.BOLD_MAP[c] = chr(0x1D400 + i)
+   539→   539→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   540→   540→            self.BOLD_MAP[c] = chr(0x1D41A + i)
+   541→   541→        for i in range(10):
+   542→   542→            self.BOLD_MAP[str(i)] = chr(0x1D7CE + i)
+   543→   543→            self.DIGIT_BOLD_MAP[str(i)] = chr(0x1D7CE + i)
+   544→   544→        
+   545→   545→        # ═══ Mathematical Italic (U+1D434) ═══
+   546→   546→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   547→   547→            self.ITALIC_MAP[c] = chr(0x1D434 + i)
+   548→   548→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   549→   549→            self.ITALIC_MAP[c] = chr(0x1D44E + i)
+   550→   550→        self.ITALIC_MAP['h'] = '\u210F'
+   551→   551→        
+   552→   552→        # ═══ Mathematical Bold Italic (U+1D468) ═══
+   553→   553→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   554→   554→            self.BOLD_ITALIC_MAP[c] = chr(0x1D468 + i)
+   555→   555→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   556→   556→            self.BOLD_ITALIC_MAP[c] = chr(0x1D482 + i)
+   557→   557→        
+   558→   558→        # ═══ Mathematical Monospace (U+1D670) ═══
+   559→   559→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   560→   560→            self.MONOSPACE_MAP[c] = chr(0x1D670 + i)
+   561→   561→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   562→   562→            self.MONOSPACE_MAP[c] = chr(0x1D68A + i)
+   563→   563→        for i in range(10):
+   564→   564→            self.MONOSPACE_MAP[str(i)] = chr(0x1D7F6 + i)
+   565→   565→            self.DIGIT_MONO_MAP[str(i)] = chr(0x1D7F6 + i)
+   566→   566→        
+   567→   567→        # ═══ Mathematical Script (U+1D49C) ═══
+   568→   568→        script_exc = {'B': '\u212C', 'E': '\u2130', 'F': '\u2131',
+   569→   569→                      'H': '\u210B', 'I': '\u2110', 'L': '\u2112',
+   570→   570→                      'M': '\u2133', 'R': '\u211B'}
+   571→   571→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   572→   572→            self.SCRIPT_MAP[c] = script_exc.get(c, chr(0x1D49C + i))
+   573→   573→        script_lower_exc = {'e': '\u212F', 'g': '\u210A', 'o': '\u2134'}
+   574→   574→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   575→   575→            self.SCRIPT_MAP[c] = script_lower_exc.get(c, chr(0x1D4B6 + i))
+   576→   576→        
+   577→   577→        # ═══ Mathematical Bold Script (U+1D4D0) ═══
+   578→   578→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   579→   579→            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4D0 + i)
+   580→   580→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   581→   581→            self.BOLD_SCRIPT_MAP[c] = chr(0x1D4EA + i)
+   582→   582→        
+   583→   583→        # ═══ Mathematical Fraktur (U+1D504) ═══
+   584→   584→        fraktur_exc = {'C': '\u212D', 'H': '\u210C', 'I': '\u2111',
+   585→   585→                       'R': '\u211C', 'Z': '\u2128'}
+   586→   586→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   587→   587→            self.FRAKTUR_MAP[c] = fraktur_exc.get(c, chr(0x1D504 + i))
+   588→   588→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   589→   589→            self.FRAKTUR_MAP[c] = chr(0x1D51E + i)
+   590→   590→        
+   591→   591→        # ═══ Mathematical Bold Fraktur (U+1D56C) ═══
+   592→   592→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   593→   593→            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D56C + i)
+   594→   594→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   595→   595→            self.BOLD_FRAKTUR_MAP[c] = chr(0x1D586 + i)
+   596→   596→        
+   597→   597→        # ═══ Mathematical Double-Struck (U+1D538) ═══
+   598→   598→        ds_exc = {'C': '\u2102', 'H': '\u210D', 'N': '\u2115',
+   599→   599→                  'P': '\u2119', 'Q': '\u211A', 'R': '\u211D', 'Z': '\u2124'}
+   600→   600→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   601→   601→            self.DOUBLE_STRUCK_MAP[c] = ds_exc.get(c, chr(0x1D538 + i))
+   602→   602→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   603→   603→            self.DOUBLE_STRUCK_MAP[c] = chr(0x1D552 + i)
+   604→   604→        ds_digits = {'0': '\U0001D7D8', '1': '\U0001D7D9', '2': '\U0001D7DA',
+   605→   605→                     '3': '\U0001D7DB', '4': '\U0001D7DC', '5': '\U0001D7DD',
+   606→   606→                     '6': '\U0001D7DE', '7': '\U0001D7DF', '8': '\U0001D7E0',
+   607→   607→                     '9': '\U0001D7E1'}
+   608→   608→        self.DOUBLE_STRUCK_MAP.update(ds_digits)
+   609→   609→        self.DIGIT_DOUBLE_STRUCK_MAP = dict(ds_digits)
+   610→   610→        
+   611→   611→        # ═══ Mathematical Sans-Serif (U+1D5A0) ═══
+   612→   612→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   613→   613→            self.SANS_MAP[c] = chr(0x1D5A0 + i)
+   614→   614→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   615→   615→            self.SANS_MAP[c] = chr(0x1D5BA + i)
+   616→   616→        for i in range(10):
+   617→   617→            self.SANS_MAP[str(i)] = chr(0x1D7E2 + i)
+   618→   618→            self.DIGIT_SANS_MAP[str(i)] = chr(0x1D7E2 + i)
+   619→   619→        
+   620→   620→        # ═══ Mathematical Sans-Serif Bold (U+1D5D4) ═══
+   621→   621→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   622→   622→            self.SANS_BOLD_MAP[c] = chr(0x1D5D4 + i)
+   623→   623→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   624→   624→            self.SANS_BOLD_MAP[c] = chr(0x1D5EE + i)
+   625→   625→        for i in range(10):
+   626→   626→            self.SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
+   627→   627→            self.DIGIT_SANS_BOLD_MAP[str(i)] = chr(0x1D7EC + i)
+   628→   628→        
+   629→   629→        # ═══ Mathematical Sans-Serif Italic (U+1D608) ═══
+   630→   630→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   631→   631→            self.SANS_ITALIC_MAP[c] = chr(0x1D608 + i)
+   632→   632→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   633→   633→            self.SANS_ITALIC_MAP[c] = chr(0x1D622 + i)
+   634→   634→        
+   635→   635→        # ═══ Mathematical Sans-Serif Bold Italic (U+1D63C) ═══
+   636→   636→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   637→   637→            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D63C + i)
+   638→   638→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   639→   639→            self.SANS_BOLD_ITALIC_MAP[c] = chr(0x1D656 + i)
+   640→   640→        
+   641→   641→        # ═══ Sans-Serif Monospace ═══
+   642→   642→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   643→   643→            self.SANS_MONO_MAP[c] = chr(0x1D6A8 + i)
+   644→   644→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   645→   645→            self.SANS_MONO_MAP[c] = chr(0x1D6C2 + i)
+   646→   646→        
+   647→   647→        # ═══ Fullwidth (U+FF21) ═══
+   648→   648→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   649→   649→            self.FULLWIDTH_MAP[c] = chr(0xFF21 + i)
+   650→   650→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   651→   651→            self.FULLWIDTH_MAP[c] = chr(0xFF41 + i)
+   652→   652→        for i in range(10):
+   653→   653→            self.FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
+   654→   654→            self.DIGIT_FULLWIDTH_MAP[str(i)] = chr(0xFF10 + i)
+   655→   655→        
+   656→   656→        # ═══ Small Caps ═══
+   657→   657→        self.SMALL_CAPS_MAP = {
+   658→   658→            'A': '\u1D00', 'B': '\u0299', 'C': '\u1D04', 'D': '\u1D05',
+   659→   659→            'E': '\u1D07', 'F': '\uA730', 'G': '\u0262', 'H': '\u029C',
+   660→   660→            'I': '\u026A', 'J': '\u1D0A', 'K': '\u1D0B', 'L': '\u029F',
+   661→   661→            'M': '\u1D0D', 'N': '\u0274', 'O': '\u1D0F', 'P': '\u1D18',
+   662→   662→            'Q': '\u01EB', 'R': '\u0280', 'S': '\uA731', 'T': '\u1D1B',
+   663→   663→            'U': '\u1D1C', 'V': '\u1D20', 'W': '\u1D21', 'X': '\uA78D',
+   664→   664→            'Y': '\u028F', 'Z': '\u1D22',
+   665→   665→        }
+   666→   666→        
+   667→   667→        # ═══ Superscript (من fancy-fonts-generator) ═══
+   668→   668→        sup_lower = 'ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖqʳˢᵗᵘᵛʷˣʸᶻ'
+   669→   669→        sup_upper = 'ᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾQᴿˢᵀᵁⱽᵂˣʸᶻ'
+   670→   670→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   671→   671→            self.SUPERSCRIPT_MAP[c] = sup_lower[i]
+   672→   672→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   673→   673→            self.SUPERSCRIPT_MAP[c] = sup_upper[i]
+   674→   674→        sup_digits = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+   675→   675→        for i in range(10):
+   676→   676→            self.SUPERSCRIPT_MAP[str(i)] = sup_digits[i]
+   677→   677→            self.DIGIT_SUPERSCRIPT_MAP[str(i)] = sup_digits[i]
+   678→   678→        
+   679→   679→        # ═══ Bubbles / Circled (U+24D0) ═══
+   680→   680→        bub_lower = 'ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ'
+   681→   681→        bub_upper = 'ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ'
+   682→   682→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   683→   683→            self.BUBBLES_MAP[c] = bub_lower[i]
+   684→   684→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   685→   685→            self.BUBBLES_MAP[c] = bub_upper[i]
+   686→   686→        bub_digits = '⓪①②③④⑤⑥⑦⑧⑨'
+   687→   687→        for i in range(10):
+   688→   688→            self.BUBBLES_MAP[str(i)] = bub_digits[i]
+   689→   689→            self.DIGIT_BUBBLES_MAP[str(i)] = bub_digits[i]
+   690→   690→        
+   691→   691→        # ═══ Bubble Black / Negative Circled (U+1F150) ═══
+   692→   692→        bb_lower = '🅐🅑🅒🅓🅔🅕🅖🅗🅘🅙🅚🅛🅜🅝🅞🅟🅠🅡🅢🅣🅤🅥🅦🅧🅨🅩'
+   693→   693→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   694→   694→            self.BUBBLE_BLACK_MAP[c] = bb_lower[i]
+   695→   695→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   696→   696→            self.BUBBLE_BLACK_MAP[c] = bb_lower[i]
+   697→   697→        
+   698→   698→        # ═══ Parenthesis (U+249C) ═══
+   699→   699→        par_lower = '⒜⒝⒞⒟⒠⒡⒢⒣⒤⒥⒦⒧⒨⒩⒪⒫⒬⒭⒮⒯⒰⒱⒲⒳⒴⒵'
+   700→   700→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   701→   701→            self.PARENTHESIS_MAP[c] = par_lower[i]
+   702→   702→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   703→   703→            self.PARENTHESIS_MAP[c] = par_lower[i]
+   704→   704→        
+   705→   705→        # ═══ Squared (U+1F130) ═══
+   706→   706→        sq_chars = '🄰🄱🄲🄳🄴🄵🄶🄷🄸🄹🄺🄻🄼🄽🄾🄿🅀🅁🅂🅃🅄🅅🅆🅇🅈🅉'
+   707→   707→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   708→   708→            self.SQUARED_MAP[c] = sq_chars[i]
+   709→   709→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   710→   710→            self.SQUARED_MAP[c] = sq_chars[i]
+   711→   711→        
+   712→   712→        # ═══ Cross-Script: Russian (Cyrillic lookalikes) ═══
+   713→   713→        rus_lower = 'абcдёfgнїjкгѫпѳpфя$тцѵщжчз'
+   714→   714→        rus_upper = 'АБCДЄFGHЇJКГѪЙѲPФЯ$TЦѴШЖЧЗ'
+   715→   715→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   716→   716→            self.RUSSIAN_MAP[c] = rus_lower[i]
+   717→   717→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   718→   718→            self.RUSSIAN_MAP[c] = rus_upper[i]
+   719→   719→        
+   720→   720→        # ═══ Cross-Script: Japanese (CJK lookalikes) ═══
+   721→   721→        jap_chars = '卂乃匚ᗪ乇千Ꮆ卄丨ﾌҜㄥ爪几ㄖ卩Ɋ尺丂ㄒㄩᐯ山乂ㄚ乙'
+   722→   722→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   723→   723→            self.JAPANESE_MAP[c] = jap_chars[i]
+   724→   724→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   725→   725→            self.JAPANESE_MAP[c] = jap_chars[i]
+   726→   726→        
+   727→   727→        # ═══ Cross-Script: Safe Mixed (Latin Extended + IPA + Latin Extended-B) ═══
+   728→   728→        # أنماط آمنة لا تكتشفها بوتات الحماية - بدون Thai/Hebrew/Persian
+   729→   729→        safe_mixed_lower = 'ąƀčđḗᵮḡḩḭɉꝁḹḿƞǿᵽɋřşŧṵṽẇẋẏž'
+   730→   730→        safe_mixed_upper = 'ȺɃȻĐḔᵮḠḨḬɈꝀḺḾȠǾṔɊŘŞŦṲṼẄẌỲŽ'
+   731→   731→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   732→   732→            self.ARABIC_STYLE_MAP[c] = safe_mixed_lower[i]
+   733→   733→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   734→   734→            self.ARABIC_STYLE_MAP[c] = safe_mixed_upper[i]
+   735→   735→        
+   736→   736→        # ═══ Cross-Script: Fairy (Cherokee) ═══
+   737→   737→        fairy_chars = 'ᏗᏰፈᎴᏋᎦᎶᏂᎥᏠᏦᏝᎷᏁᎧᎮᎤᏒᏕᏖᏬᏉᏇጀᎩፚ'
+   738→   738→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   739→   739→            self.FAIRY_MAP[c] = fairy_chars[i]
+   740→   740→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   741→   741→            self.FAIRY_MAP[c] = fairy_chars[i]
+   742→   742→        
+   743→   743→        # ═══ Cross-Script: Wizard (IPA/Armenian) ═══
+   744→   744→        wiz_chars = 'ǟɮƈɖɛʄɢɦɨʝӄʟʍռօքզʀֆȶʊʋաӼʏʐ'
+   745→   745→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   746→   746→            self.WIZARD_MAP[c] = wiz_chars[i]
+   747→   747→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   748→   748→            self.WIZARD_MAP[c] = wiz_chars[i]
+   749→   749→        
+   750→   750→        # ═══ Cross-Script: Funky (Greek mix) ═══
+   751→   751→        funk_chars = 'αв¢∂єƒgнιנкℓмησρqяѕтυνωχуz'
+   752→   752→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   753→   753→            self.FUNKY_MAP[c] = funk_chars[i]
+   754→   754→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   755→   755→            self.FUNKY_MAP[c] = funk_chars[i]
+   756→   756→        
+   757→   757→        # ═══ Diacritical: Acute ═══
+   758→   758→        acute_lower = 'ábćdéfǵhíjḱĺḿńőṕqŕśtúvẃxӳź'
+   759→   759→        acute_upper = 'ÁBĆDÉFǴHÍJḰĹḾŃŐṔQŔŚTŰVẂXӲŹ'
+   760→   760→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   761→   761→            self.ACUTE_MAP[c] = acute_lower[i]
+   762→   762→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   763→   763→            self.ACUTE_MAP[c] = acute_upper[i]
+   764→   764→        
+   765→   765→        # ═══ Diacritical: RockDots (Umlaut) ═══
+   766→   766→        rock_lower = 'äḅċḋëḟġḧïjḳḷṁṅöṗqṛṡẗüṿẅẍÿż'
+   767→   767→        rock_upper = 'ÄḄĊḊËḞĠḦÏJḲḶṀṄÖṖQṚṠṪÜṾẄẌŸŻ'
+   768→   768→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   769→   769→            self.ROCK_DOTS_MAP[c] = rock_lower[i]
+   770→   770→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   771→   771→            self.ROCK_DOTS_MAP[c] = rock_upper[i]
+   772→   772→        
+   773→   773→        # ═══ Diacritical: Stroked (Barred) ═══
+   774→   774→        stroke_lower = 'Ⱥƀȼđɇfǥħɨɉꝁłmnøᵽꝗɍsŧᵾvwxɏƶ'
+   775→   775→        stroke_upper = 'ȺɃȻĐɆFǤĦƗɈꝀŁMNØⱣꝖɌSŦᵾVWXɎƵ'
+   776→   776→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   777→   777→            self.STROKED_MAP[c] = stroke_lower[i]
+   778→   778→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   779→   779→            self.STROKED_MAP[c] = stroke_upper[i]
+   780→   780→        
+   781→   781→        # ═══ Inverted / Upside-down ═══
+   782→   782→        inv_lower = 'ɐqɔpǝɟƃɥıɾʞןɯuodbɹsʇnʌʍxʎz'
+   783→   783→        inv_upper = '∀ᗺƆᗡƎℲ⅁HIſꓘ˥WNOԀტᴚS⊥∩ΛMX⅄Z'
+   784→   784→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   785→   785→            self.INVERTED_MAP[c] = inv_lower[i]
+   786→   786→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   787→   787→            self.INVERTED_MAP[c] = inv_upper[i]
+   788→   788→        inv_digits = '0ƖᘔƐ߈95ㄥ86'
+   789→   789→        for i in range(10):
+   790→   790→            self.INVERTED_MAP[str(i)] = inv_digits[i]
+   791→   791→            self.DIGIT_INVERTED_MAP[str(i)] = inv_digits[i]
+   792→   792→        
+   793→   793→        # ═══ Homoglyphs (Cyrillic/Greek مشابهة) ═══
+   794→   794→        self.HOMOGLYPH_MAP = {
+   795→   795→            'a': '\u0430', 'A': '\u0410', 'c': '\u0441', 'C': '\u0421',
+   796→   796→            'e': '\u0435', 'E': '\u0415', 'o': '\u043E', 'O': '\u041E',
+   797→   797→            'p': '\u0440', 'P': '\u0420', 'x': '\u0445', 'X': '\u0425',
+   798→   798→            'y': '\u0443', 'Y': '\u0423', 'i': '\u0456', 'I': '\u0406',
+   799→   799→            'j': '\u0458', 'J': '\u0408', 's': '\u0455', 'S': '\u0405',
+   800→   800→            'k': '\u043A', 'K': '\u041A', 'H': '\u041D', 'T': '\u0422',
+   801→   801→            'M': '\u041C', 'B': '\u0412', 'g': '\u0493', 'G': '\u0492',
+   802→   802→            'h': '\u04BB', 'b': '\u0431', 'd': '\u0501', 'u': '\u04AF',
+   803→   803→        }
+   804→   804→        
+   805→   805→        # ═══ Upside-down map (من text_unicoder) ═══
+   806→   806→        self.UPSIDE_DOWN_MAP = {
+   807→   807→            'a': 'ɐ', 'b': 'q', 'c': 'ɔ', 'd': 'p', 'e': 'ǝ',
+   808→   808→            'f': 'ɟ', 'g': 'ᵷ', 'h': 'ɥ', 'i': 'ᴉ', 'j': 'ɾ',
+   809→   809→            'k': 'ʞ', 'm': 'ɯ', 'n': 'u', 'r': 'ɹ', 't': 'ʇ',
+   810→   810→            'v': 'ʌ', 'w': 'ʍ', 'y': 'ʎ', '.': '˙', ',': 'ʻ',
+   811→   811→            '!': '¡', '?': '¿', '&': '⅋', 'A': '∀', 'C': 'Ɔ',
+   812→   812→            'E': 'Ǝ', 'F': 'Ⅎ', 'G': '⅍', 'J': 'ſ', 'L': '⅂',
+   813→   813→            'M': 'Ɯ', 'P': 'd', 'R': 'ᴚ', 'T': 'ꚱ', 'U': '∩',
+   814→   814→            'V': 'Λ', 'W': 'M', 'Y': '⅄', '1': 'ↂ', '3': 'Ɛ',
+   815→   815→        }
+   816→   816→        
+   817→   817→        # ═══ Greek phonemic map (من text_unicoder) ═══
+   818→   818→        self.GREEK_MAP = {
+   819→   819→            'a': 'α', 'A': 'Α', 'b': 'β', 'B': 'Β', 'g': 'γ', 'G': 'Γ',
+   820→   820→            'd': 'δ', 'D': 'Δ', 'e': 'ε', 'E': 'Ε', 'z': 'ζ', 'Z': 'Ζ',
+   821→   821→            'h': 'η', 'H': 'Η', 's': 'σ', 'S': 'Σ', 't': 'τ', 'T': 'Τ',
+   822→   822→            'y': 'υ', 'Y': 'Υ', 'f': 'φ', 'F': 'Φ', 'c': 'χ', 'C': 'Χ',
+   823→   823→            'w': 'ψ', 'W': 'Ψ', 'u': 'ω', 'U': 'Ω', 'i': 'ι', 'I': 'Ι',
+   824→   824→            'k': 'κ', 'K': 'Κ', 'l': 'λ', 'L': 'Λ', 'm': 'μ', 'M': 'Μ',
+   825→   825→            'n': 'ν', 'N': 'Ν', 'o': 'ο', 'O': 'Ο', 'p': 'π', 'P': 'Π',
+   826→   826→            'r': 'ρ', 'R': 'Ρ', 'q': 'κ', 'Q': 'Κ', 'j': 'ι', 'J': 'Ι',
+   827→   827→            'v': '∇', 'x': 'χ', 'X': 'Χ',
+   828→   828→        }
+   829→   829→        
+   830→   830→        # ═══ Rune map (Elder Futhark من text_unicoder) ═══
+   831→   831→        self.RUNE_MAP = {
+   832→   832→            'a': 'ᚨ', 'A': 'ᚨ', 'b': 'ᛒ', 'B': 'ᛒ', 'c': 'ᚲ', 'C': 'ᚲ',
+   833→   833→            'd': 'ᛞ', 'D': 'ᛞ', 'e': 'ᛖ', 'E': 'ᛖ', 'f': 'ᚠ', 'F': 'ᚠ',
+   834→   834→            'g': 'ᚷ', 'G': 'ᚷ', 'h': 'ᚺ', 'H': 'ᚺ', 'i': 'ᛁ', 'I': 'ᛁ',
+   835→   835→            'j': 'ᛃ', 'J': 'ᛃ', 'k': 'ᚲ', 'K': 'ᚲ', 'l': 'ᛚ', 'L': 'ᛚ',
+   836→   836→            'm': 'ᛗ', 'M': 'ᛗ', 'n': 'ᚾ', 'N': 'ᚾ', 'o': 'ᛟ', 'O': 'ᛟ',
+   837→   837→            'p': 'ᛈ', 'P': 'ᛈ', 'q': 'ᚲ', 'r': 'ᚱ', 'R': 'ᚱ',
+   838→   838→            's': 'ᛊ', 'S': 'ᛊ', 't': 'ᛏ', 'T': 'ᛏ', 'u': 'ᚢ', 'U': 'ᚢ',
+   839→   839→            'v': 'ᚹ', 'V': 'ᚹ', 'w': 'ᚹ', 'W': 'ᚹ', 'x': 'ᚲᛊ', 'X': 'ᚲᛊ',
+   840→   840→            'y': 'ᛁ', 'Y': 'ᛁ', 'z': 'ᛉ', 'Z': 'ᛉ',
+   841→   841→        }
+   842→   842→        
+   843→   843→        # ═══ Latin Extended-A/B (آمنة تماماً - تبدو لاتينية عادية) ═══
+   844→   844→        # هذه الأحرف من نطاق Latin Extended ولا تراقبها أي بوت حماية
+   845→   845→        ext_lower = 'āƀčḋēḟḡħīĵķĺṁņōṗɋŗşţūṽẁẋȳż'
+   846→   846→        ext_upper = 'ĀɃČḊĒḞḠĦĪĴĶĹṀŅŌṖɊŖŞŢŪṼẀẊȲŻ'
+   847→   847→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   848→   848→            self.LATIN_EXTENDED_MAP[c] = ext_lower[i]
+   849→   849→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   850→   850→            self.LATIN_EXTENDED_MAP[c] = ext_upper[i]
+   851→   851→        for i in range(10):
+   852→   852→            self.LATIN_EXTENDED_MAP[str(i)] = chr(0xFF10 + i)
+   853→   853→        
+   854→   854→        # ═══ Enclosed Alphanumerics (U+2460) ═══
+   855→   855→        enc_digits = '⓪①②③④⑤⑥⑦⑧⑨'
+   856→   856→        enc_upper = 'ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ'
+   857→   857→        enc_lower = 'ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ'
+   858→   858→        for i in range(10):
+   859→   859→            self.ENCLOSED_MAP[str(i)] = enc_digits[i]
+   860→   860→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   861→   861→            self.ENCLOSED_MAP[c] = enc_upper[i]
+   862→   862→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   863→   863→            self.ENCLOSED_MAP[c] = enc_lower[i]
+   864→   864→        
+   865→   865→        # ═══ Medieval Latin (Latin Extended-D) - آمن ومتنوع ═══
+   866→   866→        med_lower = 'ꜳƀꜵꜷꜹꜻꜽꜿꝁꝃꝅꝇꝉꝋꝍꝏꝑꝓꝕꝗꝙꝛꝝꝟꝡꝣ'
+   867→   867→        med_upper = 'ꜲɃꜴꜶꜸꜺꜼꜾꝀꝂꝄꝆꝈꝊꝌꝎꝐꝒꝔꝖꝘꝚꝜꝞꝠꝢ'
+   868→   868→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   869→   869→            self.MEDIEVAL_MAP[c] = med_lower[i] if i < len(med_lower) else c
+   870→   870→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   871→   871→            self.MEDIEVAL_MAP[c] = med_upper[i] if i < len(med_upper) else c
+   872→   872→        
+   873→   873→        # ═══ Latin Extended-B/C/D Mixed (آمن تماماً - بناء برمجي) ═══
+   874→   874→        ml_lower_codes = [0x2C7F, 0x0180, 0x0292, 0x0256, 0x0117, 0x0192, 0x0260, 0x0127, 0x026A, 0x0135, 0x0137, 0x013A, 0x1E3F, 0x0144, 0x01A1, 0x1E57, 0x02A0, 0x0159, 0x015F, 0x0163, 0x01B4, 0x1E7D, 0x1E8B, 0x028F, 0x1E91, 0x017C]
+   875→   875→        ml_upper_codes = [0x2C7E, 0x0243, 0x0186, 0x018A, 0x0116, 0x0191, 0x0193, 0x0126, 0x0197, 0x0134, 0x0136, 0x0139, 0x1E3E, 0x0143, 0x01A0, 0x1E56, 0x02A0, 0x0158, 0x015E, 0x0162, 0x01B3, 0x1E7C, 0x1E8A, 0x028E, 0x1E90, 0x017B]
+   876→   876→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   877→   877→            self.MEDIEVAL_LATIN_MAP[c] = chr(ml_lower_codes[i])
+   878→   878→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   879→   879→            self.MEDIEVAL_LATIN_MAP[c] = chr(ml_upper_codes[i])
+   880→   880→        
+   881→   881→        # ═══ IPA Phonetic (مناطق آمنة بالكامل) ═══
+   882→   882→        phon_lower = 'ɐʙɔɖɛƒɢɥɪʝʞʟɱɲɵɸʔɾʃʇʊvʍχʎʑ'
+   883→   883→        phon_upper = 'ⱯƁƆƊƐƑƓĦƗɈĶⱠⱮƝØƤɊɌƧƮɄɅⱲӾɎƵ'
+   884→   884→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   885→   885→            self.PHONETIC_MAP[c] = phon_lower[i]
+   886→   886→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   887→   887→            self.PHONETIC_MAP[c] = phon_upper[i]
+   888→   888→        
+   889→   889→        # ═══ Regional Indicator Symbols (🇦🇧🇨...) ═══
+   890→   890→        # كل حرف = حرفين Regional Indicator - تبدو كأحرف علم
+   891→   891→        for i, c in enumerate('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+   892→   892→            self.REGIONAL_MAP[c] = chr(0x1F1E6 + i) + chr(0x1F1E6 + (i + 5) % 26)
+   893→   893→        for i, c in enumerate('abcdefghijklmnopqrstuvwxyz'):
+   894→   894→            self.REGIONAL_MAP[c] = chr(0x1F1E6 + i) + chr(0x1F1E6 + (i + 5) % 26)
+   895→   895→        
+   896→   896→        # ═══ Arabic Smart Obfuscation Maps (NFD Decomposition) ═══
+   897→   897→        # تحويل النماذج المركبة إلى مفككة - يبدو متطابقاً مرئياً لكن الكود مختلف
+   898→   898→        # هذه التقنية أقوى من الأحرف غير المرئية لأنها تغير كود الحرف نفسه
+   899→   899→        self.ARABIC_DECOMPOSE_MAP = {
+   900→   900→            'أ': ('ا', '\u0654'),  # ALEF HAMZA ABOVE → ALEF + HAMZA ABOVE combining
+   901→   901→            'إ': ('ا', '\u0655'),  # ALEF HAMZA BELOW → ALEF + HAMZA BELOW combining
+   902→   902→            'آ': ('ا', '\u0653'),  # ALEF MADDA ABOVE → ALEF + MADDA ABOVE combining
+   903→   903→            'ؤ': ('و', '\u0654'),  # WAW HAMZA → WAW + HAMZA ABOVE combining
+   904→   904→            'ئ': ('ي', '\u0654'),  # YEH HAMZA → YEH + HAMZA ABOVE combining
+   905→   905→        }
+   906→   906→        
+   907→   907→        # Arabic-Indic digits (تبدو نفس الأرقام لكن بكود مختلف)
+   908→   908→        self.ARABIC_DIGIT_MAP = {
+   909→   909→            '0': '\u0660', '1': '\u0661', '2': '\u0662', '3': '\u0663', '4': '\u0664',
+   910→   910→            '5': '\u0665', '6': '\u0666', '7': '\u0667', '8': '\u0668', '9': '\u0669',
+   911→   911→        }
+   912→   912→        
+   913→   913→        # Extended Arabic digits (أرقام أردية - آمنة ومختلفة)
+   914→   914→        self.ARABIC_EXTENDED_DIGIT_MAP = {
+   915→   915→            '0': '\u06F0', '1': '\u06F1', '2': '\u06F2', '3': '\u06F3', '4': '\u06F4',
+   916→   916→            '5': '\u06F5', '6': '\u06F6', '7': '\u06F7', '8': '\u06F8', '9': '\u06F9',
+   917→   917→        }
+   918→   918→
+   919→   919→    def _build_styles_list(self):
+   920→   920→        """بناء قائمة كل الأنماط المتاحة (50+ نمط)"""
+   921→   921→        self.STYLES = [
+   922→   922→            ('bold', self.BOLD_MAP),
+   923→   923→            ('italic', self.ITALIC_MAP),
+   924→   924→            ('bold_italic', self.BOLD_ITALIC_MAP),
+   925→   925→            ('monospace', self.MONOSPACE_MAP),
+   926→   926→            ('script', self.SCRIPT_MAP),
+   927→   927→            ('bold_script', self.BOLD_SCRIPT_MAP),
+   928→   928→            ('fraktur', self.FRAKTUR_MAP),
+   929→   929→            ('bold_fraktur', self.BOLD_FRAKTUR_MAP),
+   930→   930→            ('double_struck', self.DOUBLE_STRUCK_MAP),
+   931→   931→            ('sans', self.SANS_MAP),
+   932→   932→            ('sans_bold', self.SANS_BOLD_MAP),
+   933→   933→            ('bubbles', self.BUBBLES_MAP),
+   934→   934→            ('bubble_black', self.BUBBLE_BLACK_MAP),
+   935→   935→            ('parenthesis', self.PARENTHESIS_MAP),
+   936→   936→            ('squared', self.SQUARED_MAP),
+   937→   937→            ('superscript', self.SUPERSCRIPT_MAP),
+   938→   938→            ('fullwidth', self.FULLWIDTH_MAP),
+   939→   939→            ('russian', self.RUSSIAN_MAP),
+   940→   940→            ('japanese', self.JAPANESE_MAP),
+   941→   941→            ('arabic_style', self.ARABIC_STYLE_MAP),  # الآن آمنة - Latin Extended
+   942→   942→            ('fairy', self.FAIRY_MAP),
+   943→   943→            ('wizard', self.WIZARD_MAP),
+   944→   944→            ('funky', self.FUNKY_MAP),
+   945→   945→            ('acute', self.ACUTE_MAP),
+   946→   946→            ('rock_dots', self.ROCK_DOTS_MAP),
+   947→   947→            ('stroked', self.STROKED_MAP),
+   948→   948→            ('small_caps', self.SMALL_CAPS_MAP),
+   949→   949→            ('sans_italic', self.SANS_ITALIC_MAP),
+   950→   950→            ('sans_bold_italic', self.SANS_BOLD_ITALIC_MAP),
+   951→   951→            ('sans_mono', self.SANS_MONO_MAP),
+   952→   952→            # ─── أنماط آمنة جديدة (لا تكتشفها بوتات الحماية) ───
+   953→   953→            ('latin_extended', self.LATIN_EXTENDED_MAP),
+   954→   954→            ('enclosed', self.ENCLOSED_MAP),
+   955→   955→            ('medieval', self.MEDIEVAL_MAP),
+   956→   956→            ('medieval_latin', self.MEDIEVAL_LATIN_MAP),
+   957→   957→            ('phonetic', self.PHONETIC_MAP),
+   958→   958→            ('regional', self.REGIONAL_MAP),
+   959→   959→        ]
+   960→   960→        # Special: -1 strikethrough, -2 underline, -3 inverted
+   961→   961→        # -4 zalgo, -5 homoglyphs, -6 greek, -7 rune, -8 upside_down, -9 random_combo
+   962→   962→
+   963→   963→    def _apply_map(self, text, char_map):
+   964→   964→        result = []
+   965→   965→        for c in text:
+   966→   966→            result.append(char_map[c] if c in char_map else c)
+   967→   967→        return ''.join(result)
+   968→   968→
+   969→   969→    def _apply_map_preserve_digits(self, text, char_map):
+   970→   970→        result = []
+   971→   971→        for c in text:
+   972→   972→            if c.isdigit():
+   973→   973→                result.append(c)
+   974→   974→            elif c in char_map:
+   975→   975→                result.append(char_map[c])
+   976→   976→            else:
+   977→   977→                result.append(c)
+   978→   978→        return ''.join(result)
+   979→   979→
+   980→   980→    def _apply_arabic_smart_obfuscation(self, text, intensity=0.35):
+   981→   981→        """تطبيق تشويش عربي ذكي يحافظ على المقروئية تماماً
+   982→   982→        
+   983→   983→        تقنيات:
+   984→   984→        1. تحويل النماذج المركبة إلى مفككة (NFC → NFD) - يبدو متطابقاً مرئياً
+   985→   985→        2. أرقام عربية-هندية بدل اللاتينية
+   986→   986→        3. أحرف غير مرئية استراتيجية (متعددة الأنواع)
+   987→   987→        4. مسافات بديلة متنوعة
+   988→   988→        5. علامات RTL/ALM خفية
+   989→   989→        """
+   990→   990→        if not text:
+   991→   991→            return text
+   992→   992→        
+   993→   993→        # ═══ 1. NFD Decomposition - يبدو متطابقاً لكن الكود مختلف ═══
+   994→   994→        result = []
+   995→   995→        for c in text:
+   996→   996→            if c in self.ARABIC_DECOMPOSE_MAP and random.random() < intensity:
+   997→   997→                base, combining = self.ARABIC_DECOMPOSE_MAP[c]
+   998→   998→                result.append(base)
+   999→   999→                result.append(combining)
+  1000→  1000→            else:
+  1001→  1001→                result.append(c)
+  1002→  1002→        text = ''.join(result)
+  1003→  1003→        
+  1004→  1004→        # ═══ 2. Arabic-Indic digits (أرقام مفردة فقط وليس أرقام هواتف) ═══
+  1005→  1005→        result = list(text)
+  1006→  1006→        prev_was_digit = False
+  1007→  1007→        for i, c in enumerate(result):
+  1008→  1008→            if c.isdigit() and c in self.ARABIC_DIGIT_MAP:
+  1009→  1009→                if prev_was_digit:
+  1010→  1010→                    prev_was_digit = True
+  1011→  1011→                    continue
+  1012→  1012→                if random.random() < 0.25:
+  1013→  1013→                    digit_map = random.choice([self.ARABIC_DIGIT_MAP, self.ARABIC_EXTENDED_DIGIT_MAP])
+  1014→  1014→                    result[i] = digit_map[c]
+  1015→  1015→                prev_was_digit = True
+  1016→  1016→            else:
+  1017→  1017→                prev_was_digit = False
+  1018→  1018→        text = ''.join(result)
+  1019→  1019→        
+  1020→  1020→        # ═══ 3. أحرف غير مرئية احترافية (متعددة الأنواع) ═══
+  1021→  1021→        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+  1022→  1022→        
+  1023→  1023→        # حرف غير مرئي في البداية
+  1024→  1024→        text = random.choice(inv_chars[:4]) + text
+  1025→  1025→        
+  1026→  1026→        # أحرف غير مرئية بين الكلمات العربية
+  1027→  1027→        words = text.split(' ')
+  1028→  1028→        new_words = []
+  1029→  1029→        for i, w in enumerate(words):
+  1030→  1030→            new_words.append(w)
+  1031→  1031→            if i < len(words) - 1 and random.random() < 0.2:
+  1032→  1032→                new_words.append(random.choice(inv_chars[:4]))
+  1033→  1033→        text = ' '.join(new_words)
+  1034→  1034→        
+  1035→  1035→        # أحرف غير مرئية بعد علامات الترقيم العربية
+  1036→  1036→        arabic_punct = '،.؛:!؟-'
+  1037→  1037→        result = list(text)
+  1038→  1038→        insert_positions = []
+  1039→  1039→        for i, c in enumerate(result):
+  1040→  1040→            if c in arabic_punct and random.random() < 0.25:
+  1041→  1041→                insert_positions.append((i + 1, random.choice(inv_chars[:4])))
+  1042→  1042→        for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
+  1043→  1043→            result.insert(pos, char)
+  1044→  1044→        text = ''.join(result)
+  1045→  1045→        
+  1046→  1046→        # ═══ 4. مسافات بديلة متنوعة ═══
+  1047→  1047→        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007', '\u2006', '\u2005']
+  1048→  1048→        result = list(text)
+  1049→  1049→        for i, c in enumerate(result):
+  1050→  1050→            if c == ' ' and random.random() < 0.3:
+  1051→  1051→                result[i] = random.choice(alt_spaces)
+  1052→  1052→        text = ''.join(result)
+  1053→  1053→        
+  1054→  1054→        # ═══ 5. علامات RTL/ALM خفية ═══
+  1055→  1055→        if random.random() < 0.2:
+  1056→  1056→            text = text + '\u200F'  # RTL Mark
+  1057→  1057→        if random.random() < 0.1:
+  1058→  1058→            text = '\u061C' + text  # Arabic Letter Mark at start
+  1059→  1059→        
+  1060→  1060→        # حرف غير مرئي في النهاية
+  1061→  1061→        text = text + random.choice(inv_chars[:4])
+  1062→  1062→        
+  1063→  1063→        return text
+  1064→  1064→
+  1065→  1065→    def _apply_strikethrough(self, text):
+  1066→  1066→        result = []
+  1067→  1067→        for c in text:
+  1068→  1068→            if c.isalpha():
+  1069→  1069→                result.append(c + '\u0336')
+  1070→  1070→            else:
+  1071→  1071→                result.append(c)
+  1072→  1072→        return ''.join(result)
+  1073→  1073→
+  1074→  1074→    def _apply_underline(self, text):
+  1075→  1075→        result = []
+  1076→  1076→        for c in text:
+  1077→  1077→            if c.isalpha():
+  1078→  1078→                result.append(c + '\u0332')
+  1079→  1079→            else:
+  1080→  1080→                result.append(c)
+  1081→  1081→        return ''.join(result)
+  1082→  1082→
+  1083→  1083→    def _apply_zalgo(self, text, intensity=3):
+  1084→  1084→        combining_above = list(range(0x0300, 0x0315))
+  1085→  1085→        combining_below = list(range(0x0316, 0x0333))
+  1086→  1086→        all_combining = combining_above + combining_below
+  1087→  1087→        result = []
+  1088→  1088→        for c in text:
+  1089→  1089→            result.append(c)
+  1090→  1090→            if c.isalpha() or c.isdigit():
+  1091→  1091→                num_marks = random.randint(1, intensity)
+  1092→  1092→                for _ in range(num_marks):
+  1093→  1093→                    result.append(chr(random.choice(all_combining)))
+  1094→  1094→        return ''.join(result)
+  1095→  1095→
+  1096→  1096→    def _apply_inverted(self, text):
+  1097→  1097→        return self._apply_map(text, self.INVERTED_MAP)
+  1098→  1098→
+  1099→  1099→    def _apply_upside_down(self, text):
+  1100→  1100→        result = []
+  1101→  1101→        for c in reversed(text):
+  1102→  1102→            result.append(self.UPSIDE_DOWN_MAP.get(c, c))
+  1103→  1103→        return ''.join(result)
+  1104→  1104→
+  1105→  1105→    def _apply_greek(self, text):
+  1106→  1106→        return self._apply_map(text, self.GREEK_MAP)
+  1107→  1107→
+  1108→  1108→    def _apply_rune(self, text):
+  1109→  1109→        return self._apply_map(text, self.RUNE_MAP)
+  1110→  1110→
+  1111→  1111→    def _apply_homoglyphs(self, text, intensity=0.35):
+  1112→  1112→        result = []
+  1113→  1113→        for c in text:
+  1114→  1114→            if c in self.HOMOGLYPH_MAP and random.random() < intensity:
+  1115→  1115→                result.append(self.HOMOGLYPH_MAP[c])
+  1116→  1116→            else:
+  1117→  1117→                result.append(c)
+  1118→  1118→        return ''.join(result)
+  1119→  1119→
+  1120→  1120→    def _apply_random_combo(self, text):
+  1121→  1121→        available = list(range(len(self.STYLES)))
+  1122→  1122→        num_styles = random.randint(2, 3)
+  1123→  1123→        chosen = random.sample(available, min(num_styles, len(available)))
+  1124→  1124→        result = text
+  1125→  1125→        for idx in chosen:
+  1126→  1126→            _, char_map = self.STYLES[idx]
+  1127→  1127→            chars = list(result)
+  1128→  1128→            for i, c in enumerate(chars):
+  1129→  1129→                if c in char_map and random.random() < 0.5:
+  1130→  1130→                    chars[i] = char_map[c]
+  1131→  1131→            result = ''.join(chars)
+  1132→  1132→        return result
+  1133→  1133→
+  1134→  1134→    def _escape_html(self, text):
+  1135→  1135→        if not text:
+  1136→  1136→            return text
+  1137→  1137→        text = text.replace('&', '&amp;')
+  1138→  1138→        text = text.replace('<', '&lt;')
+  1139→  1139→        text = text.replace('>', '&gt;')
+  1140→  1140→        return text
+  1141→  1141→
+  1142→  1142→    def _obfuscate_display_text(self, text, style_idx):
+  1143→  1143→        """تشويش نص العرض للروابط - خفيف للحفاظ على المقروئية مع تشويش احترافي"""
+  1144→  1144→        if not text or len(text) < 2:
+  1145→  1145→            return text
+  1146→  1146→        # أحرف غير مرئية احترافية في البداية
+  1147→  1147→        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+  1148→  1148→        result = random.choice(inv_chars[:4]) + text
+  1149→  1149→        if random.random() < 0.3:
+  1150→  1150→            result = random.choice(inv_chars[:4]) + result
+  1151→  1151→        # مسافات بديلة متنوعة
+  1152→  1152→        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007', '\u2006']
+  1153→  1153→        chars = list(result)
+  1154→  1154→        for i, c in enumerate(chars):
+  1155→  1155→            if c == ' ' and random.random() < 0.3:
+  1156→  1156→                chars[i] = random.choice(alt_spaces)
+  1157→  1157→        result = ''.join(chars)
+  1158→  1158→        # NFD decomposition خفيف للعربية (أحرف مركبة → مفككة)
+  1159→  1159→        arabic_decompose = {
+  1160→  1160→            'أ': ('ا', '\u0654'), 'إ': ('ا', '\u0655'),
+  1161→  1161→            'آ': ('ا', '\u0653'), 'ؤ': ('و', '\u0654'),
+  1162→  1162→            'ئ': ('ي', '\u0654'),
+  1163→  1163→        }
+  1164→  1164→        new_chars = []
+  1165→  1165→        for c in result:
+  1166→  1166→            if c in arabic_decompose and random.random() < 0.15:
+  1167→  1167→                base, combining = arabic_decompose[c]
+  1168→  1168→                new_chars.append(base)
+  1169→  1169→                new_chars.append(combining)
+  1170→  1170→            else:
+  1171→  1171→                new_chars.append(c)
+  1172→  1172→        result = ''.join(new_chars)
+  1173→  1173→        # علامة RTL أو ALM خفية
+  1174→  1174→        if random.random() < 0.2:
+  1175→  1175→            result = result + random.choice(['\u200F', '\u061C'])
+  1176→  1176→        return result
+  1177→  1177→
+  1178→  1178→    def _create_url_display(self, url, style_idx):
+  1179→  1179→        tme_displays = [
+  1180→  1180→            'تابع القناة', 'انضم لنا', 'القناة هنا', 'زورنا',
+  1181→  1181→            'ادخل القناة', 'اشترك معنا', 'تفضل بالدخول', 'الرابط',
+  1182→  1182→            'من هنا', 'اضغط', 'تابعنا', 'قناتنا',
+  1183→  1183→            'انضم الآن', 'هنا', 'ادخل هنا', 'شاهد',
+  1184→  1184→            'تفضل', 'تابع التحديثات', 'آخر الأخبار هنا', 'صحبتنا',
+  1185→  1185→            'محتوى مميز', 'تواصل معنا', 'تعرف علينا', 'انضمام',
+  1186→  1186→            'القناة الرسمية', 'متابعة', 'دخول', 'رابط القناة',
+  1187→  1187→        ]
+  1188→  1188→        general_displays = [
+  1189→  1189→            'اضغط هنا', 'الرابط', 'من هنا', 'تفضل',
+  1190→  1190→            'شاهد', 'تابع', 'ادخل', 'هنا',
+  1191→  1191→            'تفاصيل أكثر', 'المزيد', 'زورنا', 'اضغط',
+  1192→  1192→            'معلومات إضافية', 'تفقد الرابط', 'انتقل', 'الموقع',
+  1193→  1193→        ]
+  1194→  1194→        if 't.me/' in url:
+  1195→  1195→            return random.choice(tme_displays)
+  1196→  1196→        return random.choice(general_displays)
+  1197→  1197→
+  1198→  1198→    def _create_mention_display(self, mention, style_idx):
+  1199→  1199→        displays = ['اضغط هنا', 'الملف الشخصي', 'هنا', 'تفضل', 'تابعنا', 'الرابط', 'من هنا', 'تعرف علينا', 'تواصل', 'ادخل', 'الصفحة', 'اضغط']
+  1200→  1200→        return random.choice(displays)
+  1201→  1201→
+  1202→  1202→    def _apply_style_to_text(self, text, style_idx):
+  1203→  1203→        """نظام تشويش ذكي محسّن - يحافظ على المقروئية العربية مع تشويش البوتات
+  1204→  1204→        
+  1205→  1205→        الاستراتيجية الجديدة:
+  1206→  1206→        1. النص العربي: تشويش ذكي (NFD + أرقام عربية + أحرف غير مرئية + مسافات بديلة)
+  1207→  1207→           - تحويل NFC→NFD يغير الكود بدون تغيير الشكل المرئي
+  1208→  1208→           - أرقام عربية-هندية بدل اللاتينية
+  1209→  1209→           - أحرف غير مرئية احترافية متعددة الأنواع
+  1210→  1210→        2. الأحرف اللاتينية: تحويل لنمط Unicode مختلف
+  1211→  1211→        3. الأرقام: تحويل لأرقام Unicode مختلفة
+  1212→  1212→        4. الروابط والمعرفات: تُعالج بشكل منفصل في obfuscate()
+  1213→  1213→        """
+  1214→  1214→        if not text:
+  1215→  1215→            return text
+  1216→  1216→
+  1217→  1217→        # ═══ تحليل النص: هل هو عربي بالأساس؟ ═══
+  1218→  1218→        arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF' or '\u0750' <= c <= '\u077F' or '\uFB50' <= c <= '\uFDFF' or '\uFE70' <= c <= '\uFEFF')
+  1219→  1219→        latin_chars = sum(1 for c in text if ('a' <= c <= 'z') or ('A' <= c <= 'Z'))
+  1220→  1220→        total_alpha = arabic_chars + latin_chars
+  1221→  1221→        is_mostly_arabic = total_alpha > 0 and arabic_chars > latin_chars
+  1222→  1222→        
+  1223→  1223→        # ═══ الطبقة 1: تحويل ذكي حسب نوع النص ═══
+  1224→  1224→        if is_mostly_arabic:
+  1225→  1225→            # نص عربي: تشويش ذكي يحافظ على المقروئية تماماً
+  1226→  1226→            transformed = text
+  1227→  1227→            
+  1228→  1228→            # تحويل الأحرف اللاتينية الموجودة في النص العربي
+  1229→  1229→            if latin_chars > 0 and style_idx >= 0:
+  1230→  1230→                _, char_map = self.STYLES[style_idx]
+  1231→  1231→                result = []
+  1232→  1232→                for c in transformed:
+  1233→  1233→                    if c in char_map:
+  1234→  1234→                        result.append(char_map[c])
+  1235→  1235→                    else:
+  1236→  1236→                        result.append(c)
+  1237→  1237→                transformed = ''.join(result)
+  1238→  1238→            
+  1239→  1239→            # تطبيق التشويش العربي الذكي (NFD + أرقام + أحرف غير مرئية)
+  1240→  1240→            transformed = self._apply_arabic_smart_obfuscation(transformed, intensity=0.35)
+  1241→  1241→            
+  1242→  1242→            return transformed
+  1243→  1243→        else:
+  1244→  1244→            # نص لاتيني: تحويل كامل بالنمط المختار
+  1245→  1245→            if style_idx >= 0:
+  1246→  1246→                _, char_map = self.STYLES[style_idx]
+  1247→  1247→                transformed = self._apply_map_preserve_digits(text, char_map)
+  1248→  1248→            elif style_idx == -1:
+  1249→  1249→                transformed = self._apply_strikethrough(text)
+  1250→  1250→            elif style_idx == -2:
+  1251→  1251→                transformed = self._apply_underline(text)
+  1252→  1252→            elif style_idx == -3:
+  1253→  1253→                transformed = self._apply_inverted(text)
+  1254→  1254→            elif style_idx == -4:
+  1255→  1255→                transformed = self._apply_zalgo(text, intensity=2)
+  1256→  1256→            elif style_idx == -5:
+  1257→  1257→                transformed = self._apply_homoglyphs(text, intensity=0.5)
+  1258→  1258→            elif style_idx == -6:
+  1259→  1259→                transformed = self._apply_greek(text)
+  1260→  1260→            elif style_idx == -7:
+  1261→  1261→                transformed = self._apply_rune(text)
+  1262→  1262→            elif style_idx == -8:
+  1263→  1263→                transformed = self._apply_upside_down(text)
+  1264→  1264→            elif style_idx == -9:
+  1265→  1265→                transformed = self._apply_random_combo(text)
+  1266→  1266→            else:
+  1267→  1267→                transformed = text
+  1268→  1268→
+  1269→  1269→        # ═══ الطبقة 2: Homoglyphs خفيفة على اللاتينية فقط ═══
+  1270→  1270→        if style_idx not in (-5, -6, -7) and latin_chars > 0:
+  1271→  1271→            transformed = self._apply_homoglyphs_latin_only(transformed, intensity=0.2)
+  1272→  1272→
+  1273→  1273→        # ═══ الطبقة 3: أحرف غير مرئية احترافية ═══
+  1274→  1274→        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+  1275→  1275→        
+  1276→  1276→        # حرف غير مرئي في البداية
+  1277→  1277→        transformed = random.choice(inv_chars[:4]) + transformed
+  1278→  1278→        
+  1279→  1279→        # أحرف غير مرئية بين الكلمات
+  1280→  1280→        if len(transformed) > 10:
+  1281→  1281→            words = transformed.split(' ')
+  1282→  1282→            new_words = []
+  1283→  1283→            for i, w in enumerate(words):
+  1284→  1284→                new_words.append(w)
+  1285→  1285→                if i < len(words) - 1 and random.random() < 0.15:
+  1286→  1286→                    new_words.append(random.choice(inv_chars[:4]))
+  1287→  1287→            transformed = ' '.join(new_words)
+  1288→  1288→
+  1289→  1289→        # ═══ الطبقة 4: مسافات بديلة + تحويل أرقام (خفيف) ═══
+  1290→  1290→        alt_spaces = ['\u00A0', '\u2009', '\u202F', '\u2007']
+  1291→  1291→        safe_digit_maps = [
+  1292→  1292→            self.DIGIT_SANS_MAP, self.DIGIT_SANS_BOLD_MAP,
+  1293→  1293→            self.DIGIT_MONO_MAP, self.DIGIT_FULLWIDTH_MAP,
+  1294→  1294→        ]
+  1295→  1295→        chosen_digit_map = random.choice([m for m in safe_digit_maps if m])
+  1296→  1296→        result_list = list(transformed)
+  1297→  1297→        prev_was_digit = False
+  1298→  1298→        for i, c in enumerate(result_list):
+  1299→  1299→            if c == ' ' and random.random() < 0.2:
+  1300→  1300→                result_list[i] = random.choice(alt_spaces)
+  1301→  1301→            elif c.isdigit() and c in chosen_digit_map:
+  1302→  1302→                if prev_was_digit:
+  1303→  1303→                    prev_was_digit = True
+  1304→  1304→                    continue
+  1305→  1305→                if random.random() < 0.3:
+  1306→  1306→                    result_list[i] = chosen_digit_map[c]
+  1307→  1307→                prev_was_digit = True
+  1308→  1308→            else:
+  1309→  1309→                prev_was_digit = False
+  1310→  1310→        transformed = ''.join(result_list)
+  1311→  1311→
+  1312→  1312→        # ═══ الطبقة 5: أحرف غير مرئية بعد علامات الترقيم ═══
+  1313→  1313→        if len(transformed) > 5:
+  1314→  1314→            punctuation = '،.؛:!؟-.'
+  1315→  1315→            result_list = list(transformed)
+  1316→  1316→            insert_positions = []
+  1317→  1317→            for i, c in enumerate(result_list):
+  1318→  1318→                if c in punctuation and random.random() < 0.2:
+  1319→  1319→                    insert_positions.append((i + 1, random.choice(inv_chars[:4])))
+  1320→  1320→            for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
+  1321→  1321→                result_list.insert(pos, char)
+  1322→  1322→            transformed = ''.join(result_list)
+  1323→  1323→
+  1324→  1324→        # ═══ الطبقة 6: علامة RTL + حرف غير مرئي في النهاية ═══
+  1325→  1325→        if random.random() < 0.15:
+  1326→  1326→            transformed = transformed + '\u200F'
+  1327→  1327→        if random.random() < 0.1:
+  1328→  1328→            transformed = '\u061C' + transformed
+  1329→  1329→        transformed = transformed + random.choice(inv_chars[:4])
+  1330→  1330→
+  1331→  1331→        return transformed
+  1332→  1332→    
+  1333→  1333→    def _apply_homoglyphs_latin_only(self, text, intensity=0.2):
+  1334→  1334→        """تطبيق homoglyphs على الأحرف اللاتينية فقط - لا يمس العربية"""
+  1335→  1335→        result = []
+  1336→  1336→        for c in text:
+  1337→  1337→            if ('a' <= c <= 'z') or ('A' <= c <= 'Z'):
+  1338→  1338→                if c in self.HOMOGLYPH_MAP and random.random() < intensity:
+  1339→  1339→                    result.append(self.HOMOGLYPH_MAP[c])
+  1340→  1340→                else:
+  1341→  1341→                    result.append(c)
+  1342→  1342→            else:
+  1343→  1343→                result.append(c)
+  1344→  1344→        return ''.join(result)
+  1345→  1345→
+  1346→  1346→    def _get_random_style(self):
+  1347→  1347→        available = list(range(len(self.STYLES)))
+  1348→  1348→        if self._last_style in available and len(available) > 1:
+  1349→  1349→            available.remove(self._last_style)
+  1350→  1350→        available.extend([-1, -2, -3, -4, -5, -6, -7, -8, -9])
+  1351→  1351→        chosen = random.choice(available)
+  1352→  1352→        self._last_style = chosen
+  1353→  1353→        return chosen
+  1354→  1354→
+  1355→  1355→    def _extract_protected_segments(self, text):
+  1356→  1356→        protected = []
+  1357→  1357→        for match in re.finditer(r'https?://\S+', text):
+  1358→  1358→            url = match.group().rstrip('\u200B\u200C\u200D\uFEFF\u2060\u2061\u2062\u2063\u00A0\u2009\u202F')
+  1359→  1359→            end_pos = match.start() + len(url)
+  1360→  1360→            protected.append((match.start(), end_pos, url, 'url'))
+  1361→  1361→        for match in re.finditer(r'(?<![a-zA-Z0-9/:.])t\.me/[a-zA-Z0-9_]+', text):
+  1362→  1362→            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+  1363→  1363→            if not overlaps:
+  1364→  1364→                full_url = 'https://' + match.group()
+  1365→  1365→                protected.append((match.start(), match.end(), full_url, 'url'))
+  1366→  1366→        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+  1367→  1367→            overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected)
+  1368→  1368→            if not overlaps:
+  1369→  1369→                protected.append((match.start(), match.end(), match.group(), 'mention'))
+  1370→  1370→        protected.sort(key=lambda x: x[0])
+  1371→  1371→        clean = []
+  1372→  1372→        for seg in protected:
+  1373→  1373→            if not clean:
+  1374→  1374→                clean.append(seg)
+  1375→  1375→            elif seg[0] >= clean[-1][1]:
+  1376→  1376→                clean.append(seg)
+  1377→  1377→        return clean
+  1378→  1378→
+  1379→  1379→    def obfuscate(self, text):
+  1380→  1380→        """التحويل الرئيسي - 45+ نمط + 12 طبقة تشويش"""
+  1381→  1381→        if not text or len(text) < 2:
+  1382→  1382→            return text, False
+  1383→  1383→
+  1384→  1384→        all_protected = self._extract_protected_segments(text)
+  1385→  1385→        has_links = any(seg_type in ('url', 'mention') for _, _, _, seg_type in all_protected)
+  1386→  1386→
+  1387→  1387→        segments = []
+  1388→  1388→        last_end = 0
+  1389→  1389→        for start, end, original, seg_type in all_protected:
+  1390→  1390→            if start > last_end:
+  1391→  1391→                segments.append(('text', text[last_end:start]))
+  1392→  1392→            segments.append((seg_type, original))
+  1393→  1393→            last_end = end
+  1394→  1394→        if last_end < len(text):
+  1395→  1395→            segments.append(('text', text[last_end:]))
+  1396→  1396→
+  1397→  1397→        style_idx = self._get_random_style()
+  1398→  1398→        result_parts = []
+  1399→  1399→
+  1400→  1400→        for seg_type, seg_text in segments:
+  1401→  1401→            if seg_type == 'url':
+  1402→  1402→                display = self._create_url_display(seg_text, style_idx)
+  1403→  1403→                display = self._obfuscate_display_text(display, style_idx)
+  1404→  1404→                display = self._escape_html(display)
+  1405→  1405→                result_parts.append(f'<a href="{seg_text}">{display}</a>')
+  1406→  1406→            elif seg_type == 'mention':
+  1407→  1407→                display = self._create_mention_display(seg_text, style_idx)
+  1408→  1408→                display = self._obfuscate_display_text(display, style_idx)
+  1409→  1409→                display = self._escape_html(display)
+  1410→  1410→                username = seg_text[1:]
+  1411→  1411→                result_parts.append(f'<a href="tg://resolve?domain={username}">{display}</a>')
+  1412→  1412→            else:
+  1413→  1413→                transformed = self._apply_style_to_text(seg_text, style_idx)
+  1414→  1414→                transformed = self._escape_html(transformed)
+  1415→  1415→                result_parts.append(transformed)
+  1416→  1416→
+  1417→  1417→        final_text = ''.join(result_parts)
+  1418→  1418→        # أحرف غير مرئية احترافية متعددة الأنواع في البداية
+  1419→  1419→        inv_chars = ['\u200B', '\u200C', '\u200D', '\uFEFF', '\u2060', '\u061C']
+  1420→  1420→        final_text = random.choice(inv_chars[:4]) + final_text
+  1421→  1421→        if random.random() < 0.3:
+  1422→  1422→            final_text = random.choice(inv_chars[:4]) + final_text
+  1423→  1423→
+  1424→  1424→        return final_text, has_links
+  1425→  1425→
+  1426→  1426→    def get_style_name(self, idx=None):
+  1427→  1427→        special_names = {
+  1428→  1428→            -1: 'strikethrough', -2: 'underline', -3: 'inverted',
+  1429→  1429→            -4: 'zalgo', -5: 'homoglyphs', -6: 'greek',
+  1430→  1430→            -7: 'rune', -8: 'upside_down', -9: 'random_combo',
+  1431→  1431→        }
+  1432→  1432→        if idx is None:
+  1433→  1433→            idx = self._last_style
+  1434→  1434→        if idx >= 0 and idx < len(self.STYLES):
+  1435→  1435→            return self.STYLES[idx][0]
+  1436→  1436→        return special_names.get(idx, 'unknown')
+  1437→  1437→
+  1438→  1438→
+  1439→  1439→yaytext_obfuscator = YayTextMesslettersObfuscator()
+  1440→  1440→
+  1441→  1441→
+  1442→  1442→
+  1443→  1443→# ═══════════════════════════════════════════════
+  1444→  1444→#  نظام التشفير والتكويد المتقدم 🔐✨
+  1445→  1445→# ═══════════════════════════════════════════════
+  1446→  1446→class AdvancedMessageEncoder:
+  1447→  1447→    """
+  1448→  1448→    نظام تشفير وتكويد رسائل متعدد الطبقات
+  1449→  1449→    يطبق عدة تقنيات في سلسلة لتعظيم الحماية من بوتات الحماية:
+  1450→  1450→    
+  1451→  1451→    الطبقة 1: تحويل النص لأنماط Unicode (YayText/Messletters)
+  1452→  1452→    الطبقة 2: إخفاء الروابط في كيانات TextUrl
+  1453→  1453→    الطبقة 3: أحرف غير مرئية استراتيجية
+  1454→  1454→    الطبقة 4: مسافات بديلة عشوائية
+  1455→  1455→    الطبقة 5: حروف متشابهة (Homoglyphs) سيريلية/يونانية
+  1456→  1456→    الطبقة 6: إخفاء نمطي بالتشويش العكسي
+  1457→  1457→    الطبقة 7: علامات RTL خفية لتغيير ترتيب القراءة
+  1458→  1458→    """
+  1459→  1459→    
+  1460→  1460→    # أحرف غير مرئية احترافية متنوعة (متعددة الأنواع)
+  1461→  1461→    INVISIBLE_CHARS = [
+  1462→  1462→        '\u200B',   # Zero-Width Space
+  1463→  1463→        '\u200C',   # Zero-Width Non-Joiner
+  1464→  1464→        '\u200D',   # Zero-Width Joiner
+  1465→  1465→        '\uFEFF',   # BOM / Zero-Width No-Break Space
+  1466→  1466→        '\u2060',   # Word Joiner
+  1467→  1467→        '\u2061',   # Function Application
+  1468→  1468→        '\u2062',   # Invisible Times
+  1469→  1469→        '\u2063',   # Invisible Separator
+  1470→  1470→        '\u2064',   # Invisible Plus
+  1471→  1471→        '\u061C',   # Arabic Letter Mark (invisible)
+  1472→  1472→    ]
+  1473→  1473→    
+  1474→  1474→    # مسافات بديلة من مختلف نطاقات Unicode
+  1475→  1475→    ALT_SPACES = [
+  1476→  1476→        '\u00A0',   # No-Break Space
+  1477→  1477→        '\u2009',   # Thin Space
+  1478→  1478→        '\u202F',   # Narrow No-Break Space
+  1479→  1479→        '\u2008',   # Punctuation Space
+  1480→  1480→        '\u2007',   # Figure Space
+  1481→  1481→        '\u2006',   # Six-Per-Em Space
+  1482→  1482→        '\u2005',   # Four-Per-Em Space
+  1483→  1483→        '\u2004',   # Three-Per-Em Space
+  1484→  1484→    ]
+  1485→  1485→    
+  1486→  1486→    # حروف سيريلية/يونانية متشابهة مع اللاتينية (Homoglyphs)
+  1487→  1487→    ADVANCED_HOMOGLYPHS = {
+  1488→  1488→        'a': '\u0430', 'A': '\u0410',  # Cyrillic a/A
+  1489→  1489→        'c': '\u0441', 'C': '\u0421',  # Cyrillic es/Es
+  1490→  1490→        'e': '\u0435', 'E': '\u0415',  # Cyrillic ye/Ye
+  1491→  1491→        'o': '\u043E', 'O': '\u041E',  # Cyrillic o/O
+  1492→  1492→        'p': '\u0440', 'P': '\u0420',  # Cyrillic er/Er
+  1493→  1493→        'x': '\u0445', 'X': '\u0425',  # Cyrillic ha/Ha
+  1494→  1494→        'y': '\u0443', 'Y': '\u0423',  # Cyrillic u/U
+  1495→  1495→        'i': '\u0456', 'I': '\u0406',  # Cyrillic byelorussian
+  1496→  1496→        'j': '\u0458', 'J': '\u0408',  # Cyrillic je/Je
+  1497→  1497→        's': '\u0455', 'S': '\u0405',  # Cyrillic dze/Dze
+  1498→  1498→        'k': '\u043A', 'K': '\u041A',  # Cyrillic ka/Ka
+  1499→  1499→        'H': '\u041D',                  # Cyrillic En
+  1500→  1500→        'T': '\u0422',                  # Cyrillic Te
+  1501→  1501→        'M': '\u041C',                  # Cyrillic Em
+  1502→  1502→        'B': '\u0412',                  # Cyrillic Ve
+  1503→  1503→        'g': '\u0493', 'G': '\u0492',  # Cyrillic Ghe with stroke
+  1504→  1504→        'h': '\u04BB',                  # Cyrillic Shha
+  1505→  1505→        'b': '\u0431', 'B': '\u0412',  # Cyrillic be/Ve
+  1506→  1506→        'd': '\u0501',                  # Cyrillic Komi De
+  1507→  1507→        'u': '\u04AF',                  # Cyrillic straight u
+  1508→  1508→    }
+  1509→  1509→    
+  1510→  1510→    def __init__(self):
+  1511→  1511→        self._message_hash_cache = deque(maxlen=1000)
+  1512→  1512→    
+  1513→  1513→    def _is_protected_zone(self, pos, protected_zones):
+  1514→  1514→        """التحقق مما إذا كان الموقع داخل منطقة محمية (رابط/معرف)"""
+  1515→  1515→        return any(start <= pos < end for start, end in protected_zones)
+  1516→  1516→    
+  1517→  1517→    def _extract_protected_zones(self, text):
+  1518→  1518→        """استخراج مناطق الروابط والمعرفات لحمايتها"""
+  1519→  1519→        zones = []
+  1520→  1520→        for match in re.finditer(r'https?://\S+', text):
+  1521→  1521→            zones.append((match.start(), match.end()))
+  1522→  1522→        for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+  1523→  1523→            overlaps = any(match.start() >= s and match.start() < e for s, e in zones)
+  1524→  1524→            if not overlaps:
+  1525→  1525→                zones.append((match.start(), match.end()))
+  1526→  1526→        return zones
+  1527→  1527→    
+  1528→  1528→    def apply_strategic_invisibles(self, text, intensity=0.2):
+  1529→  1529→        """
+  1530→  1530→        الطبقة 3: إضافة أحرف غير مرئية استراتيجياً
+  1531→  1531→        - بين الكلمات (مسافة + حرف غير مرئي)
+  1532→  1532→        - في بداية ونهاية النص
+  1533→  1533→        - قبل وبعد علامات الترقيم
+  1534→  1534→        - لا يضاف داخل الروابط/المعرفات
+  1535→  1535→        """
+  1536→  1536→        if not text or len(text) < 3:
+  1537→  1537→            return text
+  1538→  1538→        
+  1539→  1539→        protected = self._extract_protected_zones(text)
+  1540→  1540→        result = list(text)
+  1541→  1541→        insert_positions = []
+  1542→  1542→        
+  1543→  1543→        # أحرف غير مرئية بعد المسافات (بين الكلمات)
+  1544→  1544→        space_positions = [i for i, c in enumerate(result) if c == ' ' and not self._is_protected_zone(i, protected)]
+  1545→  1545→        for pos in space_positions:
+  1546→  1546→            if random.random() < intensity:
+  1547→  1547→                insert_positions.append((pos + 1, random.choice(self.INVISIBLE_CHARS)))
+  1548→  1548→        
+  1549→  1549→        # أحرف غير مرئية قبل علامات الترقيم العربية
+  1550→  1550→        punctuation = '،.؛:!؟-'
+  1551→  1551→        for i, c in enumerate(result):
+  1552→  1552→            if c in punctuation and not self._is_protected_zone(i, protected):
+  1553→  1553→                if random.random() < intensity * 0.5:
+  1554→  1554→                    insert_positions.append((i, random.choice(['\u200B', '\u200C'])))
+  1555→  1555→        
+  1556→  1556→        # أحرف غير مرئية بعد الأقواس
+  1557→  1557→        bracket_chars = '()[]{}'
+  1558→  1558→        for i, c in enumerate(result):
+  1559→  1559→            if c in bracket_chars and not self._is_protected_zone(i, protected):
+  1560→  1560→                if random.random() < intensity * 0.3:
+  1561→  1561→                    insert_positions.append((i + 1, random.choice(['\u200D', '\u2060'])))
+  1562→  1562→        
+  1563→  1563→        # تطبيق الإضافات بترتيب عكسي للحفاظ على المواقع
+  1564→  1564→        for pos, char in sorted(insert_positions, key=lambda x: x[0], reverse=True):
+  1565→  1565→            result.insert(pos, char)
+  1566→  1566→        
+  1567→  1567→        return ''.join(result)
+  1568→  1568→    
+  1569→  1569→    def apply_alternate_spaces(self, text, intensity=0.35):
+  1570→  1570→        """
+  1571→  1571→        الطبقة 4: استبدال المسافات العادية بمسافات بديلة من Unicode
+  1572→  1572→        المسافات البديلة تبدو متطابقة للمستخدم لكنها مختلفة للآلات
+  1573→  1573→        """
+  1574→  1574→        if not text:
+  1575→  1575→            return text
+  1576→  1576→        
+  1577→  1577→        protected = self._extract_protected_zones(text)
+  1578→  1578→        result = list(text)
+  1579→  1579→        
+  1580→  1580→        space_positions = [i for i, c in enumerate(result) if c == ' ' and not self._is_protected_zone(i, protected)]
+  1581→  1581→        for pos in space_positions:
+  1582→  1582→            if random.random() < intensity:
+  1583→  1583→                result[pos] = random.choice(self.ALT_SPACES)
+  1584→  1584→        
+  1585→  1585→        return ''.join(result)
+  1586→  1586→    
+  1587→  1587→    def apply_homoglyphs(self, text, intensity=0.15):
+  1588→  1588→        """
+  1589→  1589→        الطبقة 5: استبدال أحرف لاتينية بنظيراتها السيريلية/يونانية
+  1590→  1590→        تبدو متطابقة تماماً للعين لكنها مختلفة في الترميز
+  1591→  1591→        يصعب على بوتات الحماية اكتشاف النص بعد هذا التحويل
+  1592→  1592→        """
+  1593→  1593→        if not text:
+  1594→  1594→            return text
+  1595→  1595→        
+  1596→  1596→        protected = self._extract_protected_zones(text)
+  1597→  1597→        result = list(text)
+  1598→  1598→        
+  1599→  1599→        for i, c in enumerate(result):
+  1600→  1600→            if c in self.ADVANCED_HOMOGLYPHS and not self._is_protected_zone(i, protected):
+  1601→  1601→                if random.random() < intensity:
+  1602→  1602→                    result[i] = self.ADVANCED_HOMOGLYPHS[c]
+  1603→  1603→        
+  1604→  1604→        return ''.join(result)
+  1605→  1605→    
+  1606→  1606→    def apply_pattern_disruption(self, text):
+  1607→  1607→        """
+  1608→  1608→        الطبقة 6: تشويش النمط - إضافة أحرف غير مرئية احترافية لتغيير بصمة النص
+  1609→  1609→        يمنع بوتات الحماية من مطابقة الأنماط المتكررة
+  1610→  1610→        يستخدم أنواعاً متعددة من الأحرف غير المرئية لتعظيم التغيير
+  1611→  1611→        """
+  1612→  1612→        if not text or len(text) < 10:
+  1613→  1613→            return text
+  1614→  1614→        
+  1615→  1615→        protected = self._extract_protected_zones(text)
+  1616→  1616→        result = list(text)
+  1617→  1617→        
+  1618→  1618→        # إضافة 1-3 أحرف غير مرئية في بداية النص
+  1619→  1619→        prefix = random.choice(self.INVISIBLE_CHARS)
+  1620→  1620→        if random.random() < 0.4:
+  1621→  1621→            prefix += random.choice(self.INVISIBLE_CHARS)
+  1622→  1622→        if random.random() < 0.15:
+  1623→  1623→            prefix += random.choice(self.INVISIBLE_CHARS)
+  1624→  1624→        
+  1625→  1625→        # إضافة علامة Arabic Letter Mark أحياناً في البداية
+  1626→  1626→        if random.random() < 0.15:
+  1627→  1627→            prefix = '\u061C' + prefix
+  1628→  1628→        
+  1629→  1629→        # إضافة أحرف غير مرئية بين الجمل (بعد النقاط وعلامات الترقيم)
+  1630→  1630→        for i, c in enumerate(result):
+  1631→  1631→            if c in '.!؟\n،؛' and not self._is_protected_zone(i, protected):
+  1632→  1632→                if random.random() < 0.4:
+  1633→  1633→                    result.insert(i + 1, random.choice(self.INVISIBLE_CHARS[:6]))
+  1634→  1634→        
+  1635→  1635→        # إضافة علامة RTL أو ALM خفية أحياناً
+  1636→  1636→        if random.random() < 0.25:
+  1637→  1637→            result.append(random.choice(['\u200F', '\u061C']))
+  1638→  1638→        
+  1639→  1639→        return prefix + ''.join(result)
+  1640→  1640→    
+  1641→  1641→    def apply_unicode_normalization_trick(self, text, intensity=0.15):
+  1642→  1642→        """
+  1643→  1643→        الطبقة 7: تحويلات Unicode عربية ذكية (بدون أحرف فارسية!)
+  1644→  1644→        - NFD Decomposition: تحويل الأحرف المركبة لمفككة (نفس الشكل، كود مختلف)
+  1645→  1645→        - تحويلات عربية آمنة لا تكتشفها بوتات الحماية
+  1646→  1646→        """
+  1647→  1647→        if not text:
+  1648→  1648→            return text
+  1649→  1649→        
+  1650→  1650→        protected = self._extract_protected_zones(text)
+  1651→  1651→        result = list(text)
+  1652→  1652→        new_result = []
+  1653→  1653→        
+  1654→  1654→        # NFD Decomposition - آمن تماماً ويبدو متطابقاً مرئياً
+  1655→  1655→        arabic_decompose = {
+  1656→  1656→            'أ': ('\u0627', '\u0654'),  # ALEF HAMZA ABOVE → ALEF + combining HAMZA ABOVE
+  1657→  1657→            'إ': ('\u0627', '\u0655'),  # ALEF HAMZA BELOW → ALEF + combining HAMZA BELOW
+  1658→  1658→            'آ': ('\u0627', '\u0653'),  # ALEF MADDA ABOVE → ALEF + combining MADDA ABOVE
+  1659→  1659→            'ؤ': ('\u0648', '\u0654'),  # WAW HAMZA → WAW + combining HAMZA ABOVE
+  1660→  1660→            'ئ': ('\u064A', '\u0654'),  # YEH HAMZA → YEH + combining HAMZA ABOVE
+  1661→  1661→        }
+  1662→  1662→        
+  1663→  1663→        i = 0
+  1664→  1664→        while i < len(result):
+  1665→  1665→            c = result[i]
+  1666→  1666→            if c in arabic_decompose and not self._is_protected_zone(i, protected):
+  1667→  1667→                if random.random() < intensity:
+  1668→  1668→                    base, combining = arabic_decompose[c]
+  1669→  1669→                    new_result.append(base)
+  1670→  1670→                    new_result.append(combining)
+  1671→  1671→                else:
+  1672→  1672→                    new_result.append(c)
+  1673→  1673→            else:
+  1674→  1674→                new_result.append(c)
+  1675→  1675→            i += 1
+  1676→  1676→        
+  1677→  1677→        return ''.join(new_result)
+  1678→  1678→    
+  1679→  1679→    def encode_message(self, text, group_id=None):
+  1680→  1680→        """
+  1681→  1681→        تطبيق كل طبقات التشفير والتكويد على الرسالة
+  1682→  1682→        يُرجع: (النص المشفر, use_html) حيث use_html يحدد استخدام parse_mode='html'
+  1683→  1683→        
+  1684→  1684→        الطبقات محسّنة للحفاظ على مقروئية النص العربي:
+  1685→  1685→        - الطبقة 1+2: تحويل YayText/Messletters (يتضمن NFD عربي ذكي)
+  1686→  1686→        - الطبقة 3: أحرف غير مرئية احترافية (متعددة الأنواع)
+  1687→  1687→        - الطبقة 4: مسافات بديلة متنوعة
+  1688→  1688→        - الطبقة 5: Homoglyphs (لاتينية فقط)
+  1689→  1689→        - الطبقة 6: تشويش النمط
+  1690→  1690→        - الطبقة 7: تحويلات NFD عربية ذكية (بدون فارسية!)
+  1691→  1691→        """
+  1692→  1692→        if not text or len(text) < 2:
+  1693→  1693→            return text, False
+  1694→  1694→        
+  1695→  1695→        # تطبيق YayText/Messletters (الطبقة 1+2)
+  1696→  1696→        # يتضمن الآن تشويش عربي ذكي (NFD decomposition + أرقام عربية)
+  1697→  1697→        obfuscated_text, use_html = yaytext_obfuscator.obfuscate(text)
+  1698→  1698→        
+  1699→  1699→        # الطبقة 3: أحرف غير مرئية احترافية (كثافة أعلى)
+  1700→  1700→        obfuscated_text = self.apply_strategic_invisibles(obfuscated_text, intensity=0.2)
+  1701→  1701→        
+  1702→  1702→        # الطبقة 4: مسافات بديلة متنوعة
+  1703→  1703→        obfuscated_text = self.apply_alternate_spaces(obfuscated_text, intensity=0.35)
+  1704→  1704→        
+  1705→  1705→        # الطبقة 5: Homoglyphs (لاتينية فقط - لا يمس العربية)
+  1706→  1706→        obfuscated_text = self.apply_homoglyphs(obfuscated_text, intensity=0.12)
+  1707→  1707→        
+  1708→  1708→        # الطبقة 6: تشويش النمط
+  1709→  1709→        obfuscated_text = self.apply_pattern_disruption(obfuscated_text)
+  1710→  1710→        
+  1711→  1711→        # الطبقة 7: تحويلات NFD عربية ذكية (بدون أحرف فارسية!)
+  1712→  1712→        obfuscated_text = self.apply_unicode_normalization_trick(obfuscated_text, intensity=0.15)
+  1713→  1713→        
+  1714→  1714→        return obfuscated_text, use_html
+  1715→  1715→    
+  1716→  1716→    def _recalculate_entity_offsets(self, original_text, obfuscated_text, entities):
+  1717→  1717→        """
+  1718→  1718→        إعادة حساب مواقع الكيانات بعد إضافة الأحرف غير المرئية
+  1719→  1719→        هذا مهم لأن الطبقات 3-7 تضيف أحرفاً تغير المواقع
+  1720→  1720→        """
+  1721→  1721→        # بما أننا أضفنا أحرف غير مرئية فقط (لا نحذف أو نستبدل أحرفاً مرئية)،
+  1722→  1722→        # يمكننا تقريباً حساب الإزاحة بنسبة التمدد
+  1723→  1723→        if not entities:
+  1724→  1724→            return entities
+  1725→  1725→        
+  1726→  1726→        # حساب نسبة التمدد
+  1727→  1727→        original_len = len(original_text.encode('utf-16-le')) // 2
+  1728→  1728→        obfuscated_len = len(obfuscated_text.encode('utf-16-le')) // 2
+  1729→  1729→        
+  1730→  1730→        if original_len == 0:
+  1731→  1731→            return entities
+  1732→  1732→        
+  1733→  1733→        stretch_ratio = obfuscated_len / original_len
+  1734→  1734→        
+  1735→  1735→        # إعادة حساب المواقع بالتناسب
+  1736→  1736→        for entity in entities:
+  1737→  1737→            # تقريب الموقع الجديد بنسبة التمدد
+  1738→  1738→            entity.offset = int(entity.offset * stretch_ratio)
+  1739→  1739→            # الطول يبقى تقريبياً نفسه لأن النص داخل الكيان لم يتغير كثيراً
+  1740→  1740→        
+  1741→  1741→        return entities
+  1742→  1742→
+  1743→  1743→
+  1744→  1744→# إنشاء مثيل عام لنظام التشفير المتقدم
+  1745→  1745→advanced_encoder = AdvancedMessageEncoder()
+  1746→  1746→
+  1747→  1747→
+  1748→  1748→def yaytext_obfuscate(text):
+  1749→  1749→    """
+  1750→  1750→    تطبيق تشويش YayText & Messletters على النص - تُستدعى قبل الإرسال مباشرة
+  1751→  1751→    يتم اختيار نمط عشوائي مختلف لكل رسالة
+  1752→  1752→    
+  1753→  1753→    🔗 الروابط: نص متنوع + رابط HTML <a href>
+  1754→  1754→       → الضغط على النص يفتح الرابط الحقيقي ✅
+  1755→  1755→       → بوتات الحماية لا ترى أي نمط رابط ✅
+  1756→  1756→       → لا مشاكل في حساب الإزاحات ✅
+  1757→  1757→    
+  1758→  1758→    👤 المعرفات: نص متنوع + رابط مخفي (قابل للضغط ✅)
+  1759→  1759→    🔢 الأرقام: تبقى أصلية (قابلة للنقر كأرقام هواتف ✅)
+  1760→  1760→    
+  1761→  1761→    يُرجع: (النص المشوش, use_html) حيث use_html يحدد استخدام parse_mode='html'
+  1762→  1762→    """
+  1763→  1763→    if get_setting('yaytext_messletters_obfuscation', 'on') != 'on':
+  1764→  1764→        return text, False
+  1765→  1765→    if not text:
+  1766→  1766→        return text, False
+  1767→  1767→    return yaytext_obfuscator.obfuscate(text)
+  1768→  1768→
+  1769→  1769→
+  1770→  1770→# ═══════════════════════════════════════════════
+  1771→  1771→#  Text variation (غير مرئي للمستخدم)
+  1772→  1772→# ═══════════════════════════════════════════════
+  1773→  1773→def vary_text(text):
+  1774→  1774→    """
+  1775→  1775→    تطبيق اختلافات غير مرئية - النص يبقى كما هو للقارئ
+  1776→  1776→    فقط الآلات تستطيع اكتشاف التغيير
+  1777→  1777→    الروابط والمعرفات لا يتم تعديلها أبداً
+  1778→  1778→    """
+  1779→  1779→    if not text:
+  1780→  1780→        return text
+  1781→  1781→
+  1782→  1782→    # حماية الروابط والمعرفات
+  1783→  1783→    protected_segments = []
+  1784→  1784→    for match in re.finditer(r'https?://\S+', text):
+  1785→  1785→        protected_segments.append((match.start(), match.end()))
+  1786→  1786→    for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+  1787→  1787→        overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected_segments)
+  1788→  1788→        if not overlaps:
+  1789→  1789→            protected_segments.append((match.start(), match.end()))
+  1790→  1790→
+  1791→  1791→    def _is_protected(pos):
+  1792→  1792→        return any(pos >= s and pos < e for s, e in protected_segments)
+  1793→  1793→
+  1794→  1794→    result = text
+  1795→  1795→
+  1796→  1796→    # أحرف غير مرئية في البداية
+  1797→  1797→    inv_char = random.choice(['\u200B', '\u200C', '\uFEFF'])
+  1798→  1798→    result = inv_char + result
+  1799→  1799→    # تحديث المواقع المحمية بسبب الإضافة في البداية
+  1800→  1800→    protected_segments = [(s+1, e+1) for s, e in protected_segments]
+  1801→  1801→
+  1802→  1802→    # استبدال 1-2 مسافات بمسافات بديلة (غير مرئي) - ليس داخل الروابط
+  1803→  1803→    spaces = [i for i, c in enumerate(result) if c == ' ' and not _is_protected(i)]
+  1804→  1804→    if spaces:
+  1805→  1805→        num_replace = min(random.randint(1, 2), len(spaces))
+  1806→  1806→        chosen = random.sample(spaces, num_replace)
+  1807→  1807→        for pos in chosen:
+  1808→  1808→            replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
+  1809→  1809→            result = result[:pos] + replacement + result[pos+1:]
+  1810→  1810→
+  1811→  1811→    # أحرف غير مرئية بين كلمتين عشوائيتين - ليس داخل الروابط
+  1812→  1812→    space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F'] and not _is_protected(i)]
+  1813→  1813→    if space_positions and random.random() > 0.4:
+  1814→  1814→        pos = random.choice(space_positions)
+  1815→  1815→        inv = random.choice(['\u200B', '\u200C'])
+  1816→  1816→        result = result[:pos+1] + inv + result[pos+1:]
+  1817→  1817→
+  1818→  1818→    # استبدال حرف لاتيني بنظيره (غير مرئي) - ليس داخل الروابط
+  1819→  1819→    latin_chars = [i for i, c in enumerate(result) if c.isascii() and c.isalpha() and c.lower() in 'aecpxio' and not _is_protected(i)]
+  1820→  1820→    if latin_chars and random.random() > 0.5:
+  1821→  1821→        pos = random.choice(latin_chars)
+  1822→  1822→        c = result[pos]
+  1823→  1823→        homoglyph_map = {
+  1824→  1824→            'a': '\u0430', 'A': '\u0410', 'e': '\u0435', 'E': '\u0415',
+  1825→  1825→            'c': '\u0441', 'C': '\u0421', 'p': '\u0440', 'P': '\u0420',
+  1826→  1826→            'x': '\u0445', 'X': '\u0425', 'o': '\u043E', 'O': '\u041E',
+  1827→  1827→            'i': '\u0456',
+  1828→  1828→        }
+  1829→  1829→        if c in homoglyph_map:
+  1830→  1830→            result = result[:pos] + homoglyph_map[c] + result[pos+1:]
+  1831→  1831→
+  1832→  1832→    return result
+  1833→  1833→
+  1834→  1834→
+  1835→  1835→def obfuscate_for_humans(text):
+  1836→  1836→    """
+  1837→  1837→    تشويش غير مرئي للمستخدم - النص يبقى مفهوماً تماماً
+  1838→  1838→    الروابط والمعرفات لا يتم تعديلها أبداً - تبقى قابلة للنقر
+  1839→  1839→    """
+  1840→  1840→    if not text:
+  1841→  1841→        return text
+  1842→  1842→
+  1843→  1843→    # حماية الروابط والمعرفات
+  1844→  1844→    protected_segments = []
+  1845→  1845→    for match in re.finditer(r'https?://\S+', text):
+  1846→  1846→        protected_segments.append((match.start(), match.end()))
+  1847→  1847→    for match in re.finditer(r'@[a-zA-Z0-9_]{3,}', text):
+  1848→  1848→        overlaps = any(match.start() >= p[0] and match.start() < p[1] for p in protected_segments)
+  1849→  1849→        if not overlaps:
+  1850→  1850→            protected_segments.append((match.start(), match.end()))
+  1851→  1851→
+  1852→  1852→    def _is_protected(pos):
+  1853→  1853→        return any(pos >= s and pos < e for s, e in protected_segments)
+  1854→  1854→
+  1855→  1855→    result = text
+  1856→  1856→
+  1857→  1857→    # استبدال حروف لاتينية بنظيراتها السيريلية (تبدو متطابقة) - ليس داخل الروابط
+  1858→  1858→    if random.random() > 0.3:
+  1859→  1859→        homoglyph_map = {
+  1860→  1860→            'a': '\u0430', 'o': '\u043E', 'c': '\u0441',
+  1861→  1861→            'e': '\u0435', 'p': '\u0440', 'x': '\u0445', 'i': '\u0456',
+  1862→  1862→        }
+  1863→  1863→        chars = list(result)
+  1864→  1864→        for i, c in enumerate(chars):
+  1865→  1865→            if c in homoglyph_map and random.random() > 0.6 and not _is_protected(i):
+  1866→  1866→                chars[i] = homoglyph_map[c]
+  1867→  1867→        result = ''.join(chars)
+  1868→  1868→
+  1869→  1869→    # استبدال بعض المسافات بمسافات بديلة - ليس داخل الروابط
+  1870→  1870→    if random.random() > 0.3:
+  1871→  1871→        spaces = [i for i, c in enumerate(result) if c == ' ' and not _is_protected(i)]
+  1872→  1872→        for pos in spaces:
+  1873→  1873→            if random.random() > 0.5:
+  1874→  1874→                replacement = random.choice(['\u00A0', '\u2009', '\u202F'])
+  1875→  1875→                result = result[:pos] + replacement + result[pos+1:]
+  1876→  1876→
+  1877→  1877→    # أحرف غير مرئية بين الكلمات فقط - ليس داخل الروابط
+  1878→  1878→    if random.random() > 0.4 and len(result) > 5:
+  1879→  1879→        space_positions = [i for i, c in enumerate(result) if c in [' ', '\u00A0', '\u2009', '\u202F'] and not _is_protected(i)]
+  1880→  1880→        insert_positions = []
+  1881→  1881→        for pos in space_positions:
+  1882→  1882→            if random.random() > 0.75:
+  1883→  1883→                insert_positions.append(pos + 1)
+  1884→  1884→        chars = list(result)
+  1885→  1885→        for pos in reversed(insert_positions):
+  1886→  1886→            inv = random.choice(['\u200B', '\u200C'])
+  1887→  1887→            chars.insert(pos, inv)
+  1888→  1888→        result = ''.join(chars)
+  1889→  1889→
+  1890→  1890→    # حرف غير مرئي في البداية
+  1891→  1891→    if random.random() > 0.5:
+  1892→  1892→        inv = random.choice(['\u200B', '\u200C', '\uFEFF'])
+  1893→  1893→        result = inv + result
+  1894→  1894→
+  1895→  1895→    return result
+  1896→  1896→
+  1897→  1897→
+  1898→  1898→# ═══════════════════════════════════════════════
+  1899→  1899→#  إدارة الحسابات والمجموعات
+  1900→  1900→# ═══════════════════════════════════════════════
+  1901→  1901→async def restore_sessions():
+  1902→  1902→    conn = sqlite3.connect(DB_PATH)
+  1903→  1903→    c = conn.cursor()
+  1904→  1904→    c.execute("SELECT id, session_string, phone, status FROM accounts WHERE status='active'")
+  1905→  1905→    accounts = c.fetchall()
+  1906→  1906→    conn.close()
+  1907→  1907→    for acc_id, session_str, phone, status in accounts:
+  1908→  1908→        try:
+  1909→  1909→            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+  1910→  1910→            await client.connect()
+  1911→  1911→            if await client.is_user_authorized():
+  1912→  1912→                user_clients[acc_id] = client
+  1913→  1913→                logger.info(f"✅ تم استعادة حساب: {phone}")
+  1914→  1914→                await fetch_all_groups_for_account(acc_id, client)
+  1915→  1915→            else:
+  1916→  1916→                logger.warning(f"⚠️ الجلسة منتهية: {phone}")
+  1917→  1917→                set_account_status(acc_id, 'expired')
+  1918→  1918→        except Exception as e:
+  1919→  1919→            logger.error(f"❌ فشل استعادة حساب {phone}: {e}")
+  1920→  1920→
+  1921→  1921→def set_account_status(acc_id, status):
+  1922→  1922→    conn = sqlite3.connect(DB_PATH)
+  1923→  1923→    c = conn.cursor()
+  1924→  1924→    c.execute('UPDATE accounts SET status=? WHERE id=?', (status, acc_id))
+  1925→  1925→    conn.commit()
+  1926→  1926→    conn.close()
+  1927→  1927→
+  1928→  1928→async def fetch_all_groups_for_account(acc_id, client):
+  1929→  1929→    """جلب كل المجموعات والقنوات من الحساب بدون أي استثناء"""
+  1930→  1930→    count = 0
+  1931→  1931→    try:
+  1932→  1932→        async for dialog in client.iter_dialogs():
+  1933→  1933→            if dialog.is_group or dialog.is_channel:
+  1934→  1934→                group_id = dialog.id
+  1935→  1935→                group_name = dialog.name or "بدون اسم"
+  1936→  1936→                member_count = getattr(dialog.entity, 'participants_count', 0)
+  1937→  1937→                username = getattr(dialog.entity, 'username', None)
+  1938→  1938→                conn = sqlite3.connect(DB_PATH)
+  1939→  1939→                c = conn.cursor()
+  1940→  1940→                c.execute('''INSERT OR IGNORE INTO groups (group_id, group_name, username, member_count, added_by)
+  1941→  1941→                             VALUES (?, ?, ?, ?, ?)''', (group_id, group_name[:100], username, member_count, f"account_{acc_id}"))
+  1942→  1942→                conn.commit()
+  1943→  1943→                conn.close()
+  1944→  1944→                count += 1
+  1945→  1945→        logger.info(f"✅ تم استيراد {count} مجموعة من الحساب {acc_id}")
+  1946→  1946→    except Exception as e:
+  1947→  1947→        logger.error(f"❌ فشل استيراد المجموعات: {e}")
+  1948→  1948→    return count
+  1949→  1949→
+  1950→  1950→async def get_account_groups(client):
+  1951→  1951→    """جلب كل المجموعات/القنوات ديناميكياً بدون أي استثناء"""
+  1952→  1952→    groups = []
+  1953→  1953→    try:
+  1954→  1954→        async for dialog in client.iter_dialogs():
+  1955→  1955→            entity = dialog.entity
+  1956→  1956→            if isinstance(entity, (Chat, Channel)):
+  1957→  1957→                group_id = dialog.id
+  1958→  1958→                group_name = dialog.name or "بدون اسم"
+  1959→  1959→                groups.append((group_id, group_name))
+  1960→  1960→    except Exception as e:
+  1961→  1961→        logger.error(f"❌ فشل جلب المجموعات من الحساب: {e}")
+  1962→  1962→    return groups
+  1963→  1963→
+  1964→  1964→async def get_all_groups_count():
+  1965→  1965→    conn = sqlite3.connect(DB_PATH)
+  1966→  1966→    c = conn.cursor()
+  1967→  1967→    c.execute("SELECT COUNT(*) FROM groups")
+  1968→  1968→    count = c.fetchone()[0]
+  1969→  1969→    conn.close()
+  1970→  1970→    return count
+  1971→  1971→
+  1972→  1972→async def get_all_messages_count():
+  1973→  1973→    conn = sqlite3.connect(DB_PATH)
+  1974→  1974→    c = conn.cursor()
+  1975→  1975→    c.execute("SELECT COUNT(*) FROM messages")
+  1976→  1976→    count = c.fetchone()[0]
+  1977→  1977→    conn.close()
+  1978→  1978→    return count
+  1979→  1979→
+  1980→  1980→async def get_all_accounts():
+  1981→  1981→    conn = sqlite3.connect(DB_PATH)
+  1982→  1982→    c = conn.cursor()
+  1983→  1983→    c.execute("SELECT id FROM accounts WHERE status='active'")
+  1984→  1984→    accounts = c.fetchall()
+  1985→  1985→    conn.close()
+  1986→  1986→    return [a[0] for a in accounts]
+  1987→  1987→
+  1988→  1988→# ═══════════════════════════════════════════════
+  1989→  1989→#  نظام الانضمام التلقائي
+  1990→  1990→# ═══════════════════════════════════════════════
+  1991→  1991→async def auto_join_links(links):
+  1992→  1992→    global is_joining_active
+  1993→  1993→    if is_joining_active:
+  1994→  1994→        return 0, 0, "يوجد عملية انضمام قيد التنفيذ"
+  1995→  1995→    is_joining_active = True
+  1996→  1996→    if not user_clients:
+  1997→  1997→        is_joining_active = False
+  1998→  1998→        return 0, 0, "لا توجد حسابات"
+  1999→  1999→    acc_id = random.choice(list(user_clients.keys()))
+  2000→  2000→    client = user_clients.get(acc_id)
+
+[showing lines 1-2000 of 2002; use offset=2001 with limit to continue reading]

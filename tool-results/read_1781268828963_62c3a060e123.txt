@@ -1,0 +1,763 @@
+  3000→                return
+  3001→            is_posting_active = True
+  3002→            message_interval = get_setting('message_interval', '3')
+  3003→            enc_status = "✅ مفعل" if get_setting('encryption', 'on') == 'on' else "❌ معطل"
+  3004→            anti_status = "✅ مفعل" if get_setting('anti_detect', 'on') == 'on' else "❌ معطل"
+  3005→            obf_status = "✅ مفعل" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌ معطل"
+  3006→            await event.edit(
+  3007→                f"🚀 **بدأ النشر بالحماية القصوى!**\n\n"
+  3008→                f"👥 {len(all_accs)} حساب\n"
+  3009→                f"⏱ كل {message_interval} ثانية\n🛡 التشفير: {enc_status}\n🎭 مكافحة الكشف: {anti_status}\n🎭 تشويش النص: {obf_status}\n\n✅ النشر يعمل!",
+  3010→                buttons=[[Button.inline("⏹ إيقاف", b"stop_posting")]]
+  3011→            )
+  3012→            asyncio.create_task(auto_posting_loop())
+  3013→
+  3014→        elif data == 'stop_posting':
+  3015→            is_posting_active = False
+  3016→            await event.edit("⏹ **تم إيقاف النشر**", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+  3017→
+  3018→        elif data == 'scheduling':
+  3019→            pending_count = len(get_pending_scheduled_posts())
+  3020→            all_count = len(get_all_scheduled_posts())
+  3021→            await event.edit(
+  3022→                f"📅 **جدولة النشر المتقدمة**\n\n"
+  3023→                f"⏳ منشورات معلقة: {pending_count}\n"
+  3024→                f"📋 إجمالي المنشورات: {all_count}\n\n"
+  3025→                "🔹 **أنواع الجدولة:**\n"
+  3026→                "• مرة واحدة في وقت محدد\n"
+  3027→                "• تكرار كل X دقيقة\n"
+  3028→                "• تكرار كل ساعة\n"
+  3029→                "• يومياً في وقت محدد\n"
+  3030→                "• أسبوعياً\n\n"
+  3031→                "🔹 **أوضاع النشر:**\n"
+  3032→                "• ⚡ سريع (3 ثواني بين المجموعات)\n"
+  3033→                "• 🚀 عادي (بالمدة المحددة)",
+  3034→                buttons=get_scheduling_menu()
+  3035→            )
+  3036→
+  3037→        elif data == 'schedule_new':
+  3038→            await event.edit(
+  3039→                "📅 **جدولة منشور جديد**\n\n"
+  3040→                "أرسل التوقيت بأحد الصيغ التالية:\n\n"
+  3041→                "🕐 **وقت محدد:** `15:30` (الساعة 3:30 مساءً اليوم)\n"
+  3042→                "🕐 **بعد فترة:** `30د` (بعد 30 دقيقة)\n"
+  3043→                "🕐 **بعد ساعات:** `2س` (بعد ساعتين)\n"
+  3044→                "🔄 **تكرار:** `30د كل 60` (بعد 30 دقيقة ويتكرر كل 60 دقيقة)\n"
+  3045→                "⏰ **كل ساعة:** `15:30 ساعي`\n"
+  3046→                "📅 **يومي:** `15:30 يومي` (كل يوم الساعة 3:30)\n"
+  3047→                "📆 **أسبوعي:** `15:30 أسبوعي` (كل أسبوع نفس الوقت)\n\n"
+  3048→                "🔹 **أوضاع النشر:**\n"
+  3049→                "أضف `سريع` أو `عادي` في النهاية\n"
+  3050→                "مثال: `15:30 يومي سريع`\n\n"
+  3051→                "/cancel للإلغاء",
+  3052→            )
+  3053→            set_setting('awaiting_schedule', 'true')
+  3054→
+  3055→        elif data == 'schedule_list':
+  3056→            schedules = get_all_scheduled_posts()
+  3057→            if not schedules:
+  3058→                await event.edit("📋 لا توجد منشورات مجدولة", buttons=get_scheduling_menu())
+  3059→            else:
+  3060→                text = "📋 **المنشورات المجدولة:**\n\n"
+  3061→                for sched_id, msg_id, post_time, repeat_type, repeat_interval, post_mode, status, last_run, next_run in schedules[:15]:
+  3062→                    status_icon = "⏳" if status == 'pending' else "✅" if status == 'completed' else "❌"
+  3063→                    repeat_text = ""
+  3064→                    if repeat_type == 'repeat':
+  3065→                        repeat_text = f" (كل {repeat_interval} دقيقة)"
+  3066→                    elif repeat_type == 'daily':
+  3067→                        repeat_text = " (يومي)"
+  3068→                    elif repeat_type == 'weekly':
+  3069→                        repeat_text = " (أسبوعي)"
+  3070→                    elif repeat_type == 'hourly':
+  3071→                        repeat_text = " (كل ساعة)"
+  3072→                    mode_text = "⚡" if post_mode == 'fast' else "🚀"
+  3073→                    try:
+  3074→                        pt = datetime.fromisoformat(post_time)
+  3075→                        time_str = pt.strftime('%Y-%m-%d %H:%M')
+  3076→                    except:
+  3077→                        time_str = post_time
+  3078→                    text += f"{status_icon} #{sched_id} | رسالة #{msg_id}\n   🕐 {time_str}{repeat_text} {mode_text}\n\n"
+  3079→                await event.edit(text, buttons=get_scheduling_menu())
+  3080→
+  3081→        elif data == 'schedule_delete':
+  3082→            await event.edit("🗑 أرسل رقم الجدولة للحذف:\n/cancel للإلغاء")
+  3083→            set_setting('awaiting_schedule_delete', 'true')
+  3084→
+  3085→        elif data == 'schedule_delete_all':
+  3086→            conn = sqlite3.connect(DB_PATH)
+  3087→            c = conn.cursor()
+  3088→            c.execute("DELETE FROM scheduled_posts")
+  3089→            conn.commit()
+  3090→            conn.close()
+  3091→            for sid in list(scheduled_tasks.keys()):
+  3092→                try:
+  3093→                    scheduled_tasks[sid].cancel()
+  3094→                except:
+  3095→                    pass
+  3096→            scheduled_tasks.clear()
+  3097→            await event.answer("✅ تم حذف كل الجداول", alert=True)
+  3098→            await event.edit("✅ تم حذف كل المنشورات المجدولة", buttons=get_scheduling_menu())
+  3099→
+  3100→        elif data == 'set_fast_delay':
+  3101→            await event.edit("⚡ أرسل المدة بين المجموعات في النشر السريع (2-30 ثانية):\n/cancel للإلغاء")
+  3102→            set_setting('awaiting_fast_delay', 'true')
+  3103→
+  3104→        elif data == 'messages':
+  3105→            await event.edit("📝 **إدارة الرسائل**", buttons=[
+  3106→                [Button.inline("➕ إضافة", b"add_msg")],
+  3107→                [Button.inline("📋 عرض", b"list_msg")],
+  3108→                [Button.inline("🗑 حذف", b"del_msg")],
+  3109→                [Button.inline("🔙 رجوع", b"back")],
+  3110→            ])
+  3111→        elif data == 'add_msg':
+  3112→            await event.edit("➕ أرسل النص أو الوسائط (صورة/فيديو/ملف/جهة اتصال) مع تعليق:\n/cancel للإلغاء")
+  3113→            set_setting('awaiting_msg', 'true')
+  3114→        elif data == 'list_msg':
+  3115→            conn = sqlite3.connect(DB_PATH)
+  3116→            c = conn.cursor()
+  3117→            c.execute("SELECT id, substr(content,1,50), msg_type FROM messages LIMIT 20")
+  3118→            msgs = c.fetchall()
+  3119→            conn.close()
+  3120→            if not msgs:
+  3121→                await event.edit("📋 لا توجد رسائل", buttons=[[Button.inline("🔙 رجوع", b"messages")]])
+  3122→            else:
+  3123→                text = "📋 **الرسائل:**\n\n"
+  3124→                for mid, content, mtype in msgs:
+  3125→                    icons = {'text':'📝','photo':'📷','video':'🎬','audio':'🎵','document':'📄','contact':'👤'}
+  3126→                    text += f"{icons.get(mtype,'📦')} #{mid} [{mtype}] - {content[:30]}...\n"
+  3127→                await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"messages")]])
+  3128→        elif data == 'del_msg':
+  3129→            await event.edit("🗑 أرسل رقم الرسالة:\n/cancel للإلغاء")
+  3130→            set_setting('awaiting_del_msg', 'true')
+  3131→
+  3132→        elif data == 'accounts':
+  3133→            await event.edit("👥 **إدارة الحسابات**", buttons=[
+  3134→                [Button.inline("➕ إضافة", b"add_acc")],
+  3135→                [Button.inline("📋 عرض", b"list_acc")],
+  3136→                [Button.inline("🗑 حذف", b"del_acc")],
+  3137→                [Button.inline("🔙 رجوع", b"back")],
+  3138→            ])
+  3139→        elif data == 'add_acc':
+  3140→            await event.edit("➕ أرسل رقم الهاتف (مثال: +966512345678)\n/cancel للإلغاء")
+  3141→            set_setting('awaiting_phone', 'true')
+  3142→        elif data == 'list_acc':
+  3143→            conn = sqlite3.connect(DB_PATH)
+  3144→            c = conn.cursor()
+  3145→            c.execute("SELECT id, phone, status FROM accounts")
+  3146→            accs = c.fetchall()
+  3147→            conn.close()
+  3148→            if not accs:
+  3149→                await event.edit("👥 لا توجد حسابات", buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
+  3150→            else:
+  3151→                text = "👥 **الحسابات:**\n\n"
+  3152→                for aid, phone, status in accs:
+  3153→                    emoji = "✅" if status == 'active' else "⏸️"
+  3154→                    text += f"{emoji} #{aid} - {phone}\n"
+  3155→                await event.edit(text, buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
+  3156→        elif data == 'del_acc':
+  3157→            await event.edit("🗑 أرسل رقم الحساب:\n/cancel للإلغاء")
+  3158→            set_setting('awaiting_del_acc', 'true')
+  3159→
+  3160→        elif data == 'refresh_groups':
+  3161→            await event.edit("🔄 جاري تحديث المجموعات...")
+  3162→            total = 0
+  3163→            for acc_id, client in user_clients.items():
+  3164→                count = await fetch_all_groups_for_account(acc_id, client)
+  3165→                total += count
+  3166→            await event.edit(f"✅ تم تحديث {total} مجموعة", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+  3167→
+  3168→        elif data == 'settings':
+  3169→            obf_status = get_setting('obfuscation_enabled', 'on')
+  3170→            await event.edit(
+  3171→                "⚙️ **الإعدادات**\n\n"
+  3172→                f"⏱ مدة النشر العادي: {get_setting('message_interval', '3')} ثانية\n"
+  3173→                f"⚡ مدة النشر السريع: {get_setting('fast_post_delay', '3')} ثانية\n"
+  3174→                f"🐢 مدة الانضمام: {get_setting('join_interval', '100')} ثانية\n"
+  3175→                f"🛡 التشفير: {get_setting('encryption', 'on')}\n"
+  3176→                f"🎭 مكافحة الكشف: {get_setting('anti_detect', 'on')}\n"
+  3177→                f"🎭 تشويش النص: {obf_status}\n"
+  3178→                f"📳 Jitter: {get_setting('use_jitter', 'on')}\n"
+  3179→                f"🔄 تشويش YayText & Messletters: {get_setting('yaytext_messletters_obfuscation', 'on')}",
+  3180→                buttons=get_settings_menu()
+  3181→            )
+  3182→
+  3183→        elif data == 'set_msg_interval':
+  3184→            await event.edit("⏱ أرسل المدة (2-600 ثانية، الحد الأدنى 2):\n/cancel للإلغاء")
+  3185→            set_setting('awaiting_msg_interval', 'true')
+  3186→        elif data == 'set_join_interval':
+  3187→            await event.edit("🐢 أرسل المدة (30-600 ثانية):\n/cancel للإلغاء")
+  3188→            set_setting('awaiting_join_interval', 'true')
+  3189→        elif data == 'toggle_enc':
+  3190→            current = get_setting('encryption', 'on')
+  3191→            new_val = 'off' if current == 'on' else 'on'
+  3192→            set_setting('encryption', new_val)
+  3193→            await event.answer(f"التشفير: {'مفعل' if new_val == 'on' else 'معطل'}")
+  3194→            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+  3195→        elif data == 'toggle_anti':
+  3196→            current = get_setting('anti_detect', 'on')
+  3197→            new_val = 'off' if current == 'on' else 'on'
+  3198→            set_setting('anti_detect', new_val)
+  3199→            await event.answer(f"مكافحة الكشف: {'مفعلة' if new_val == 'on' else 'معطلة'}")
+  3200→            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+  3201→        elif data == 'toggle_obfuscate':
+  3202→            current = get_setting('obfuscation_enabled', 'on')
+  3203→            new_val = 'off' if current == 'on' else 'on'
+  3204→            set_setting('obfuscation_enabled', new_val)
+  3205→            await event.answer(f"تشويش النص: {'مفعل' if new_val == 'on' else 'معطل'}")
+  3206→            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+  3207→        elif data == 'toggle_jitter':
+  3208→            current = get_setting('use_jitter', 'on')
+  3209→            new_val = 'off' if current == 'on' else 'on'
+  3210→            set_setting('use_jitter', new_val)
+  3211→            await event.answer(f"Jitter: {'مفعل' if new_val == 'on' else 'معطل'}")
+  3212→            await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
+  3213→        elif data == 'toggle_yaytext':
+  3214→            current = get_setting('yaytext_messletters_obfuscation', 'on')
+  3215→            new_val = 'off' if current == 'on' else 'on'
+  3216→            set_setting('yaytext_messletters_obfuscation', new_val)
+  3217→            if new_val == 'on':
+  3218→                example = "Hello World عروض حصرية @user https://t.me/test 966512345678"
+  3219→                preview_text, preview_entities = yaytext_obfuscator.obfuscate(example)
+  3220→                await event.answer("تشويش YayText & Messletters: مفعل ✨")
+  3221→                await event.edit(
+  3222→                    f"🔄 **تشويش YayText & Messletters: مفعل** ✅\n\n"
+  3223→                    f"📝 **معاينة:**\n"
+  3224→                    f"الأصلي: {example}\n"
+  3225→                    f"المشوش: {preview_text}\n\n"
+  3226→                    f"🎨 **أنماط النصوص ({len(yaytext_obfuscator.get_all_style_names())}):**\n"
+  3227→                    f"• Bold, Italic, Bold Italic, Monospace\n"
+  3228→                    f"• Script, Bold Script, Fraktur, Bold Fraktur\n"
+  3229→                    f"• Double-Struck, Sans-Serif, Fullwidth\n"
+  3230→                    f"• Small Caps, Strikethrough, Underline\n"
+  3231→                    f"• Homoglyphs, زخارف Messletters\n\n"
+  3232→                    f"🔗 **الروابط:** نص مشوش + كيان مخفي (قابل للضغط! ✅)\n"
+  3233→                    f"   → بوتات الحماية لا تجد الرابط في النص\n"
+  3234→                    f"   → الضغط على النص المشوش يفتح الرابط الحقيقي\n\n"
+  3235→                    f"👤 **المعرفات:** نص مشوش + كيان مخفي (قابل للضغط! ✅)\n\n"
+  3236→                    f"🔢 **الأرقام:** تبقى أصلية (قابلة للنقر كأرقام هواتف ✅)\n\n"
+  3237→                    f"🔄 كل رسالة تستخدم نمط مختلف تلقائياً",
+  3238→                    buttons=get_settings_menu()
+  3239→                )
+  3240→            else:
+  3241→                await event.answer("تشويش YayText & Messletters: معطل")
+  3242→                await event.edit("🔄 **تشويش YayText & Messletters: معطل** ❌", buttons=get_settings_menu())
+  3243→
+  3244→        elif data == 'blacklist':
+  3245→            bl_count = len(get_blacklisted_groups())
+  3246→            await event.edit(f"🚫 **القائمة السوداء** ({bl_count} مجموعة)", buttons=get_blacklist_menu())
+  3247→        elif data == 'add_blacklist':
+  3248→            await event.edit("🚫 أرسل معرف المجموعة (group_id) لإضافتها للقائمة السوداء:\n/cancel للإلغاء")
+  3249→            set_setting('awaiting_add_blacklist', 'true')
+  3250→        elif data == 'view_blacklist':
+  3251→            blacklisted = get_blacklisted_groups()
+  3252→            if not blacklisted:
+  3253→                await event.edit("🚫 القائمة السوداء فارغة", buttons=get_blacklist_menu())
+  3254→            else:
+  3255→                text = "🚫 **القائمة السوداء:**\n\n"
+  3256→                for gid, gname, added_at in blacklisted[:30]:
+  3257→                    text += f"🚫 {gname[:25]} (ID: {gid})\n   📅 {added_at[:16]}\n\n"
+  3258→                await event.edit(text, buttons=get_blacklist_menu())
+  3259→        elif data == 'del_blacklist':
+  3260→            await event.edit("🚫 أرسل معرف المجموعة (group_id) لإزالتها من القائمة السوداء:\n/cancel للإلغاء")
+  3261→            set_setting('awaiting_del_blacklist', 'true')
+  3262→
+  3263→        elif data == 'stats':
+  3264→            conn = sqlite3.connect(DB_PATH)
+  3265→            c = conn.cursor()
+  3266→            c.execute("SELECT COUNT(*) FROM messages")
+  3267→            msg_count = c.fetchone()[0]
+  3268→            c.execute("SELECT COUNT(*) FROM accounts WHERE status='active'")
+  3269→            acc_count = c.fetchone()[0]
+  3270→            c.execute("SELECT COUNT(*) FROM groups")
+  3271→            grp_count = c.fetchone()[0]
+  3272→            c.execute("SELECT COUNT(*) FROM posting_history WHERE status='success'")
+  3273→            success_count = c.fetchone()[0]
+  3274→            c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%'")
+  3275→            fail_count = c.fetchone()[0]
+  3276→            c.execute("SELECT COUNT(*) FROM blacklist")
+  3277→            blacklist_count = c.fetchone()[0]
+  3278→            c.execute("SELECT COUNT(*) FROM scheduled_posts WHERE status='pending'")
+  3279→            sched_count = c.fetchone()[0]
+  3280→            join_stats = get_join_stats()
+  3281→            conn.close()
+  3282→            obf_status = '✅' if get_setting('obfuscation_enabled', 'on') == 'on' else '❌'
+  3283→            await event.edit(
+  3284→                f"📊 **الإحصائيات**\n\n"
+  3285→                f"📝 الرسائل: {msg_count}\n👥 الحسابات: {acc_count}\n"
+  3286→                f"📢 المجموعات: {grp_count}\n"
+  3287→                f"🚫 القائمة السوداء: {blacklist_count}\n"
+  3288→                f"✅ نجاح: {success_count}\n❌ فشل: {fail_count}\n"
+  3289→                f"🔗 انضمام: {join_stats['total']} (نجاح: {join_stats['success']})\n"
+  3290→                f"🎭 تشويش النص: {obf_status}\n"
+  3291→                f"📅 مجدولة: {sched_count}",
+  3292→                buttons=[[Button.inline("🔙 رجوع", b"back")]]
+  3293→            )
+  3294→
+  3295→        elif data == 'slow_join':
+  3296→            await event.edit("🐢 **انضمام بطيء**\n\nأرسل الروابط (كل رابط في سطر):\n/cancel للإلغاء")
+  3297→            set_setting('awaiting_slow_join', 'true')
+  3298→        elif data == 'join_reports':
+  3299→            await event.edit("🔗 **تقارير الانضمام**", buttons=get_join_reports_menu())
+  3300→        elif data == 'join_stats':
+  3301→            stats = get_join_stats()
+  3302→            await event.edit(
+  3303→                f"📊 **إحصائيات الانضمام**\n\n📌 المجموع: {stats['total']}\n✅ نجاح: {stats['success']}\n❌ فشل: {stats['failed']}\n📈 النسبة: {stats['success']/(stats['total'] or 1)*100:.1f}%",
+  3304→                buttons=get_join_reports_menu()
+  3305→            )
+  3306→        elif data == 'join_history':
+  3307→            history = get_join_history(30)
+  3308→            if not history:
+  3309→                await event.edit("📭 لا توجد سجلات", buttons=get_join_reports_menu())
+  3310→            else:
+  3311→                text = "🔗 **آخر عمليات الانضمام:**\n\n"
+  3312→                for link, group_name, joined_at, joined_by, status in history[:15]:
+  3313→                    icon = "✅" if status == 'success' else "❌"
+  3314→                    text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n\n"
+  3315→                await event.edit(text, buttons=get_join_reports_menu())
+  3316→
+  3317→        elif data == 'clean_db':
+  3318→            await event.edit(
+  3319→                "⚠️ **تنظيف قاعدة البيانات**\n\nسيتم حذف كل شيء ما عدا الحسابات\n\nهل أنت متأكد؟",
+  3320→                buttons=[[Button.inline("✅ نعم", b"confirm_clean")], [Button.inline("❌ إلغاء", b"back")]]
+  3321→            )
+  3322→        elif data == 'confirm_clean':
+  3323→            try:
+  3324→                saved = clean_database_keep_accounts()
+  3325→                set_setting('message_interval', '3')
+  3326→                set_setting('fast_post_delay', '3')
+  3327→                set_setting('join_interval', '100')
+  3328→                set_setting('encryption', 'on')
+  3329→                set_setting('anti_detect', 'on')
+  3330→                set_setting('obfuscation_enabled', 'on')
+  3331→                set_setting('yaytext_messletters_obfuscation', 'on')
+  3332→                await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب",
+  3333→                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
+  3334→            except Exception as e:
+  3335→                await event.edit(f"❌ فشل: {e}", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+  3336→
+  3337→    # معالج الرسائل النصية والوسائط
+  3338→    @bot.on(events.NewMessage)
+  3339→    async def message_handler(event):
+  3340→        if not is_admin(event.sender_id):
+  3341→            return
+  3342→        if event.raw_text == '/cancel':
+  3343→            for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
+  3344→                       'awaiting_slow_join', 'awaiting_del_msg', 'awaiting_del_acc',
+  3345→                       'awaiting_msg_interval', 'awaiting_join_interval',
+  3346→                       'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
+  3347→                       'awaiting_schedule', 'awaiting_schedule_delete']:
+  3348→                set_setting(key, '')
+  3349→            if event.sender_id in temp_sessions:
+  3350→                try:
+  3351→                    await temp_sessions[event.sender_id]["client"].disconnect()
+  3352→                except:
+  3353→                    pass
+  3354→                del temp_sessions[event.sender_id]
+  3355→            await event.respond("تم الإلغاء", buttons=get_main_menu())
+  3356→            return
+  3357→
+  3358→        # === جدولة النشر (محسنة) ===
+  3359→        if get_setting('awaiting_schedule') == 'true':
+  3360→            set_setting('awaiting_schedule', '')
+  3361→            text = event.raw_text.strip()
+  3362→            try:
+  3363→                post_time = None
+  3364→                repeat_type = 'once'
+  3365→                repeat_interval = 0
+  3366→                post_mode = 'fast'  # افتراضي: سريع
+  3367→
+  3368→                # تحقق من وضع النشر (سريع/عادي)
+  3369→                if 'سريع' in text:
+  3370→                    post_mode = 'fast'
+  3371→                    text = text.replace('سريع', '').strip()
+  3372→                elif 'عادي' in text:
+  3373→                    post_mode = 'normal'
+  3374→                    text = text.replace('عادي', '').strip()
+  3375→
+  3376→                # Parse "15:30 أسبوعي"
+  3377→                if 'أسبوعي' in text:
+  3378→                    time_part = text.replace('أسبوعي', '').strip()
+  3379→                    hour, minute = map(int, time_part.split(':'))
+  3380→                    today = datetime.now()
+  3381→                    post_time = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
+  3382→                    if post_time <= today:
+  3383→                        post_time += timedelta(weeks=1)
+  3384→                    repeat_type = 'weekly'
+  3385→
+  3386→                # Parse "15:30 يومي"
+  3387→                elif 'يومي' in text:
+  3388→                    time_part = text.replace('يومي', '').strip()
+  3389→                    hour, minute = map(int, time_part.split(':'))
+  3390→                    today = datetime.now()
+  3391→                    post_time = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
+  3392→                    if post_time <= today:
+  3393→                        post_time += timedelta(days=1)
+  3394→                    repeat_type = 'daily'
+  3395→
+  3396→                # Parse "15:30 ساعي"
+  3397→                elif 'ساعي' in text:
+  3398→                    time_part = text.replace('ساعي', '').strip()
+  3399→                    hour, minute = map(int, time_part.split(':'))
+  3400→                    today = datetime.now()
+  3401→                    post_time = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
+  3402→                    if post_time <= today:
+  3403→                        post_time += timedelta(hours=1)
+  3404→                    repeat_type = 'hourly'
+  3405→
+  3406→                # Parse "30د كل 60" or "2س كل 120"
+  3407→                elif 'كل' in text:
+  3408→                    parts = text.split('كل')
+  3409→                    first_part = parts[0].strip()
+  3410→                    repeat_interval = int(parts[1].strip())
+  3411→                    if 'د' in first_part:
+  3412→                        delay_min = int(first_part.replace('د', '').strip())
+  3413→                        post_time = datetime.now() + timedelta(minutes=delay_min)
+  3414→                    elif 'س' in first_part:
+  3415→                        delay_hours = int(first_part.replace('س', '').strip())
+  3416→                        post_time = datetime.now() + timedelta(hours=delay_hours)
+  3417→                    repeat_type = 'repeat'
+  3418→
+  3419→                # Parse "15:30" (specific time today)
+  3420→                elif re.match(r'^\d{1,2}:\d{2}$', text):
+  3421→                    hour, minute = map(int, text.split(':'))
+  3422→                    today = datetime.now()
+  3423→                    post_time = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
+  3424→                    if post_time <= today:
+  3425→                        post_time += timedelta(days=1)
+  3426→
+  3427→                # Parse "30د" (after 30 minutes)
+  3428→                elif 'د' in text:
+  3429→                    delay_min = int(text.replace('د', '').strip())
+  3430→                    post_time = datetime.now() + timedelta(minutes=delay_min)
+  3431→
+  3432→                # Parse "2س" (after 2 hours)
+  3433→                elif 'س' in text:
+  3434→                    delay_hours = int(text.replace('س', '').strip())
+  3435→                    post_time = datetime.now() + timedelta(hours=delay_hours)
+  3436→
+  3437→                if post_time is None:
+  3438→                    await event.respond(
+  3439→                        "❌ صيغة غير صحيحة!\n\nاستخدم:\n"
+  3440→                        "• `15:30` للوقت المحدد\n"
+  3441→                        "• `30د` للدقائق\n"
+  3442→                        "• `2س` للساعات\n"
+  3443→                        "• `30د كل 60` للتكرار\n"
+  3444→                        "• `15:30 يومي` لليومي\n"
+  3445→                        "• `15:30 أسبوعي` للأسبوعي\n"
+  3446→                        "• `15:30 ساعي` لكل ساعة\n"
+  3447→                        "• أضف `سريع` أو `عادي` لنوع النشر",
+  3448→                        buttons=get_main_menu()
+  3449→                    )
+  3450→                    return
+  3451→
+  3452→                # تحقق من وجود رسائل
+  3453→                conn = sqlite3.connect(DB_PATH)
+  3454→                c = conn.cursor()
+  3455→                c.execute("SELECT id FROM messages")
+  3456→                msg_ids = [row[0] for row in c.fetchall()]
+  3457→                conn.close()
+  3458→                if not msg_ids:
+  3459→                    await event.respond("⚠️ لا توجد رسائل! أضف رسالة أولاً", buttons=get_main_menu())
+  3460→                    return
+  3461→
+  3462→                # جدولة كل الرسائل
+  3463→                sched_ids = []
+  3464→                for msg_id in msg_ids:
+  3465→                    sched_id = add_scheduled_post(msg_id, post_time.isoformat(), repeat_type, repeat_interval, post_mode)
+  3466→                    sched_ids.append(sched_id)
+  3467→
+  3468→                repeat_text = ""
+  3469→                if repeat_type == 'repeat':
+  3470→                    repeat_text = f"\n🔄 يتكرر كل {repeat_interval} دقيقة"
+  3471→                elif repeat_type == 'daily':
+  3472→                    repeat_text = "\n📅 يتكرر يومياً"
+  3473→                elif repeat_type == 'weekly':
+  3474→                    repeat_text = "\n📆 يتكرر أسبوعياً"
+  3475→                elif repeat_type == 'hourly':
+  3476→                    repeat_text = "\n⏰ يتكرر كل ساعة"
+  3477→
+  3478→                mode_text = "⚡ سريع" if post_mode == 'fast' else "🚀 عادي"
+  3479→
+  3480→                await event.respond(
+  3481→                    f"✅ **تمت الجدولة بنجاح!**\n\n"
+  3482→                    f"🕐 وقت النشر: {post_time.strftime('%Y-%m-%d %H:%M')}\n"
+  3483→                    f"📝 عدد الرسائل: {len(msg_ids)}\n"
+  3484→                    f"📌 أرقام الجدولة: {', '.join(map(str, sched_ids))}\n"
+  3485→                    f"📋 وضع النشر: {mode_text}"
+  3486→                    f"{repeat_text}",
+  3487→                    buttons=get_main_menu()
+  3488→                )
+  3489→            except Exception as e:
+  3490→                await event.respond(f"❌ خطأ: {e}\n\nاستخدم الصيغ المطلوبة", buttons=get_main_menu())
+  3491→            return
+  3492→
+  3493→        # === حذف جدولة ===
+  3494→        if get_setting('awaiting_schedule_delete') == 'true':
+  3495→            set_setting('awaiting_schedule_delete', '')
+  3496→            try:
+  3497→                sched_id = int(event.raw_text.strip())
+  3498→                delete_scheduled_post(sched_id)
+  3499→                await event.respond(f"✅ تم حذف الجدولة #{sched_id}", buttons=get_main_menu())
+  3500→            except:
+  3501→                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+  3502→            return
+  3503→
+  3504→        if get_setting('awaiting_fast_delay') == 'true':
+  3505→            set_setting('awaiting_fast_delay', '')
+  3506→            try:
+  3507→                val = int(event.raw_text.strip())
+  3508→                if 2 <= val <= 30:
+  3509→                    set_setting('fast_post_delay', str(val))
+  3510→                    await event.respond(f"✅ تم ضبط سرعة النشر السريع إلى {val} ثانية", buttons=get_main_menu())
+  3511→                else:
+  3512→                    await event.respond("❌ الرجاء إدخال قيمة بين 2 و 30", buttons=get_main_menu())
+  3513→            except:
+  3514→                await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
+  3515→            return
+  3516→
+  3517→        if get_setting('awaiting_msg_interval') == 'true':
+  3518→            set_setting('awaiting_msg_interval', '')
+  3519→            try:
+  3520→                val = int(event.raw_text.strip())
+  3521→                if 2 <= val <= 600:
+  3522→                    set_setting('message_interval', str(val))
+  3523→                    await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
+  3524→                else:
+  3525→                    await event.respond("❌ بين 2 و 600", buttons=get_main_menu())
+  3526→            except:
+  3527→                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+  3528→            return
+  3529→
+  3530→        if get_setting('awaiting_join_interval') == 'true':
+  3531→            set_setting('awaiting_join_interval', '')
+  3532→            try:
+  3533→                val = int(event.raw_text.strip())
+  3534→                if 30 <= val <= 600:
+  3535→                    set_setting('join_interval', str(val))
+  3536→                    await event.respond(f"✅ تم الضبط إلى {val} ثانية", buttons=get_main_menu())
+  3537→                else:
+  3538→                    await event.respond("❌ بين 30 و 600", buttons=get_main_menu())
+  3539→            except:
+  3540→                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+  3541→            return
+  3542→
+  3543→        # Blacklist add
+  3544→        if get_setting('awaiting_add_blacklist') == 'true':
+  3545→            set_setting('awaiting_add_blacklist', '')
+  3546→            try:
+  3547→                group_id = event.raw_text.strip()
+  3548→                group_name = ""
+  3549→                for acc_id, client in user_clients.items():
+  3550→                    try:
+  3551→                        entity = await client.get_entity(int(group_id))
+  3552→                        group_name = getattr(entity, 'title', str(group_id))
+  3553→                        break
+  3554→                    except:
+  3555→                        continue
+  3556→                add_to_blacklist(group_id, group_name)
+  3557→                await event.respond(f"✅ تمت إضافة المجموعة إلى القائمة السوداء: {group_name or group_id}", buttons=get_main_menu())
+  3558→            except:
+  3559→                await event.respond("❌ معرف غير صالح", buttons=get_main_menu())
+  3560→            return
+  3561→
+  3562→        # Blacklist remove
+  3563→        if get_setting('awaiting_del_blacklist') == 'true':
+  3564→            set_setting('awaiting_del_blacklist', '')
+  3565→            try:
+  3566→                group_id = event.raw_text.strip()
+  3567→                remove_from_blacklist(group_id)
+  3568→                await event.respond(f"✅ تمت إزالة المجموعة من القائمة السوداء: {group_id}", buttons=get_main_menu())
+  3569→            except:
+  3570→                await event.respond("❌ معرف غير صالح", buttons=get_main_menu())
+  3571→            return
+  3572→
+  3573→        # الروابط - انضمام تلقائي
+  3574→        links = re.findall(r'(https?://t\.me/(?:joinchat/|\+)?[a-zA-Z0-9_\-]+)', event.raw_text)
+  3575→        if links and user_clients and not get_setting('awaiting_msg'):
+  3576→            await event.respond(f"🚀 تم اكتشاف {len(links[:20])} رابط، جاري الانضمام...")
+  3577→            success, failed, msg = await auto_join_links(links)
+  3578→            await event.respond(f"📊 النتيجة: ✅ {success} نجاح / ❌ {failed} فشل", buttons=get_main_menu())
+  3579→            return
+  3580→
+  3581→        # إضافة رسالة
+  3582→        if get_setting('awaiting_msg') == 'true':
+  3583→            set_setting('awaiting_msg', '')
+  3584→            msg_type = 'text'
+  3585→            media_path = None
+  3586→            content = event.raw_text or ""
+  3587→            media_data = None
+  3588→            if event.photo:
+  3589→                msg_type = 'photo'
+  3590→                os.makedirs('media', exist_ok=True)
+  3591→                media_path = await bot.download_media(event.message, 'media/')
+  3592→                content = event.raw_text or ""
+  3593→            elif event.video:
+  3594→                msg_type = 'video'
+  3595→                os.makedirs('media', exist_ok=True)
+  3596→                media_path = await bot.download_media(event.message, 'media/')
+  3597→                content = event.raw_text or ""
+  3598→            elif event.audio:
+  3599→                msg_type = 'audio'
+  3600→                os.makedirs('media', exist_ok=True)
+  3601→                media_path = await bot.download_media(event.message, 'media/')
+  3602→                content = event.raw_text or ""
+  3603→            elif event.document:
+  3604→                msg_type = 'document'
+  3605→                os.makedirs('media', exist_ok=True)
+  3606→                media_path = await bot.download_media(event.message, 'media/')
+  3607→                content = event.raw_text or ""
+  3608→            elif event.contact:
+  3609→                msg_type = 'contact'
+  3610→                contact = event.message.media
+  3611→                contact_data = {
+  3612→                    'phone': contact.phone_number,
+  3613→                    'first_name': contact.first_name,
+  3614→                    'last_name': contact.last_name or '',
+  3615→                    'vcard': contact.vcard or ''
+  3616→                }
+  3617→                media_data = json.dumps(contact_data)
+  3618→                content = event.raw_text or f"جهة اتصال: {contact.first_name}"
+  3619→            elif event.raw_text and event.raw_text.strip():
+  3620→                msg_type = 'text'
+  3621→                content = event.raw_text
+  3622→            else:
+  3623→                await event.respond("❌ نوع غير مدعوم!", buttons=get_main_menu())
+  3624→                return
+  3625→            conn = sqlite3.connect(DB_PATH)
+  3626→            c = conn.cursor()
+  3627→            c.execute('INSERT INTO messages (content, media_path, msg_type, media_data) VALUES (?, ?, ?, ?)',
+  3628→                      (content, media_path, msg_type, media_data))
+  3629→            conn.commit()
+  3630→            msg_id = c.lastrowid
+  3631→            conn.close()
+  3632→            types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
+  3633→            await event.respond(
+  3634→                f"✅ **تم حفظ الرسالة #{msg_id}!**\n\n"
+  3635→                f"📎 النوع: {types.get(msg_type, msg_type)}\n\n"
+  3636→                f"💡 التشويش والتشفير يحافظان على المحتوى كما هو\n"
+  3637→                f"التغييرات غير مرئية للعين - فقط الآلات تكتشفها",
+  3638→                buttons=get_main_menu()
+  3639→            )
+  3640→            return
+  3641→
+  3642→        # إضافة حساب - رقم الهاتف
+  3643→        if get_setting('awaiting_phone') == 'true':
+  3644→            set_setting('awaiting_phone', '')
+  3645→            phone = event.raw_text.strip()
+  3646→            if not re.match(r'^\+?\d{8,15}$', phone):
+  3647→                await event.respond("❌ رقم غير صالح! مثال: +966512345678")
+  3648→                return
+  3649→            try:
+  3650→                client = TelegramClient(StringSession(), API_ID, API_HASH)
+  3651→                await client.connect()
+  3652→                result = await client.send_code_request(phone)
+  3653→                temp_sessions[event.sender_id] = {
+  3654→                    "phone": phone,
+  3655→                    "client": client,
+  3656→                    "phone_code_hash": result.phone_code_hash
+  3657→                }
+  3658→                set_setting('awaiting_code', 'true')
+  3659→                await event.respond(f"📩 تم إرسال الرمز إلى {phone}\nأرسل الرمز:")
+  3660→            except Exception as e:
+  3661→                await event.respond(f"❌ {str(e)[:200]}")
+  3662→            return
+  3663→
+  3664→        if get_setting('awaiting_code') == 'true':
+  3665→            set_setting('awaiting_code', '')
+  3666→            code = event.raw_text.strip()
+  3667→            session_data = temp_sessions.get(event.sender_id)
+  3668→            if not session_data:
+  3669→                await event.respond("❌ انتهت الجلسة")
+  3670→                return
+  3671→            try:
+  3672→                await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
+  3673→                me = await session_data["client"].get_me()
+  3674→                conn = sqlite3.connect(DB_PATH)
+  3675→                c = conn.cursor()
+  3676→                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+  3677→                          (session_data["client"].session.save(), me.phone, 'active'))
+  3678→                conn.commit()
+  3679→                acc_id = c.lastrowid
+  3680→                conn.close()
+  3681→                user_clients[acc_id] = session_data["client"]
+  3682→                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+  3683→                del temp_sessions[event.sender_id]
+  3684→                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+  3685→            except SessionPasswordNeededError:
+  3686→                set_setting('awaiting_password', 'true')
+  3687→                await event.respond("🔐 أرسل كلمة المرور:")
+  3688→            except PhoneCodeInvalidError:
+  3689→                await event.respond("❌ رمز غير صحيح!")
+  3690→            except Exception as e:
+  3691→                await event.respond(f"❌ {str(e)[:200]}")
+  3692→            return
+  3693→
+  3694→        if get_setting('awaiting_password') == 'true':
+  3695→            set_setting('awaiting_password', '')
+  3696→            password = event.raw_text.strip()
+  3697→            session_data = temp_sessions.get(event.sender_id)
+  3698→            if not session_data:
+  3699→                await event.respond("❌ انتهت الجلسة")
+  3700→                return
+  3701→            try:
+  3702→                await session_data["client"].sign_in(password=password)
+  3703→                me = await session_data["client"].get_me()
+  3704→                conn = sqlite3.connect(DB_PATH)
+  3705→                c = conn.cursor()
+  3706→                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
+  3707→                          (session_data["client"].session.save(), me.phone, 'active'))
+  3708→                conn.commit()
+  3709→                acc_id = c.lastrowid
+  3710→                conn.close()
+  3711→                user_clients[acc_id] = session_data["client"]
+  3712→                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+  3713→                del temp_sessions[event.sender_id]
+  3714→                await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+  3715→            except Exception as e:
+  3716→                await event.respond(f"❌ {e}")
+  3717→            return
+  3718→
+  3719→        if get_setting('awaiting_slow_join') == 'true':
+  3720→            set_setting('awaiting_slow_join', '')
+  3721→            links = [l.strip() for l in event.raw_text.split('\n') if l.strip()]
+  3722→            if links:
+  3723→                success, failed, msg = await auto_join_links(links)
+  3724→                await event.respond(f"✅ نجاح: {success}\n❌ فشل: {failed}", buttons=get_main_menu())
+  3725→            return
+  3726→
+  3727→        if get_setting('awaiting_del_msg') == 'true':
+  3728→            set_setting('awaiting_del_msg', '')
+  3729→            try:
+  3730→                msg_id = int(event.raw_text.strip())
+  3731→                conn = sqlite3.connect(DB_PATH)
+  3732→                c = conn.cursor()
+  3733→                c.execute('DELETE FROM messages WHERE id=?', (msg_id,))
+  3734→                conn.commit()
+  3735→                conn.close()
+  3736→                await event.respond("✅ تم الحذف", buttons=get_main_menu())
+  3737→            except:
+  3738→                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+  3739→            return
+  3740→
+  3741→        if get_setting('awaiting_del_acc') == 'true':
+  3742→            set_setting('awaiting_del_acc', '')
+  3743→            try:
+  3744→                acc_id = int(event.raw_text.strip())
+  3745→                if acc_id in user_clients:
+  3746→                    await user_clients[acc_id].disconnect()
+  3747→                    del user_clients[acc_id]
+  3748→                conn = sqlite3.connect(DB_PATH)
+  3749→                c = conn.cursor()
+  3750→                c.execute('DELETE FROM accounts WHERE id=?', (acc_id,))
+  3751→                conn.commit()
+  3752→                conn.close()
+  3753→                await event.respond("✅ تم الحذف", buttons=get_main_menu())
+  3754→            except:
+  3755→                await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
+  3756→            return
+  3757→
+  3758→    await bot.run_until_disconnected()
+  3759→
+  3760→if __name__ == '__main__':
+  3761→    asyncio.run(main())
+  3762→
