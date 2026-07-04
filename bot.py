@@ -4933,79 +4933,75 @@ def clean_database_keep_accounts():
 #  القوائم والأزرار
 # ═══════════════════════════════════════════════
 def get_main_menu():
-    """القائمة الرئيسية المبسطة - 10 أزرار بدل 39"""
-    ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
-    ft_style = get_setting('fancy_text_style', 'strikethrough')
-    ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
-    ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
-    pending_sched = len(get_pending_scheduled_posts())
-    queue_count = len(join_queue)
-    queue_info = f" ({queue_count})" if queue_count > 0 else ""
-    return [
-        # ── النشر ──
-        [Button.inline("🚀 بدء النشر", b"start_posting"),
-         Button.inline("⏹ إيقاف النشر", b"stop_posting")],
-        [Button.inline("⚡ نشر سريع للكل", b"fast_posting"),
-         Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
-        # ── المحتوى ──
-        [Button.inline("📝 إدارة الرسائل", b"messages"),
-         Button.inline("👥 إدارة الحسابات", b"accounts")],
-        [Button.inline(f"✨ أنماط النص {ft_status}", b"fancy_text_menu"),
-         Button.inline(f"{ft_icon} {ft_name}", b"fancy_text_menu")],
-        # ── الحماية الموحدة ──
-        [Button.inline("🛡️ التشفير والحماية", b"protection_menu")],
-        # ── الانضمام (تلقائي - فقط تقارير وإعدادات) ──
-        [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports"),
-         Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
-        # ── عام ──
-        [Button.inline("🚫 القائمة السوداء", b"blacklist"),
-         Button.inline("📊 الإحصائيات", b"stats")],
-        [Button.inline("⚙️ الإعدادات", b"settings")],
-    ]
-
-
-def get_protection_menu():
-    """قائمة التشفير والحماية الموحدة - كل الأزرار في مكان واحد"""
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
+    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
-    stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
     ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
     spintax_status = "✅" if get_setting('spintax_enabled', 'on') == 'on' else "❌"
     kashida_status = "✅" if get_setting('kashida_enabled', 'on') == 'on' else "❌"
     homoglyph_status = "✅" if get_setting('arabic_homoglyph_enabled', 'on') == 'on' else "❌"
-    vs_status = "✅" if get_setting('variation_selectors_enabled', 'on') == 'on' else "❌"
-    tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
     hd_status = "✅" if get_setting('human_delay_enabled', 'on') == 'on' else "❌"
     swarm_status = "✅" if get_setting('ghost_swarm_enabled', 'off') == 'on' else "❌"
+    vs_status = "✅" if get_setting('variation_selectors_enabled', 'on') == 'on' else "❌"
+    tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
     lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
+    stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
+    se_status = "✅" if get_setting('super_encryption_enabled', 'off') == 'on' else "❌"
     he_status = "✅" if get_setting('hyper_encryption_enabled', 'on') == 'on' else "❌"
+    ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
+    ft_style = get_setting('fancy_text_style', 'strikethrough')
+    # أيقونة النمط الحالي
+    ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
+    ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
     enc_strength = get_setting('encryption_strength', 'medium')
     strength_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(enc_strength, '🟡')
+    message_interval = get_setting('message_interval', '3')
+    join_interval = get_setting('join_interval', '30')
+    fast_delay = get_setting('fast_post_delay', '3')
+    pending_sched = len(get_pending_scheduled_posts())
     return [
-        # ── أساسيات ──
+        [Button.inline("📝 إدارة الرسائل", b"messages")],
+        [Button.inline("👥 إدارة الحسابات", b"accounts")],
+        [Button.inline("⚡ نشر سريع للكل", b"fast_posting"),
+         Button.inline("🚀 بدء النشر", b"start_posting"),
+         Button.inline("⏹ إيقاف النشر", b"stop_posting")],
+        [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
+        # ✨ Fancy Text - ميزة جديدة (بديل HyperEncryption)
+        [Button.inline(f"✨ Fancy Text {ft_status}", b"toggle_fancy_text"),
+         Button.inline(f"{ft_icon} النمط: {ft_name}", b"fancy_text_menu")],
+        [Button.inline("🧪 معاينة كل الأنماط (26)", b"fancy_text_preview"),
+         Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth")],
+        # HyperEncryption يبقى متاح كزر منفصل
+        [Button.inline(f"🔥 HyperEncryption {he_status}", b"toggle_hyper_enc"),
+         Button.inline(f"{strength_emoji} قوة التشفير: {enc_strength}", b"enc_strength")],
+        [Button.inline("🧪 اختبار التشفير الخارق", b"enc_test"),
+         Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
         [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
          Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
-         Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth")],
-        # ── HyperEncryption ──
-        [Button.inline(f"🔥 HyperEncryption {he_status}", b"toggle_hyper_enc"),
-         Button.inline(f"{strength_emoji} قوة: {enc_strength}", b"enc_strength")],
-        [Button.inline("🧪 اختبار التشفير", b"enc_test")],
-        # ── تنويع النص ──
+        [Button.inline(f"💎 تشفير خارق قديم {se_status}", b"toggle_super_encryption"),
+         Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
         [Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext"),
          Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax")],
         [Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida"),
-         Button.inline(f"🔀 Homoglyphs {homoglyph_status}", b"toggle_arabic_homoglyph")],
-        [Button.inline(f"🔤 VS {vs_status}", b"toggle_vs"),
-         Button.inline(f"🏷️ Tags {tag_status}", b"toggle_tag")],
-        # ── متقدم ──
+         Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph")],
+        [Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs"),
+         Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag")],
         [Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm"),
          Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
         [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
-        [Button.inline("🛡️ AntiGuardian", b"anti_guardian_settings"),
-         Button.inline("⚙️ إعدادات متقدمة", b"advanced_enc_settings")],
-        [Button.inline("🔙 رجوع", b"back")],
+        [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
+        [Button.inline("⚙️ الإعدادات", b"settings"),
+         Button.inline("📊 الإحصائيات", b"stats")],
+        [Button.inline(f"🚀 انضمام تلقائي ({join_interval}ث)", b"auto_join"),
+         Button.inline("📋 تقارير الانضمام", b"join_reports")],
+        [Button.inline("⏹ إيقاف الانضمام", b"stop_joining"),
+         Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
+        [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval"),
+         Button.inline(f"⚡ سرعة النشر السريع ({fast_delay}ث)", b"set_fast_delay")],
+        [Button.inline("🚫 القائمة السوداء", b"blacklist")],
+        [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
+        [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
     ]
 
 def get_scheduling_menu():
@@ -5032,22 +5028,25 @@ def get_join_settings_menu():
     queue_info = f" ({queue_count} في الطابور)" if queue_count > 0 else ""
     return [
         [Button.inline(f"⏱ الفاصل بين الروابط ({join_interval}ث)", b"set_join_interval")],
-        [Button.inline(f"📋 الطابور{queue_info}", b"view_join_queue"),
-         Button.inline("⏹ إيقاف الانضمام", b"stop_joining")],
+        [Button.inline(f"📋 الطابور{queue_info}", b"view_join_queue")],
         [Button.inline("🔙 رجوع", b"back")],
     ]
 
 def get_settings_menu():
-    """قائمة الإعدادات المبسطة"""
-    message_interval = get_setting('message_interval', '3')
-    fast_delay = get_setting('fast_post_delay', '3')
+    enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
+    anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
+    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
+    obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
+    ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
     return [
-        [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval"),
-         Button.inline(f"⚡ سرعة النشر السريع ({fast_delay}ث)", b"set_fast_delay")],
-        [Button.inline("🔗 إعدادات الانضمام", b"join_settings"),
-         Button.inline("🛡️ التشفير والحماية", b"protection_menu")],
-        [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db"),
-         Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+        [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
+        [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
+        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
+        [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"🔄 تشويش YayText & Messletters {ym_status}", b"toggle_yaytext")],
+        [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
+        [Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
+        [Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
         [Button.inline("🔙 رجوع", b"back")]
     ]
 
@@ -5089,15 +5088,25 @@ async def main():
         example_text = "اشترك في قناتنا للحصول على عروض حصرية"
         encrypted_example = encrypt_text(example_text)
         await event.respond(
-            "🛡 **بوت النشر الخارق 2026**\n\n"
-            "✨ **مميزات:**\n"
-            "• 🎨 أنماط نصية (26 نمط) - Strikethrough/Circled/Boxed...\n"
-            "• 🛡️ تشفير وحماية - 12+ طبقة تجاوز بوتات الحماية\n"
-            "• 🚀 انضمام تلقائي - أرسل رابط وانضم فوراً\n"
-            "• 📅 جدولة - مرة/يومي/أسبوعي/كل X دقيقة\n"
-            "• ⚡ نشر سريع + توزيع ذكي بين الحسابات\n\n"
-            f"📢 المجموعات: {groups_count} | 📌 مجدولات: {pending_sched}\n"
-            f"⏱ مدة النشر: {message_interval}ث | ⚡ سرعة سريع: {fast_delay}ث",
+            "🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
+            "✨ **12+ طبقة تشفير خارقة:**\n"
+            "• 🎲 Spintax - تنويع تلقائي للرسائل\n"
+            "• 🔀 Arabic Homoglyphs - بدائل متطابقة مرئياً\n"
+            "• 〰️ كشيدة/Tatweel - تبقى بعد كل التطبيع!\n"
+            "• 🏷️ Tag Characters - ترميز مخفي كامل\n"
+            "• 🔤 Variation Selectors - أحرف تجميع غير مرئية\n"
+            "• PFB + NFD + مسافات بديلة + أحرف مخفية\n\n"
+            "🐝 **أنظمة متقدمة:**\n"
+            "• 🐝 Ghost Swarm - تعديلات متتالية بتكويد مختلف\n"
+            "• 👁️ edit_hide - يخفي علامة 'معدّل'\n"
+            "• ⏱️ Human Delay - محاكاة تأخير بشري\n"
+            "• ⚖️ Load Balancer - توزيع ذكي بين الحسابات\n"
+            "• 📈 Exponential Backoff - تعامل احترافي مع FloodWait\n"
+            "• 🔗 الروابط والمعرفات تبقى قابلة للنقر!\n\n"
+            f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
+            f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولات: {pending_sched}\n\n"
+            f"📢 المجموعات: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n\n"
+            "🧪 جرب: /test_obfuscate لاختبار التشفير",
             buttons=get_main_menu()
         )
 
@@ -5750,22 +5759,23 @@ async def main():
             if new_val == 'on':
                 example = "اشترك في قناتنا https://t.me/example عروض حصرية!"
                 transformed = fancy_engine.apply_style(example, current_style)
-                await event.answer("✨ أنماط النص: مفعل")
+                await event.answer("✨ Fancy Text: مفعل")
                 await event.edit(
-                    f"✨ **أنماط النص: مفعل** ✅\n\n"
+                    f"✨ **FancyTextEngine: مفعل** ✅\n\n"
+                    f"محرك 26 نمط بصري مستوحى من FSymbols:\n"
+                    f"• 8 أنماط تشكيل (Strikethrough/Underline/Overline...)\n"
+                    f"• 4 أنماط إحاطة (Boxed/Circled/Squared/Bubble)\n"
+                    f"• 9 أنماط استبدال (Fraktur/Script/Monospace...)\n"
+                    f"• 5 أنماط متقدمة (Mirrored/Upside Down/Zalgo...)\n\n"
                     f"📊 النمط الحالي: **{style_info.get('name', current_style)}** ({style_info.get('ar', '')})\n\n"
                     f"📝 **الأصل:**\n{example}\n\n"
                     f"✨ **بعد التطبيق:**\n{transformed}\n\n"
-                    f"💡 اختر نمطاً مختلفاً من زر 'أنماط النص'.",
+                    f"💡 اختر نمطاً مختلفاً من زر 'النمط' في القائمة الرئيسية.",
                     buttons=get_main_menu()
                 )
             else:
-                await event.answer("✨ أنماط النص: معطل")
-                await event.edit("✨ **أنماط النص: معطل** ❌", buttons=get_main_menu())
-
-        elif data == 'protection_menu':
-            # قائمة التشفير والحماية الموحدة
-            await event.edit("🛡️ **التشفير والحماية**\n\nكل إعدادات الحماية في مكان واحد.", buttons=get_protection_menu())
+                await event.answer("✨ Fancy Text: معطل")
+                await event.edit("✨ **FancyTextEngine: معطل** ❌\n\nسيتم استخدام HyperEncryption فقط.", buttons=get_main_menu())
 
         elif data == 'fancy_text_menu':
             # قائمة اختيار النمط - مقسمة حسب التصنيف
@@ -6300,15 +6310,13 @@ async def main():
             )
 
         elif data == 'auto_join':
-            # الانضمام التلقائي - مُفعّل دائماً، فقط أرسل رابط
             acc_count = len(user_clients)
             join_interval = get_setting('join_interval', '30')
             queue_count = len(join_queue)
             queue_info = f"\n  📋 روابط في الطابور: {queue_count}" if queue_count > 0 else ""
             await event.edit(
                 f"🚀 **الانضمام التلقائي**\n\n"
-                f"✅ الانضمام مُفعّل تلقائياً!\n"
-                f"📤 أرسل أي رابط تيليجرام مباشرة وسينضم البوت فوراً\n"
+                f"📤 أرسل الروابط مباشرة (يدعم مئات الروابط)\n"
                 f"🔗 الأنواع المدعومة:\n"
                 f"  • https://t.me/channel\n"
                 f"  • https://t.me/+invite\n"
@@ -6317,9 +6325,10 @@ async def main():
                 f"\n📊 الإعدادات:\n"
                 f"  ⏱ الفاصل بين الروابط: {join_interval}ث\n"
                 f"  👥 حسابات متاحة: {acc_count}{queue_info}\n\n"
-                f"💡 الروابط تُحفظ في الطابور تلقائياً إذا كان هناك انضمام جاري",
-                buttons=get_main_menu()
+                f"💡 أرسل الروابط الآن /cancel للإلغاء\n"
+                f"💡 الروابط تُحفظ في الطابور تلقائياً إذا كان هناك انضمام جاري"
             )
+            set_setting('awaiting_auto_join', 'true')
         elif data == 'stop_joining':
             join_cancelled = True
             await event.edit("⏹ جاري إيقاف الانضمام...", buttons=get_main_menu())
@@ -6407,7 +6416,7 @@ async def main():
             return
         if event.raw_text == '/cancel':
             for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
-                       'awaiting_slow_join', 'awaiting_join_limit', 'awaiting_del_msg', 'awaiting_del_acc',
+                       'awaiting_slow_join', 'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_del_msg', 'awaiting_del_acc',
                        'awaiting_msg_interval', 'awaiting_join_interval',
                        'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
                        'awaiting_schedule', 'awaiting_schedule_delete',
@@ -6886,47 +6895,78 @@ async def main():
             )
             return
 
-        # 🚀 الانضمام التلقائي - مُفعّل دائماً!
-        # بمجرد إرسال رابط تيليجرام، ينضم البوت تلقائياً
-        # (لا حاجة لزر تشغيل - الميزة تعمل تلقائياً)
+        # 🚀 الانضمام التلقائي المتقدم
+        if get_setting('awaiting_auto_join') == 'true':
+            set_setting('awaiting_auto_join', '')
+            # استخراج الروابط المتقدمة
+            extracted_links = extract_telegram_links(event.raw_text)
+            # محاولة بسيطة: كل سطر يحتوي على t.me/
+            if not extracted_links:
+                extracted_links = [l.strip() for l in event.raw_text.split('\n') if l.strip() and 't.me/' in l]
+            if extracted_links:
+                progress_msg = await event.respond(
+                    f"🚀 **بدء الانضمام التلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(extracted_links)} رابط\n"
+                    f"👥 حسابات متاحة: {len(user_clients)}\n"
+                    f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
+                    f"⏳ جاري المعالجة..."
+                )
+                # دالة تحديث التقدم
+                async def update_progress(text):
+                    try:
+                        await progress_msg.edit(text)
+                    except:
+                        pass
+                
+                success, failed, skipped, result_msg = await auto_join_links(extracted_links, progress_callback=update_progress)
+                try:
+                    await progress_msg.edit(result_msg, buttons=get_main_menu())
+                except:
+                    await event.respond(result_msg, buttons=get_main_menu())
+            else:
+                await event.respond("❌ لم يتم العثور على روابط تيليجرام صالحة\n💡 أرسل الروابط مرة أخرى أو /cancel", buttons=get_main_menu())
+                set_setting('awaiting_auto_join', 'true')  # إعادة التفعيل
+            return
+
+        # الروابط - انضمام تلقائي مباشر (إرسال روابط بدون الضغط على زر)
+        # فقط إذا لم يكن هناك أي حالة انتظار مفعلة
         any_awaiting = any(get_setting(k) == 'true' for k in [
             'awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
-            'awaiting_join_limit', 'awaiting_slow_join',
+            'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_slow_join',
             'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_msg_interval',
             'awaiting_join_interval', 'awaiting_fast_delay', 'awaiting_add_blacklist',
             'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete'
         ])
-        
-        # فحص الروابط - انضمام تلقائي فوري
-        if not any_awaiting and user_clients:
+        if not any_awaiting and user_clients and not is_joining_active:
             auto_detected_links = extract_telegram_links(event.raw_text)
-            # محاولة بسيطة: كل سطر يحتوي على t.me/
-            if not auto_detected_links:
-                auto_detected_links = [l.strip() for l in event.raw_text.split('\n') if l.strip() and 't.me/' in l]
+            # إذا كانت الرسالة تحتوي على رابط تيليجرام واحد أو أكثر - انضمام تلقائي فوري
             if len(auto_detected_links) >= 1:
-                if not is_joining_active:
-                    progress_msg = await event.respond(
-                        f"🚀 **انضمام تلقائي**\n\n"
-                        f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
-                        f"👥 حسابات: {len(user_clients)}\n"
-                        f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
-                        f"⏳ جاري المعالجة..."
-                    )
-                    async def update_progress_auto(text):
-                        try:
-                            await progress_msg.edit(text)
-                        except:
-                            pass
-                    
-                    success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress_auto)
+                progress_msg = await event.respond(
+                    f"🚀 **انضمام تلقائي**\n\n"
+                    f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
+                    f"👥 حسابات: {len(user_clients)}\n"
+                    f"⏱ الفاصل الزمني: {get_setting('join_interval', '30')}ث\n\n"
+                    f"⏳ جاري المعالجة..."
+                )
+                async def update_progress2(text):
                     try:
-                        await progress_msg.edit(result_msg, buttons=get_main_menu())
+                        await progress_msg.edit(text)
                     except:
-                        await event.respond(result_msg, buttons=get_main_menu())
-                else:
-                    # انضمام جاري - أضف للطابور
-                    join_queue.extend(auto_detected_links)
-                    await event.respond(f"📋 **تم إضافة {len(auto_detected_links)} رابط للطابور**\n\n⏳ عملية انضمام جارية - سيتم الانضمام تلقائياً بعد الانتهاء\n📋 إجمالي الطابور: {len(join_queue)} رابط")
+                        pass
+                
+                success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress2)
+                try:
+                    await progress_msg.edit(result_msg, buttons=get_main_menu())
+                except:
+                    await event.respond(result_msg, buttons=get_main_menu())
+                return
+        
+        # إذا كانت هناك روابط لكن عملية انضمام جارية بالفعل - أضفها للطابور
+        if not any_awaiting and is_joining_active:
+            auto_detected_links = extract_telegram_links(event.raw_text)
+            if len(auto_detected_links) >= 1:
+                join_queue.extend(auto_detected_links)
+                await event.respond(f"📋 **تم إضافة {len(auto_detected_links)} رابط للطابور**\n\n⏳ عملية انضمام جارية - سيتم الانضمام للروابط تلقائياً بعد الانتهاء\n📋 إجمالي الطابور: {len(join_queue)} رابط")
                 return
 
         if get_setting('awaiting_del_msg') == 'true':
