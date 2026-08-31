@@ -45,6 +45,9 @@ from hyper_encryption import HyperEncryptionEngine
 # محرك الأنماط النصية الخارق (26 نمط بصري مستوحى من FSymbols)
 from fancy_text import FancyTextEngine, fancy_engine
 
+# 🔬 محرك التشويش التكيفي - 7 طبقات ذكية لتجاوز بوتات الحماية
+from adaptive_obfuscation import AdaptiveObfuscationEngine, adaptive_engine, quick_obfuscate
+
 # ═══════════════════════════════════════════════
 #  الإعدادات الأساسية
 # ═══════════════════════════════════════════════
@@ -351,6 +354,12 @@ def init_db():
         set_setting('fancy_text_style', 'strikethrough')  # النمط الافتراضي
     if get_setting('fancy_text_zalgo_intensity') is None:
         set_setting('fancy_text_zalgo_intensity', 'medium')  # light/medium/heavy/insane
+
+    # 🔬 Adaptive Obfuscation Engine - محرك التشويش التكيفي
+    if get_setting('adaptive_obfuscation_enabled') is None:
+        set_setting('adaptive_obfuscation_enabled', 'on')
+    if get_setting('adaptive_obfuscation_profile') is None:
+        set_setting('adaptive_obfuscation_profile', 'medium')  # light/medium/aggressive/insane
 
     # تهيئة محرك التشفير الخارق
     global hyper_encryption
@@ -680,17 +689,27 @@ def encrypt_text(text, group_id=None):
 def prepare_content_for_sending(raw_content, group_id=None):
     """
     تجهيز المحتوى قبل الإرسال - الأولوية:
-    1. 💎 التشفير الخارق (أقوى - يكسر كل بوتات الحماية)
-    2. 🔬 تشويش خفي StealthObfuscator
-    3. 🔄 YayText/Messletters
-    4. تشفير عادي
+    1. 🔬 Adaptive Obfuscation (محرك التشويش التكيفي - 7 طبقات ذكية)
+    2. 💎 التشفير الخارق (إذا تم تفعيله يدوياً)
+    3. 🔬 تشويش خفي StealthObfuscator (إذا تم تفعيله يدوياً)
+    4. ✨ Fancy Text (إذا تم تفعيله)
+    5. تشفير عادي
     
     يُرجع: (content, use_html)
     """
     if not raw_content:
         return raw_content, False
     
-    # 💎 الأولوية 1: التشفير الخارق
+    # 🔬 الأولوية 1: Adaptive Obfuscation Engine (الجديد - المحرك الذكي)
+    if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
+        profile = get_setting('adaptive_obfuscation_profile', 'medium')
+        adaptive_engine.set_profile(profile)
+        result, info = adaptive_engine.obfuscate(raw_content)
+        # حفظ معلومات التشفير للسجل
+        logger.info(f"🔬 Adaptive Obfuscation: {info['layers']} (profile={profile})")
+        return result, False
+    
+    # 💎 الأولوية 2: التشفير الخارق (يدوي - نادراً)
     if get_setting('super_encryption_enabled', 'off') == 'on':
         encrypted = super_encryption.super_encrypt_full(raw_content)
         # إذا كان هناك روابط، نخفيها في HTML
@@ -701,11 +720,11 @@ def prepare_content_for_sending(raw_content, group_id=None):
             return encrypted_with_html, use_html
         return encrypted, False
     
-    # 🔬 الأولوية 2: تشويش خفي
+    # 🔬 الأولوية 3: تشويش خفي (يدوي)
     if get_setting('stealth_obfuscator_enabled', 'on') == 'on':
         return stealth_obfuscator.obfuscate(raw_content, group_id)
     
-    # 🔄 الأولوية 3: YayText/Messletters
+    # 🔄 الأولوية 4: YayText/Messletters
     if get_setting('yaytext_messletters_obfuscation', 'on') == 'on':
         old_style = yaytext_obfuscator._last_style
         content, use_html = yaytext_obfuscate(raw_content)
@@ -715,7 +734,7 @@ def prepare_content_for_sending(raw_content, group_id=None):
             retries += 1
         return content, use_html
     
-    # الأولوية 4: تشفير عادي
+    # الأولوية 5: تشفير عادي
     obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
     varied = vary_text(raw_content)
     if obfuscation_on:
@@ -4933,75 +4952,57 @@ def clean_database_keep_accounts():
 #  القوائم والأزرار
 # ═══════════════════════════════════════════════
 def get_main_menu():
-    enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
-    anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
-    jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
-    obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
-    ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
-    spintax_status = "✅" if get_setting('spintax_enabled', 'on') == 'on' else "❌"
-    kashida_status = "✅" if get_setting('kashida_enabled', 'on') == 'on' else "❌"
-    homoglyph_status = "✅" if get_setting('arabic_homoglyph_enabled', 'on') == 'on' else "❌"
-    hd_status = "✅" if get_setting('human_delay_enabled', 'on') == 'on' else "❌"
-    swarm_status = "✅" if get_setting('ghost_swarm_enabled', 'off') == 'on' else "❌"
-    vs_status = "✅" if get_setting('variation_selectors_enabled', 'on') == 'on' else "❌"
-    tag_status = "✅" if get_setting('tag_characters_enabled', 'on') == 'on' else "❌"
-    lb_status = "✅" if get_setting('load_balancer_enabled', 'on') == 'on' else "❌"
-    stealth_status = "✅" if get_setting('stealth_obfuscator_enabled', 'on') == 'on' else "❌"
-    se_status = "✅" if get_setting('super_encryption_enabled', 'off') == 'on' else "❌"
-    he_status = "✅" if get_setting('hyper_encryption_enabled', 'on') == 'on' else "❌"
+    """القائمة الرئيسية المبسطة - 13 زر أساسي"""
+    ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
+    ao_profile = get_setting('adaptive_obfuscation_profile', 'medium')
+    profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(ao_profile, '🟡')
     ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
     ft_style = get_setting('fancy_text_style', 'strikethrough')
-    # أيقونة النمط الحالي
     ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
     ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
-    enc_strength = get_setting('encryption_strength', 'medium')
-    strength_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(enc_strength, '🟡')
-    message_interval = get_setting('message_interval', '3')
-    join_interval = get_setting('join_interval', '30')
-    fast_delay = get_setting('fast_post_delay', '3')
     pending_sched = len(get_pending_scheduled_posts())
+    queue_count = len(join_queue)
+    queue_info = f" ({queue_count})" if queue_count > 0 else ""
+    is_joining = is_joining_active
     return [
-        [Button.inline("📝 إدارة الرسائل", b"messages")],
-        [Button.inline("👥 إدارة الحسابات", b"accounts")],
-        [Button.inline("⚡ نشر سريع للكل", b"fast_posting"),
-         Button.inline("🚀 بدء النشر", b"start_posting"),
+        # ── النشر ──
+        [Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
-        [Button.inline(f"📅 جدولة النشر ({pending_sched})", b"scheduling")],
-        # ✨ Fancy Text - ميزة جديدة (بديل HyperEncryption)
-        [Button.inline(f"✨ Fancy Text {ft_status}", b"toggle_fancy_text"),
-         Button.inline(f"{ft_icon} النمط: {ft_name}", b"fancy_text_menu")],
-        [Button.inline("🧪 معاينة كل الأنماط (26)", b"fancy_text_preview"),
-         Button.inline(f"🔬 تشويش خفي {stealth_status}", b"toggle_stealth")],
-        # HyperEncryption يبقى متاح كزر منفصل
-        [Button.inline(f"🔥 HyperEncryption {he_status}", b"toggle_hyper_enc"),
-         Button.inline(f"{strength_emoji} قوة التشفير: {enc_strength}", b"enc_strength")],
-        [Button.inline("🧪 اختبار التشفير الخارق", b"enc_test"),
-         Button.inline("🛡️ إعدادات التشفير المتقدمة", b"advanced_enc_settings")],
-        [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
-         Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"💎 تشفير خارق قديم {se_status}", b"toggle_super_encryption"),
-         Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
-        [Button.inline(f"🔄 YayText {ym_status}", b"toggle_yaytext"),
-         Button.inline(f"🎲 Spintax {spintax_status}", b"toggle_spintax")],
-        [Button.inline(f"〰️ كشيدة {kashida_status}", b"toggle_kashida"),
-         Button.inline(f"🔀 Homoglyphs عربي {homoglyph_status}", b"toggle_arabic_homoglyph")],
-        [Button.inline(f"🔤 Variation Selectors {vs_status}", b"toggle_vs"),
-         Button.inline(f"🏷️ Tag Characters {tag_status}", b"toggle_tag")],
-        [Button.inline(f"🐝 Ghost Swarm {swarm_status}", b"toggle_ghost_swarm"),
-         Button.inline(f"⏱️ Human Delay {hd_status}", b"toggle_human_delay")],
-        [Button.inline(f"⚖️ Load Balancer {lb_status}", b"toggle_load_balancer")],
-        [Button.inline("🛡️ AntiGuardian - تجاوز الحماية", b"anti_guardian_settings")],
-        [Button.inline("⚙️ الإعدادات", b"settings"),
-         Button.inline("📊 الإحصائيات", b"stats")],
-        [Button.inline(f"🚀 انضمام تلقائي ({join_interval}ث)", b"auto_join"),
-         Button.inline("📋 تقارير الانضمام", b"join_reports")],
-        [Button.inline("⏹ إيقاف الانضمام", b"stop_joining"),
+        [Button.inline("⚡ نشر سريع", b"fast_posting"),
+         Button.inline(f"📅 جدولة ({pending_sched})", b"scheduling")],
+        # ── المحتوى ──
+        [Button.inline("📝 الرسائل", b"messages"),
+         Button.inline("👥 الحسابات", b"accounts")],
+        # ── التشفير والحماية (الموحد) ──
+        [Button.inline(f"🔬 Adaptive Obfuscation {ao_status}", b"adaptive_menu"),
+         Button.inline(f"{profile_emoji} قوة: {ao_profile}", b"adaptive_profile")],
+        [Button.inline(f"✨ أنماط النص {ft_status}", b"fancy_text_menu"),
+         Button.inline(f"{ft_icon} {ft_name}", b"fancy_text_menu")],
+        [Button.inline("🛡️ حماية متقدمة", b"advanced_enc_settings"),
+         Button.inline("🧪 اختبار التشفير", b"enc_test")],
+        # ── الانضمام التلقائي (شغال دائماً - فقط إيقاف وتقارير) ──
+        *([[Button.inline("⏹ إيقاف الانضمام", b"stop_joining")]] if is_joining else []),
+        [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports"),
          Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
-        [Button.inline(f"⏱ مدة النشر ({message_interval}ث)", b"set_msg_interval"),
-         Button.inline(f"⚡ سرعة النشر السريع ({fast_delay}ث)", b"set_fast_delay")],
-        [Button.inline("🚫 القائمة السوداء", b"blacklist")],
-        [Button.inline("🗑 تنظيف قاعدة البيانات", b"clean_db")],
-        [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+        # ── عام ──
+        [Button.inline("🚫 القائمة السوداء", b"blacklist"),
+         Button.inline("📊 الإحصائيات", b"stats")],
+        [Button.inline("⚙️ الإعدادات", b"settings")],
+    ]
+
+
+def get_adaptive_menu():
+    """قائمة Adaptive Obfuscation - التحكم في المحرك الذكي"""
+    ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
+    profile = get_setting('adaptive_obfuscation_profile', 'medium')
+    profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(profile, '🟡')
+    return [
+        [Button.inline(f"🔬 تفعيل المحرك {ao_status}", b"toggle_adaptive"),
+         Button.inline(f"{profile_emoji} القوة: {profile}", b"adaptive_profile")],
+        [Button.inline("📊 حالة الطبقات", b"adaptive_layers"),
+         Button.inline("🧪 اختبار المحرك", b"adaptive_test")],
+        [Button.inline("ℹ️ معلومات المحرك", b"adaptive_info")],
+        [Button.inline("🔙 رجوع", b"back")],
     ]
 
 def get_scheduling_menu():
@@ -5745,6 +5746,73 @@ async def main():
                 msg += f"{emoji} **{level.upper()}** ({active_n} طبقة، {len(enc)} حرف، {invisible} غير مرئي):\n{enc}\n\n"
             msg += "💡 كل النصوص تبدو متطابقة بصرياً مع الأصل!\n\nاختر مستوى القوة من زر 'قوة التشفير' في القائمة الرئيسية."
             await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"back")]])
+
+        # ═══════════════════════════════════════════════════════════
+        #  🔬 Adaptive Obfuscation Engine - محرك التشويش التكيفي
+        # ═══════════════════════════════════════════════════════════
+
+        elif data == 'adaptive_menu':
+            await event.edit("🔬 **Adaptive Obfuscation Engine**\n\nمحرك التشويش التكيفي - 7 طبقات ذكية لتجاوز بوتات الحماية", buttons=get_adaptive_menu())
+
+        elif data == 'toggle_adaptive':
+            current = get_setting('adaptive_obfuscation_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('adaptive_obfuscation_enabled', new_val)
+            status = "مفعل ✅" if new_val == 'on' else "معطل ❌"
+            await event.answer(f"🔬 Adaptive Obfuscation: {status}")
+            await event.edit(f"🔬 **Adaptive Obfuscation: {status}**\n\n{'✅ المحرك يعمل الآن وسيطبق 7 طبقات ذكية على كل رسالة' if new_val == 'on' else '❌ المحرك متوقف - سيتم استخدام التشفير العادي'}", buttons=get_adaptive_menu())
+
+        elif data == 'adaptive_profile':
+            current = get_setting('adaptive_obfuscation_profile', 'medium')
+            profiles = ['light', 'medium', 'aggressive', 'insane']
+            try:
+                idx = profiles.index(current)
+            except ValueError:
+                idx = 1
+            new_profile = profiles[(idx + 1) % len(profiles)]
+            set_setting('adaptive_obfuscation_profile', new_profile)
+            await event.answer(f"⚡ القوة: {new_profile}")
+            emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[new_profile]
+            descriptions = {
+                'light': '🟢 خفيف - 10% تشويش (للنصوص الحساسة)',
+                'medium': '🟡 متوسط - 20% تشويش (الافتراضي)',
+                'aggressive': '🟠 قوي - 35% تشويش (لبوتات الحماية الصارمة)',
+                'insane': '🔴 عنيف - 50% تشويش (للحالات القصوى)',
+            }
+            await event.edit(f"⚡ **مستوى القوة تغيّر**\n\n{descriptions[new_profile]}", buttons=get_adaptive_menu())
+
+        elif data == 'adaptive_layers':
+            layers_info = "📊 **حالة طبقات Adaptive Obfuscation**\n\n"
+            layers_ar = {
+                'arabic_forms': '1️⃣ Arabic Presentation Forms',
+                'zw_distribution': '2️⃣ Smart ZW Distribution',
+                'bayes_evasion': '3️⃣ Bayes Evasion',
+                'spintax': '4️⃣ Adaptive Spintax',
+                'tag_chars': '5️⃣ Tag Characters',
+                'nfd': '6️⃣ NFD Decomposition',
+                'salt': '7️⃣ Anti-Similarity Salt',
+            }
+            for key, name in layers_ar.items():
+                status = "✅" if adaptive_engine.get_layer_status(key) else "❌"
+                layers_info += f"  {status} {name}\n"
+            await event.edit(layers_info, buttons=get_adaptive_menu())
+
+        elif data == 'adaptive_test':
+            sample = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
+            msg = f"🧪 **اختبار Adaptive Obfuscation**\n\n📝 **النص الأصلي:**\n{sample}\n\n"
+            for profile in ['light', 'medium', 'aggressive', 'insane']:
+                eng = AdaptiveObfuscationEngine(profile=profile)
+                result, info = eng.obfuscate(sample)
+                emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[profile]
+                msg += f"{emoji} **{profile.upper()}** ({len(result)} حرف):\n{result}\n\n"
+            msg += "💡 كل النصوص تبدو متطابقة بصرياً لكنها مختلفة في Unicode!"
+            await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"adaptive_menu")]])
+
+        elif data == 'adaptive_info':
+            profile = get_setting('adaptive_obfuscation_profile', 'medium')
+            adaptive_engine.set_profile(profile)
+            info = adaptive_engine.get_info()
+            await event.edit(info, buttons=get_adaptive_menu())
 
         # ═══════════════════════════════════════════════════════════
         #  ✨ Fancy Text - محرك الأنماط النصية الخارق (26 نمط)
