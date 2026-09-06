@@ -48,6 +48,11 @@ from fancy_text import FancyTextEngine, fancy_engine
 # 🔬 محرك التشويش التكيفي - 7 طبقات ذكية لتجاوز بوتات الحماية
 from adaptive_obfuscation import AdaptiveObfuscationEngine, adaptive_engine, quick_obfuscate
 
+# 🫥 محرك الإخفاء المتقدم - Spintax + Zero-Width Stego + Diacritic Stego
+from stego_engine import (stego_engine, SEND_MODES, parse_spintax_advanced,
+                          zero_width_hide, zero_width_reveal,
+                          diacritic_hide, diacritic_reveal, has_spintax)
+
 # ═══════════════════════════════════════════════
 #  الإعدادات الأساسية
 # ═══════════════════════════════════════════════
@@ -360,6 +365,11 @@ def init_db():
         set_setting('adaptive_obfuscation_enabled', 'on')
     if get_setting('adaptive_obfuscation_profile') is None:
         set_setting('adaptive_obfuscation_profile', 'medium')  # light/medium/aggressive/insane
+
+    # 🫥 Stego Engine - وضع الإرسال الموحد (normal/spintax/stego/diacritic/spintax+stego)
+    if get_setting('send_mode') is None:
+        set_setting('send_mode', 'normal')  # الوضع الافتراضي - نص عادي
+    stego_engine.set_mode(get_setting('send_mode', 'normal'))
 
     # تهيئة محرك التشفير الخارق
     global hyper_encryption
@@ -689,6 +699,7 @@ def encrypt_text(text, group_id=None):
 def prepare_content_for_sending(raw_content, group_id=None):
     """
     تجهيز المحتوى قبل الإرسال - الأولوية:
+    0. 🫥 Send Mode (وضع الإرسال الموحد: normal/spintax/stego/diacritic/spintax+stego)
     1. 🔬 Adaptive Obfuscation (محرك التشويش التكيفي - 7 طبقات ذكية)
     2. 💎 التشفير الخارق (إذا تم تفعيله يدوياً)
     3. 🔬 تشويش خفي StealthObfuscator (إذا تم تفعيله يدوياً)
@@ -699,6 +710,19 @@ def prepare_content_for_sending(raw_content, group_id=None):
     """
     if not raw_content:
         return raw_content, False
+    
+    # 🫥 الأولوية 0: وضع الإرسال الموحد (Send Mode) - إذا لم يكن normal
+    send_mode = get_setting('send_mode', 'normal')
+    if send_mode != 'normal':
+        stego_engine.set_mode(send_mode)
+        result, mode_info = stego_engine.process(raw_content)
+        logger.info(f"🫥 Send Mode [{send_mode}]: {len(raw_content)} → {len(result)} حرف (مخفي: {mode_info.get('hidden')})")
+        # الأوضاع stego/diacritic تُرجع نصاً يبدو عادياً - نرسله مباشرة بدون معالجات إضافية
+        # لأن أي معالجة إضافية قد تدمر النص المخفي
+        if mode_info.get('hidden'):
+            return result, False
+        # وضع spintax فقط - النص واضح، يمكن تطبيق طبقات إضافية عليه
+        raw_content = result
     
     # 🔬 الأولوية 1: Adaptive Obfuscation Engine (الجديد - المحرك الذكي)
     if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
@@ -4964,6 +4988,10 @@ def get_main_menu():
     queue_count = len(join_queue)
     queue_info = f" ({queue_count})" if queue_count > 0 else ""
     is_joining = is_joining_active
+    # 🫥 وضع الإرسال الحالي
+    send_mode = get_setting('send_mode', 'normal')
+    mode_info = SEND_MODES.get(send_mode, SEND_MODES['normal'])
+    mode_btn = f"{mode_info['icon']} {mode_info['name']}"
     return [
         # ── النشر ──
         [Button.inline("🚀 بدء النشر", b"start_posting"),
@@ -4973,7 +5001,8 @@ def get_main_menu():
         # ── المحتوى ──
         [Button.inline("📝 الرسائل", b"messages"),
          Button.inline("👥 الحسابات", b"accounts")],
-        # ── التشفير والحماية (الموحد) ──
+        # ── الإخفاء والتشفير ──
+        [Button.inline(f"🎛 وضع الإرسال: {mode_btn}", b"send_mode_menu")],
         [Button.inline(f"🔬 Adaptive Obfuscation {ao_status}", b"adaptive_menu"),
          Button.inline(f"{profile_emoji} قوة: {ao_profile}", b"adaptive_profile")],
         [Button.inline(f"✨ أنماط النص {ft_status}", b"fancy_text_menu"),
@@ -4989,6 +5018,25 @@ def get_main_menu():
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline("⚙️ الإعدادات", b"settings")],
     ]
+
+
+def get_send_mode_menu():
+    """قائمة أوضاع الإرسال - اختيار وضع الإخفاء"""
+    current = get_setting('send_mode', 'normal')
+    buttons = []
+    mode_icons = {'normal': '📝', 'spintax': '🔄', 'stego': '🫥', 'diacritic': '🕌', 'spintax+stego': '🧬'}
+    mode_names = {
+        'normal': '📝 نص عادي (بدون إخفاء)',
+        'spintax': '🔄 Spintax - تنويع لغوي',
+        'stego': '🫥 Zero-Width Stego',
+        'diacritic': '🕌 إخفاء بالتشكيل العربي',
+        'spintax+stego': '🧬 Spintax + Stego (طبقتان)',
+    }
+    for mode_key in SEND_MODES:
+        marker = " ✅" if mode_key == current else ""
+        buttons.append([Button.inline(f"{mode_names[mode_key]}{marker}", f"set_mode_{mode_key}".encode())])
+    buttons.append([Button.inline("🔙 رجوع", b"back")])
+    return buttons
 
 
 def get_adaptive_menu():
@@ -5090,24 +5138,21 @@ async def main():
         encrypted_example = encrypt_text(example_text)
         await event.respond(
             "🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
-            "✨ **12+ طبقة تشفير خارقة:**\n"
-            "• 🎲 Spintax - تنويع تلقائي للرسائل\n"
-            "• 🔀 Arabic Homoglyphs - بدائل متطابقة مرئياً\n"
-            "• 〰️ كشيدة/Tatweel - تبقى بعد كل التطبيع!\n"
-            "• 🏷️ Tag Characters - ترميز مخفي كامل\n"
-            "• 🔤 Variation Selectors - أحرف تجميع غير مرئية\n"
-            "• PFB + NFD + مسافات بديلة + أحرف مخفية\n\n"
+            "🫥 **أوضاع الإرسال الذكية (جديد):**\n"
+            "• 🔄 Spintax - تنويع لغوي متداخل {خيار1|خيار2}\n"
+            "• 🫥 Zero-Width Stego - إخفاء نص داخل نص\n"
+            "• 🕌 Diacritic Stego - إخفاء رابط بالتشكيل العربي\n"
+            "• 🧬 طبقتان معاً - أقوى حماية\n\n"
+            "🔬 **Adaptive Obfuscation - 7 طبقات ذكية:**\n"
+            "• Arabic Presentation Forms + ZW ذكي\n"
+            "• Bayes Evasion + Tag Characters + NFD\n\n"
             "🐝 **أنظمة متقدمة:**\n"
-            "• 🐝 Ghost Swarm - تعديلات متتالية بتكويد مختلف\n"
-            "• 👁️ edit_hide - يخفي علامة 'معدّل'\n"
-            "• ⏱️ Human Delay - محاكاة تأخير بشري\n"
-            "• ⚖️ Load Balancer - توزيع ذكي بين الحسابات\n"
-            "• 📈 Exponential Backoff - تعامل احترافي مع FloodWait\n"
+            "• ⏱️ Human Delay | ⚖️ Load Balancer\n"
             "• 🔗 الروابط والمعرفات تبقى قابلة للنقر!\n\n"
             f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
             f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولات: {pending_sched}\n\n"
             f"📢 المجموعات: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n\n"
-            "🧪 جرب: /test_obfuscate لاختبار التشفير",
+            "🧪 جرب: /set_mode | /stego | /diacritic",
             buttons=get_main_menu()
         )
 
@@ -5147,6 +5192,128 @@ async def main():
                 logger.error(f"خطأ: {e}")
                 await asyncio.sleep(5)
         logger.info("✅ توقف النشر العادي")
+
+    # ═══════════════════════════════════════════════════════════
+    #  🫥 أوامر الإخفاء المتقدم - Stego / Diacritic / Send Mode
+    # ═══════════════════════════════════════════════════════════
+
+    @bot.on(events.NewMessage(pattern='/stego'))
+    async def stego_command(event):
+        """إخفاء نص داخل نص غلاف بأحرف العرض الصفري
+        الاستخدام: /stego <النص السري> [|| نص الغلاف]
+        مثال: /stego اشترك في قناتنا t.me/example || مرحباً بكم جميعاً
+        """
+        if not is_admin(event.sender_id):
+            return
+        text = event.raw_text.replace('/stego', '', 1).strip()
+        if not text:
+            await event.respond(
+                "🫥 **Zero-Width Stego - إخفاء نص داخل نص**\n\n"
+                "📝 **الاستخدام:**\n"
+                "`/stego <النص السري> || <نص الغلاف>`\n\n"
+                "📌 **أمثلة:**\n"
+                "• `/stego اشترك t.me/mychannel || مساء الخير 🌙`\n"
+                "• `/stego عرض خاص اليوم فقط t.me/shop || أهلاً بكم`\n\n"
+                "💡 إذا لم تكتب نص غلاف، سيتم توليده تلقائياً\n"
+                "🔍 النص المخفي يظهر عند النسخ واللصق في محرر نصوص"
+            )
+            return
+        # فصل السر عن الغلاف
+        if '||' in text:
+            secret, cover = text.split('||', 1)
+            secret, cover = secret.strip(), cover.strip()
+        else:
+            secret, cover = text, ""
+        hidden = zero_width_hide(secret, cover)
+        # عرض النتيجة + تحقق من الكشف
+        revealed = zero_width_reveal(hidden)
+        await event.respond(
+            f"🫥 **تم إخفاء النص بنجاح!**\n\n"
+            f"📝 **النص السري:**\n{secret}\n\n"
+            f"🎭 **نص الغلاف الظاهر:**\n{cover if cover else '(تلقائي)'}\n\n"
+            f"📤 **النص الجاهز للإرسال (انسخه):**\n{hidden}\n\n"
+            f"🔍 **تحقق الكشف:** {'✅ ' + revealed if revealed else '❌ فشل'}\n\n"
+            "💡 الرسالة تظهر كنص الغلاف فقط - بوتات الحماية لا ترى السر!"
+        )
+
+    @bot.on(events.NewMessage(pattern='/diacritic'))
+    async def diacritic_command(event):
+        """إخفاء رسالة إنجليزية داخل تشكيل نص عربي
+        الاستخدام: /diacritic <نص عربي غلاف> || <الرسالة السرية بالإنجليزية>
+        مثال: /diacritic القناة الرسمية للمحتوى || t.me/mychannel
+        """
+        if not is_admin(event.sender_id):
+            return
+        text = event.raw_text.replace('/diacritic', '', 1).strip()
+        if not text or '||' not in text:
+            await event.respond(
+                "🕌 **Diacritic Stego - إخفاء بالتشكيل العربي**\n\n"
+                "📝 **الاستخدام:**\n"
+                "`/diacritic <نص عربي غلاف> || <الرسالة السرية>`\n\n"
+                "📌 **أمثلة:**\n"
+                "• `/diacritic القناة الرسمية للمحتوى الحصري || t.me/mychannel`\n"
+                "• `/diacritic أهلاً بكم في قناتنا المميزة || https://t.me/shop`\n\n"
+                "💡 الرسالة السرية تُخفى في علامات التشكيل (فتحة/ضمة/كسرة/شدة)\n"
+                "✨ الناتج يبدو نصاً عربياً مشكولاً طبيعياً 100%"
+            )
+            return
+        parts = text.split('||', 1)
+        cover, secret = parts[0].strip(), parts[1].strip()
+        hidden = diacritic_hide(secret, cover)
+        revealed = diacritic_reveal(hidden)
+        await event.respond(
+            f"🕌 **تم إخفاء الرسالة بالتشكيل!**\n\n"
+            f"🔓 **الرسالة السرية:**\n{secret}\n\n"
+            f"📖 **نص الغلاف:**\n{cover}\n\n"
+            f"📤 **النص الجاهز للإرسال (انسخه):**\n{hidden}\n\n"
+            f"🔍 **تحقق الكشف:** {'✅ ' + revealed if revealed else '❌ فشل'}\n\n"
+            "💡 يبدو نصاً عربياً مشكولاً عادياً - الرابط مخفي في التشكيل!"
+        )
+
+    @bot.on(events.NewMessage(pattern='/set_mode'))
+    async def set_mode_command(event):
+        """تغيير وضع الإرسال
+        الاستخدام: /set_mode <mode>
+        الأوضاع: normal / spintax / stego / diacritic / spintax+stego
+        """
+        if not is_admin(event.sender_id):
+            return
+        mode = event.raw_text.replace('/set_mode', '', 1).strip().lower()
+        if not mode:
+            await event.respond(
+                f"🎛 **وضع الإرسال الحالي:** `{get_setting('send_mode', 'normal')}`\n\n"
+                f"{stego_engine.get_mode_list()}\n"
+                "📝 **الاستخدام:** `/set_mode <اسم الوضع>`\n"
+                "أو استخدم زر 🎛 **وضع الإرسال** في القائمة الرئيسية"
+            )
+            return
+        if mode in SEND_MODES:
+            set_setting('send_mode', mode)
+            stego_engine.set_mode(mode)
+            info = SEND_MODES[mode]
+            await event.respond(
+                f"✅ **تم تغيير وضع الإرسال!**\n\n"
+                f"{info['icon']} **الوضع الجديد:** `{mode}`\n"
+                f"📋 **الوصف:** {info['description']}\n\n"
+                f"💡 كل الرسائل الجديدة ستُرسل بهذا الوضع"
+            )
+        else:
+            modes_str = ' | '.join(SEND_MODES.keys())
+            await event.respond(f"❌ وضع غير معروف: `{mode}`\n\nالأوضاع المتاحة:\n`{modes_str}`")
+
+    @bot.on(events.NewMessage(pattern='/get_mode'))
+    async def get_mode_command(event):
+        """عرض وضع الإرسال الحالي"""
+        if not is_admin(event.sender_id):
+            return
+        current = get_setting('send_mode', 'normal')
+        info = SEND_MODES.get(current, SEND_MODES['normal'])
+        await event.respond(
+            f"🎛 **وضع الإرسال الحالي:**\n\n"
+            f"{info['icon']} **{current}**\n"
+            f"📋 {info['description']}\n\n"
+            f"{stego_engine.get_mode_list()}"
+        )
 
     @bot.on(events.NewMessage(pattern='/encrypt'))
     async def encrypt_preview(event):
@@ -5753,6 +5920,36 @@ async def main():
 
         elif data == 'adaptive_menu':
             await event.edit("🔬 **Adaptive Obfuscation Engine**\n\nمحرك التشويش التكيفي - 7 طبقات ذكية لتجاوز بوتات الحماية", buttons=get_adaptive_menu())
+
+        # ═══════════════════════════════════════════════════════════
+        #  🫥 Send Mode - وضع الإرسال الموحد
+        # ═══════════════════════════════════════════════════════════
+
+        elif data == 'send_mode_menu':
+            current = get_setting('send_mode', 'normal')
+            info = SEND_MODES.get(current, SEND_MODES['normal'])
+            await event.edit(
+                f"🎛 **وضع الإرسال الموحد**\n\n"
+                f"📌 **الوضع الحالي:** {info['icon']} `{current}`\n"
+                f"📋 {info['description']}\n\n"
+                f"💡 اختر الوضع من القائمة - يُطبق على كل الرسائل المرسلة (فورية ومجدولة)",
+                buttons=get_send_mode_menu()
+            )
+
+        elif data.startswith('set_mode_'):
+            mode = data.replace('set_mode_', '')
+            if mode in SEND_MODES:
+                set_setting('send_mode', mode)
+                stego_engine.set_mode(mode)
+                info = SEND_MODES[mode]
+                await event.answer(f"✅ {info['name']}")
+                await event.edit(
+                    f"✅ **تم تغيير وضع الإرسال!**\n\n"
+                    f"{info['icon']} **الوضع الجديد:** `{mode}`\n"
+                    f"📋 {info['description']}\n\n"
+                    f"💡 كل الرسائل الجديدة ستُرسل بهذا الوضع",
+                    buttons=get_send_mode_menu()
+                )
 
         elif data == 'toggle_adaptive':
             current = get_setting('adaptive_obfuscation_enabled', 'on')
