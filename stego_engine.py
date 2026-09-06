@@ -1,21 +1,19 @@
 """
-🫥 Stego Engine v1.0 - محرك الإخفاء المتقدم
-=============================================
-نظام إخفاء رسائل إعلانية داخل نصوص تبدو عادية تماماً
+🫥 Stego Engine v2.0 - محرك الحماية النصي (سلامة النص أولاً)
+=============================================================
+
+⚠️ القاعدة الذهبية (v2.0):
+   البوت يرسل **بالضبط** النص الذي كتبه المستخدم.
+   لا يُضاف أي كلمة، ولا يُحذف أي كلمة، ولا يُستبدل النص بنص غلاف.
+   كل المعالجات غير مرئية فقط (Unicode خفي لا يغير شكل النص).
 
 المميزات:
-1. Spintax متداخل - {خيار1|خيار2|{خيار3|خيار4}}
-2. Zero-Width Steganography - إخفاء نص داخل نص غلاف
-3. Arabic Diacritic Steganography - إخفاء رسالة إنجليزية داخل تشكيل عربي
-4. نظام أوضاع موحد - normal / spintax / stego / diacritic / spintax+stego
-
-القاعدة الذهبية:
-✅ النص الناتج يظهر طبيعياً ومقروءاً 100% للأعضاء
-✅ بوتات الحماية لا تستطيع ربط الرسائل ببعضها (كل رسالة بصمة مختلفة)
-✅ الروابط والمعرفات تبقى واضحة وقابلة للنقر
+1. Spintax متداخل - {خيار1|خيار2|{خيار3|خيار4}} (يُحل فقط إذا كتبه المستخدم)
+2. ZW Fingerprint - حقن أحرف صفرية خفية داخل نص المستخدم نفسه
+   (النص يبقى ظاهراً ومقروءاً 100% - كل نسخة تحصل على بصمة فريدة)
+3. نظام أوضاع موحد - normal / spintax / stego
 
 المصادر المستوحاة:
-- mabutaha/diasteg (الإخفاء بالتشكيل العربي)
 - Afynjv2963/ZeroWidthStego (أحرف العرض الصفري)
 - AceLewis/spintax (تحليل Spintax المتداخل)
 """
@@ -113,35 +111,68 @@ def _bits_to_text(bits: str) -> Optional[str]:
         return None
 
 
-def zero_width_hide(secret: str, cover: str = "") -> str:
+def inject_zw_fingerprint(text: str, density: float = 0.06) -> str:
     """
-    إخفاء نص سري داخل نص غلاف باستخدام أحرف العرض الصفري
+    🫥 حقن بصمة صفرية خفية داخل نص المستخدم نفسه
+    
+    ⚠️ القاعدة الذهبية: النص يبقى ظاهراً ومقروءاً 100% كما كتبه المستخدم.
+       تُضاف أحرف غير مرئية فقط بين الحروف/الكلمات لتصبح كل رسالة
+       ذات بصمة Unicode فريدة لا تستطيع بوتات الحماية مطابقتها برسائل سابقة.
+    
+    🛡️ الروابط والمعرفات (t.me/... / https://... / @username) محمية
+       تماماً - لا تُحقن فيها أحرف كي تبقى قابلة للنقر والنسخ.
     
     Args:
-        secret: النص السري المراد إخفاؤه (الرسالة الإعلانية + الرابط)
-        cover: نص الغلاف الظاهر (إذا فاضي، يُولد تلقائياً)
+        text: نص المستخدم (يظل كما هو تماماً في الشكل)
+        density: كثافة الحقن (نسبة من مواضع الحروف)
     
     Returns:
-        نص الغلاف + الأحرف الصفرية المحتوية على السر
+        نفس النص + أحرف غير مرئية موزعة (الشكل الظاهر لم يتغير)
+    """
+    if not text or len(text) < 4 or density <= 0:
+        return text
     
-    مثال:
-        zero_width_hide("اشترك t.me/mychannel", "مرحباً بالجميع 🌟")
-        → "مرحباً بالجميع 🌟‌‍‌..." (يبدو كنص الغلاف فقط)
+    # 🛡️ حماية الروابط والمعرفات من الحقن
+    protected_re = re.compile(r'(https?://\S+|t\.me/\S+|@[a-zA-Z0-9_]{3,})')
+    parts = []
+    last = 0
+    for m in protected_re.finditer(text):
+        if m.start() > last:
+            parts.append((text[last:m.start()], False))
+        parts.append((m.group(0), True))
+        last = m.end()
+    if last < len(text):
+        parts.append((text[last:], False))
+    if not parts:
+        parts = [(text, False)]
+    
+    result = []
+    for seg, protected in parts:
+        if protected:
+            result.append(seg)
+            continue
+        for ch in seg:
+            result.append(ch)
+            # لا نضيف بعد مسافات أو أسطر مباشرة كي لا يتغير التنسيق
+            if ch not in (' ', '\n', '\t') and random.random() < density:
+                result.append(random.choice(ZW_CHARS))
+    return ''.join(result)
+
+
+def zero_width_hide(secret: str, cover: str = "") -> str:
+    """
+    🛡️ v2.0: لم يعد يولّد نصوص غلاف تلقائية أبداً
+    
+    - إذا وُفر cover: يخفي السر بداخله (الغلاف الظاهر - أداة يدوية فقط)
+    - إذا لم يُوفر cover: يُرجع النص نفسه مع بصمة ZW خفية
+      (النص الظاهر = نص المستخدم بالضبط)
     """
     if not secret:
         return cover
     
-    # توليد نص غلاف افتراضي إذا لم يُحدد
+    # بدون غلاف → النص الظاهر هو نص المستخدم نفسه + بصمة خفية
     if not cover:
-        covers = [
-            "مرحباً بكم 🌟 نتمنى لكم يوماً سعيداً",
-            "سلام عليكم ورحمة الله وبركاته 🌸",
-            "مساء الخير أصدقائي 🌙",
-            "صباح الخير 🌞 أتمنى لكم يوم رائعاً",
-            "شكراً لكم على ثقتكم الغالية 💙",
-            "نتمنى لكم دوام التوفيق والنجاح 🎉",
-        ]
-        cover = random.choice(covers)
+        return inject_zw_fingerprint(secret)
     
     # تحويل السر إلى بتات
     bits = _text_to_bits(secret)
@@ -153,7 +184,7 @@ def zero_width_hide(secret: str, cover: str = "") -> str:
         index = int(pair, 2)
         zw_encoded += ZW_CHARS[index]
     
-    # إدراج الأحرف الصفرية بعد أول كلمة من الغلاف (تبدو طبيعية)
+    # إدراج الأحرف الصفرية داخل نص الغلاف المحدد من المستخدم
     words = cover.split(' ')
     if len(words) > 2:
         pos = 1 + random.randint(0, len(words) - 2)
@@ -218,53 +249,29 @@ def _english_to_diacritic_bits(text: str) -> str:
 
 def diacritic_hide(secret: str, cover: str = "") -> str:
     """
-    إخفاء رسالة إنجليزية (رابط أو كود) داخل نص عربي مشكول
+    🛡️ v2.0: أداة يدوية فقط - لا تُستخدم في مسار النشر التلقائي
+    
+    إخفاء رسالة إنجليزية (رابط أو كود) داخل نص عربي مشكول **من المستخدم**
+    لا يولّد نصوص غلاف تلقائية أبداً.
     
     Args:
         secret: الرسالة السرية (بالإنجليزية - مثل رابط t.me)
-        cover: النص العربي الظاهر (سيُشكَّل تلقائياً)
+        cover: النص العربي الظاهر (يجلبه المستخدم - إجباري)
     
     Returns:
         نص عربي مشكول طبيعياً + الرسالة السرية مخفية في التشكيل
-    
-    مثال:
-        diacritic_hide("t.me/mychannel", "القناة الرسمية للمحتوى الحصري")
-        → "الْقَنَاةُ الرَّسْمِيَّةُ..." (يبدو نصاً عربياً مشكولاً عادياً)
+        أو النص مع بصمة ZW إذا لم يُوفر غلاف عربي صالح
     """
     if not secret:
         return cover
     
-    # توليد نص عربي غلاف إذا لم يُحدد
-    if not cover:
-        covers = [
-            "السلام عليكم ورحمة الله وبركاته أهلاً بكم في قناتنا الرسمية نتمنى لكم طيباً",
-            "مرحباً بكم أصدقائي الأعزاء نوفر لكم أفضل المحتوى الحصري بجودة عالية دائماً",
-            "أهلاً وسهلاً بكم في فضائنا نحرص على تقديم كل جديد ومفيد لكم دوماً بحب",
-            "يسعدنا انضمامكم إلينا سنتواصل معكم بأهم الأخبار والعروض المميزة قريباً",
-            "نرحب بجميع الأعضاء الكرام نتمنى لكم الفائدة والاستفادة القصوى دائماً",
-        ]
-        cover = random.choice(covers)
+    # 🛡️ v2.0: لا نصوص غلاف تلقائية - التشكيل يحتاج نصاً عربياً من المستخدم
+    if not cover or not any('\u0600' <= ch <= '\u06FF' for ch in cover):
+        return inject_zw_fingerprint(secret if not cover else (cover + ' ' + secret))
     
     # تحويل السر إلى بتات
     bits = _english_to_diacritic_bits(secret)
-    needed_chars = (len(bits) + 1) // 2  # كل 2 بت = حرف مشكول
-    
-    # 🔄 توسيع الغلاف تلقائياً إذا كان قصيراً
-    arabic_letters_count = sum(1 for ch in cover if '\u0600' <= ch <= '\u06FF')
-    if arabic_letters_count < needed_chars:
-        extra_sentences = [
-            " فمعكم ستجدون كل ما هو جديد ومفيد ومميز فلا تفوتوا الفرصة السانحة",
-            " ونؤكد لكم أننا نقدم المحتوى بجودة عالية ومجانية تماماً للأبد بإذن الله",
-            " كما أننا نحدث القناة يومياً بأهم المعلومات والعروض الحصرية المميزة",
-            " ونطمح لأن نكون الخيار الأول لكم في كل المجالات المتخصصة والمهمة",
-            " شكراً لثقتكم الغالية ونسعد بتفاعلكم الدائم مع محتوانا المتواضع",
-            " ولا تنسوا مشاركة القناة مع أصدقائكم وأحبائكم لتحصلوا على المزيد",
-        ]
-        idx = 0
-        while arabic_letters_count < needed_chars and idx < len(extra_sentences):
-            cover += extra_sentences[idx]
-            arabic_letters_count += sum(1 for ch in extra_sentences[idx] if '\u0600' <= ch <= '\u06FF')
-            idx += 1
+    # 🛡️ v2.0: لا توسيع تلقائي بجمل جاهزة - نُشكّل ما يتسع فقط (أداة يدوية)
     
     # تطبيق التشكيل على الحروف العربية
     result = []
@@ -339,32 +346,22 @@ def has_diacritics(text: str) -> bool:
 # 4️⃣ إدارة الأوضاع الموحدة - Send Mode Manager
 # ═══════════════════════════════════════════════════════════════
 
-# الأوضاع المدعومة
+# الأوضاع المدعومة (v2.0 - كل الأوضاع تحافظ على نص المستخدم كما هو)
 SEND_MODES = {
     'normal': {
         'name': 'نص عادي',
         'icon': '📝',
-        'description': 'إرسال النص كما هو بدون أي معالجة (آمن تماماً - لا إخفاء)',
+        'description': 'إرسال النص كما هو تماماً بدون أي معالجة إضافية',
     },
     'spintax': {
         'name': 'Spintax - تنويع لغوي',
         'icon': '🔄',
-        'description': 'يحل صيغة {خيار1|خيار2} ويختار عشوائياً - كل رسالة فريدة',
+        'description': 'يحل صيغة {خيار1|خيار2} إذا كتبتها أنت - كل رسالة فريدة بنفس كلماتك',
     },
     'stego': {
-        'name': 'Zero-Width Stego',
+        'name': 'بصمة خفية (ZW Fingerprint)',
         'icon': '🫥',
-        'description': 'يخفي الرسالة داخل نص غلاف عادي - النص المخفي يظهر عند النسخ',
-    },
-    'diacritic': {
-        'name': 'إخفاء بالتشكيل العربي',
-        'icon': '🕌',
-        'description': 'يخفي رسالة إنجليزية داخل تشكيل نص عربي - يبدو نصاً مشكولاً عادياً',
-    },
-    'spintax+stego': {
-        'name': 'Spintax + Stego (طبقتان)',
-        'icon': '🧬',
-        'description': 'يحل Spintax أولاً ثم يخفي الناتج في نص غلاف - أقوى حماية',
+        'description': 'نصك يظهر كما هو 100% + أحرف خفية غير مرئية تعطي كل رسالة بصمة فريدة',
     },
 }
 
@@ -382,8 +379,6 @@ class StegoEngine:
             'sent_normal': 0,
             'sent_spintax': 0,
             'sent_stego': 0,
-            'sent_diacritic': 0,
-            'sent_spintax_stego': 0,
         }
     
     def set_mode(self, mode: str) -> bool:
@@ -405,10 +400,13 @@ class StegoEngine:
         """
         معالجة النص حسب الوضع المحدد
         
+        🛡️ v2.0 القاعدة الذهبية: النص الظاهر الناتج = نص المستخدم دائماً.
+        لا كلمات مضافة، لا حذف، لا نصوص غلاف - كل شيء غير مرئي فقط.
+        
         Args:
-            content: النص الأصلي (قد يحتوي spintax)
+            content: النص الأصلي (قد يحتوي spintax كتبه المستخدم)
             mode: الوضع (إذا لم يُحدد، يستخدم الوضع الحالي)
-            cover_text: نص غلاف اختياري لـ stego/diacritic
+            cover_text: غير مستخدم في v2.0 (توافق مع الواجهة القديمة فقط)
         
         Returns:
             (النص النهائي, معلومات المعالجة)
@@ -420,47 +418,27 @@ class StegoEngine:
             return content, info
         
         # تطبيق الوضع
-        if use_mode == 'normal':
-            result = content
-            self.stats['sent_normal'] += 1
-            
-        elif use_mode == 'spintax':
+        if use_mode == 'spintax':
+            # حل صيغة {خيار1|خيار2} التي كتبها المستخدم فقط
             result = parse_spintax_advanced(content) if has_spintax(content) else content
             self.stats['sent_spintax'] += 1
+            info['spintax_resolved'] = has_spintax(content)
             
         elif use_mode == 'stego':
-            # السر = النص الأصلي بعد حل spintax إن وجد
-            secret = parse_spintax_advanced(content) if has_spintax(content) else content
-            result = zero_width_hide(secret, cover_text or "")
-            self.stats['sent_stego'] += 1
-            
-        elif use_mode == 'diacritic':
-            # طبقة 1: حل Spintax أولاً (إن وجد)
+            # 1) حل spintax إن كتبه المستخدم
             clean = parse_spintax_advanced(content) if has_spintax(content) else content
-            # طبقة 2: استخراج الرابط/النص الإنجليزي
-            secret = self._extract_english_part(clean)
-            if secret:
-                # فصل النص العربي عن الإنجليزي (يُستخدم كغلاف)
-                arabic_part = re.sub(r'(https?://\S+|t\.me/\S+|@[a-zA-Z0-9_]+)', '', clean).strip()
-                # إزالة أقواس spintax المتبقية
-                arabic_part = arabic_part.replace('{', '').replace('}', '').replace('|', ' ')
-                result = diacritic_hide(secret, arabic_part if arabic_part else "")
-            else:
-                # لا يوجد نص إنجليزي - نرسل النص العادي بعد حل spintax
-                result = clean
-            self.stats['sent_diacritic'] += 1
+            # 2) حقن بصمة ZW خفية داخل نص المستخدم نفسه (يظل ظاهراً 100%)
+            result = inject_zw_fingerprint(clean)
+            self.stats['sent_stego'] += 1
+            info['fingerprint'] = True
             
-        elif use_mode == 'spintax+stego':
-            # طبقة 1: حل Spintax
-            spun = parse_spintax_advanced(content) if has_spintax(content) else content
-            # طبقة 2: إخفاء الناتج
-            result = zero_width_hide(spun, cover_text or "")
-            self.stats['sent_spintax_stego'] += 1
         else:
+            # normal - النص كما هو تماماً
             result = content
+            self.stats['sent_normal'] += 1
         
         info['final_length'] = len(result)
-        info['hidden'] = use_mode in ('stego', 'diacritic', 'spintax+stego')
+        info['visible_text_preserved'] = True  # نص المستخدم محفوظ دائماً
         
         return result, info
     
