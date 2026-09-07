@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://github.com/umputun/tg-spam",
+    "name": "umputun/tg-spam",
+    "snippet": "TG-Spam keeps an eye on messages in Telegram groups , looking out for spam. It's quick to act, deleting spammy messages and banning the users who send them. The ... Read more",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/MDLeet/TelegramBot",
+    "name": "MDLeet/TelegramBot",
+    "snippet": "This program is an automated Telegram bot that uses Telethon to monitor selected source channels, then processes new messages before posting them to a target ...",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/telethon",
+    "name": "telethon · GitHub Topics",
+    "snippet": "Telegram Mass Surveillance Bot in. The ultimate tool to automate custom telegram message forwarding. A Python Telegram API Library for converting between tdata ...",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/abernathyregina/Telegram-Anti-Spam-Bot",
+    "name": "Telegram Anti Spam Bot Android automation",
+    "snippet": "What it does: Automatically monitors Telegram chats, flags suspicious behavior , and executes actions (warn, mute, kick, ban, delete media/links) with human-like ... Read more",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/musprodev/TeleBot",
+    "name": "musprodev/TeleBot: A powerful telegram sudo bot",
+    "snippet": "A powerful Python-based Telegram bot for scraping group members, adding members to groups, and sending mass messages. This bot leverages the Telethon library to ... Read more",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/Rongronggg9/RSS-to-Telegram-Bot/blob/dev/docs/formatting-settings.md",
+    "name": "RSS-to-Telegram-Bot/docs/formatting-settings.md at dev",
+    "snippet": "A Telegram RSS bot that cares about your reading experience. Disable: send pure- text Telegram messages, no matter whether media is attached or not Only media,  ...",
+    "host_name": "github.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://hackmag.com/stuff/telegram-spam-bot",
+    "name": "Build and Deploy a Telegram Anti-Spam Bot in TypeScript",
+    "snippet": "Dec 13, 2025 — In about half an hour, we'll put together a fairly capable anti -spam bot in Node.js using TypeScript 3, store its data in MongoDB, then deploy ... Read more",
+    "host_name": "hackmag.com",
+    "rank": 6,
+    "date": "Dec 13, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://stackoverflow.com/questions/66918231/telegram-stop-and-block-bot-telethon",
+    "name": "telegram stop and block bot telethon - python",
+    "snippet": "In Telegram , in the application , there is such a function ... How to stop telethon ? 0 · How to Block user from sending messages in telegram ... Read more",
+    "host_name": "stackoverflow.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  }
+]

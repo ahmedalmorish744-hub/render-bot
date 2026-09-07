@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://stegzero.com",
+    "name": "StegZero: Zero-Width Steganography Decoder & Encoder",
+    "snippet": "Zero-width text encoder & decoder . Hide a message in ordinary text, or inspect text for invisible Unicode characters. ○ Runs locally in your browser. Read more",
+    "host_name": "stegzero.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://330k.github.io/misc_tools/unicode_steganography.html",
+    "name": "Unicode Steganography with Zero-Width Characters",
+    "snippet": "This is plain text steganography with zero-width characters of Unicode . Zero-width characters is inserted within the words. JavaScript library is below. http:// ... Read more",
+    "host_name": "330k.github.io",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/lorossi/zero-width-steganography",
+    "name": "lorossi/zero-width-steganography: Hide text",
+    "snippet": "Zero Width Steganography . Steganography: the practice of concealing a file, message, image, or video within another file, message, image ... Read more",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/zero-width?l=javascript",
+    "name": "zero-width · GitHub Topics",
+    "snippet": "A browser extension for utilizing and detecting text steganography with zero-width characters for covert communication. cryptography steganography zero-width- ... Read more",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/Clevis22/StegZero",
+    "name": "Clevis22/StegZero: Hide secret messages within regular",
+    "snippet": "StegZero is a free, browser‑based zero ‑ width Unicode steganography tool . It hides short messages inside otherwise normal‑looking text by inserting invisible ... Read more",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.promptfoo.dev/blog/invisible-unicode-threats",
+    "name": "The Invisible Threat: How Zero-Width Unicode Characters",
+    "snippet": "Apr 10, 2025 — Explore how invisible Unicode characters can be used to manipulate AI coding assistants and LLMs, potentially leading to security ...",
+    "host_name": "www.promptfoo.dev",
+    "rank": 5,
+    "date": "Apr 10, 2025",
+    "favicon": ""
+  },
+  {
+    "url": "https://null-byte.wonderhowto.com/how-to/use-zero-width-characters-hide-secret-messages-text-even-reveal-leaks-0198692",
+    "name": "How to Use Zero-Width Characters to Hide Secret Messages",
+    "snippet": "May 29, 2020 — With zero-width characters, we can use text-based steganography to stash hidden information inside of plain text, and we can even figure out ... Read more",
+    "host_name": "null-byte.wonderhowto.com",
+    "rank": 6,
+    "date": "May 29, 2020",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/kurolabs/stegcloak",
+    "name": "KuroLabs/stegcloak: Hide secrets with invisible characters",
+    "snippet": "Uses 6 Invisible characters in unicode characters that works everywhere in the web - Tweets, Gmail, WhatsApp, Telegram, Instagram, Facebook, and many more! Read more",
+    "host_name": "github.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  }
+]
