@@ -1,74 +1,74 @@
 [
   {
-    "url": "https://github.com/kurolabs/stegcloak",
-    "name": "KuroLabs/stegcloak: Hide secrets with invisible characters",
-    "snippet": "Uses 6 Invisible characters in unicode characters that works everywhere in the web - Tweets, Gmail, WhatsApp, Telegram, Instagram, Facebook, and many more!",
+    "url": "https://github.com/spencermountain/out-of-character",
+    "name": "spencermountain/out-of-character: remove invisible",
+    "snippet": "Unicode has a few-dozen characters that do not render anything, on purpose. This library helps spot and remove these funboys, before they cause some trouble. ...",
     "host_name": "github.com",
     "rank": 0,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/umputun/tg-spam",
-    "name": "umputun/tg-spam",
-    "snippet": "TG-Spam is an effective, self-hosted anti-spam bot specifically crafted for Telegram groups. leveraging an advanced spam detection methods to pinpoint and ...",
-    "host_name": "github.com",
-    "rank": 1,
-    "date": "",
-    "favicon": ""
-  },
-  {
     "url": "https://github.blog/changelog/2025-05-01-github-now-provides-a-warning-about-hidden-unicode-text",
     "name": "GitHub now provides a warning about hidden Unicode text",
-    "snippet": "May 1, 2025 — hidden Unicode characters can hide text in a file. This can cause code to appear one way and be interpreted another way, especially by AI.",
+    "snippet": "May 1, 2025 — hidden Unicode characters can hide text in a file . This can cause code to appear one way and be interpreted another way, especially by AI.",
     "host_name": "github.blog",
-    "rank": 2,
+    "rank": 1,
     "date": "May 1, 2025",
     "favicon": ""
   },
   {
-    "url": "https://github.com/qTox/qTox/issues/3165",
-    "name": "Arabic characters invisible when sent · Issue #3165 · qTox",
-    "snippet": "Apr 20, 2016 — If one sends Arabic characters they appear to be invisible , for instance if I send (no idea if this means anything, I don't speak Arabic ) سش ...",
+    "url": "https://github.com/topics/invisible-character-detector",
+    "name": "invisible-character-detector",
+    "snippet": "Jul 25, 2026 — Detect, count, highlight, replace, and insert invisible Unicode characters in text and code files. Updated on Jul 25 HTML. GitHub, Inc.",
     "host_name": "github.com",
-    "rank": 3,
-    "date": "Apr 20, 2016",
+    "rank": 2,
+    "date": "Jul 25, 2026",
     "favicon": ""
   },
   {
-    "url": "https://darkmarc.substack.com/p/invisible-text-trick-disguises-malware",
-    "name": "Invisible Text Trick Disguises Malware and Bypasses Security",
-    "snippet": "By inserting the RTLO character in the filename, an attacker can reverse how it displays. The character is invisible and affects how the text ...",
-    "host_name": "darkmarc.substack.com",
+    "url": "https://forum.sublimetext.com/t/unicode-variation-selectors-creating-invisible-characters/22684",
+    "name": "Unicode variation selectors creating invisible characters",
+    "snippet": "Sep 8, 2016 — If you go between the characters and only delete the visible one, you are left with an invisible character that is nearly impossible to find ...",
+    "host_name": "forum.sublimetext.com",
+    "rank": 3,
+    "date": "Sep 8, 2016",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/juriku/hidden-characters-detector",
+    "name": "juriku/hidden-characters-detector: python tool to detect and",
+    "snippet": "This tool scans text files for various Unicode characters that are often used as hidden watermarks or may cause formatting issues.",
+    "host_name": "github.com",
     "rank": 4,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/spencermountain/out-of-character",
-    "name": "spencermountain/out-of-character: remove invisible",
-    "snippet": "Unicode has a few-dozen characters that do not render anything, on purpose. This library helps spot and remove these funboys,",
-    "host_name": "github.com",
+    "url": "https://klaroskope.com/learn/invisible-unicode-obfuscation",
+    "name": "Invisible Unicode Attacks: Detection Guide",
+    "snippet": "Jan 24, 2026 — Zero-width Unicode obfuscation exploits invisible characters from the Unicode standard to encode malicious payloads within seemingly empty text.",
+    "host_name": "klaroskope.com",
     "rank": 5,
+    "date": "Jan 24, 2026",
+    "favicon": ""
+  },
+  {
+    "url": "https://labs.cloudsecurityalliance.org/research/csa-research-note-unicode-instruction-injection-ai-skills-20",
+    "name": "Hidden Unicode Instruction Injection in AI Agent Skills",
+    "snippet": "... Unicode Tags variant is invisible even under full visual inspection of the raw metadata. ... The December 2025 arxiv study analyzing Unicode text ...",
+    "host_name": "labs.cloudsecurityalliance.org",
+    "rank": 6,
     "date": "",
     "favicon": ""
   },
   {
     "url": "https://www.technology.org/2026/03/16/hackers-are-hiding-malicious-code-in-plain-sight-using-invisible-unicode-characters",
     "name": "Invisible Unicode Code Hides Malware on GitHub",
-    "snippet": "Mar 16, 2026 — Attackers use invisible Unicode characters to hide malicious payloads in GitHub , npm, and VS Code packages, bypassing code review and static ...",
+    "snippet": "Mar 16, 2026 — Attackers use invisible Unicode characters to hide malicious payloads in GitHub, npm, and VS Code packages, bypassing code review and static ...",
     "host_name": "www.technology.org",
-    "rank": 6,
-    "date": "Mar 16, 2026",
-    "favicon": ""
-  },
-  {
-    "url": "https://github.com/topics/antispam",
-    "name": "antispam · GitHub Topics",
-    "snippet": "A Telegram bot helping you process private messages. antispam message-passing private-chat - filter spam - filtering",
-    "host_name": "github.com",
     "rank": 7,
-    "date": "",
+    "date": "Mar 16, 2026",
     "favicon": ""
   }
 ]

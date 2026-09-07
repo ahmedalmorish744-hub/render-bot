@@ -1,73 +1,55 @@
 [
   {
-    "url": "https://stegzero.com",
-    "name": "StegZero: Zero-Width Steganography Decoder & Encoder",
-    "snippet": "Zero-width text encoder & decoder . Hide a message in ordinary text, or inspect text for invisible Unicode characters. ○ Runs locally in your browser. Read more",
-    "host_name": "stegzero.com",
+    "url": "https://graphemica.com/E0100",
+    "name": "variation selector-17 (U+E0100)",
+    "snippet": "(Variation Selector-17, U+E0100) is an invisible yet crucial Unicode character that doesn't have a visual appearance of its own.",
+    "host_name": "graphemica.com",
     "rank": 0,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://330k.github.io/misc_tools/unicode_steganography.html",
-    "name": "Unicode Steganography with Zero-Width Characters",
-    "snippet": "This is plain text steganography with zero-width characters of Unicode . Zero-width characters is inserted within the words. JavaScript library is below. http:// ... Read more",
-    "host_name": "330k.github.io",
+    "url": "https://codepoints.net/U+E0100?lang=en",
+    "name": "U+E0100 VARIATION SELECTOR-17: ◌󠄀 – Unicode",
+    "snippet": "These combining characters are named variation selector -17 (for U + E0100 ) ... Joining Type (jt). Transparent . Line Break (lb). Combining Mark . Numeric Type ... Read more",
+    "host_name": "codepoints.net",
     "rank": 1,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/lorossi/zero-width-steganography",
-    "name": "lorossi/zero-width-steganography: Hide text",
-    "snippet": "Zero Width Steganography . Steganography: the practice of concealing a file, message, image, or video within another file, message, image ... Read more",
-    "host_name": "github.com",
+    "url": "https://unicode.org/versions/Unicode17.0.0/core-spec/chapter-23",
+    "name": "Special Areas and Format Characters",
+    "snippet": "This chapter describes several kinds of characters that have special properties as well as areas of the codespace that are set aside for special purposes. Read more",
+    "host_name": "unicode.org",
     "rank": 2,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/topics/zero-width?l=javascript",
-    "name": "zero-width · GitHub Topics",
-    "snippet": "A browser extension for utilizing and detecting text steganography with zero-width characters for covert communication. cryptography steganography zero-width- ... Read more",
-    "host_name": "github.com",
+    "url": "https://josephthacker.com/emoji_variation.html",
+    "name": "Unicode Variation Selector Data Hiding",
+    "snippet": "Based on Paul Butler's technique, this tool allows you to encode any data into invisible variation selectors attached to a visible character. ... U + E0100 through ... Read more",
+    "host_name": "josephthacker.com",
     "rank": 3,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/Clevis22/StegZero",
-    "name": "Clevis22/StegZero: Hide secret messages within regular",
-    "snippet": "StegZero is a free, browser‑based zero ‑ width Unicode steganography tool . It hides short messages inside otherwise normal‑looking text by inserting invisible ... Read more",
-    "host_name": "github.com",
+    "url": "https://en.wikipedia.org/wiki/Variation_Selectors_(Unicode_block)",
+    "name": "Variation Selectors (Unicode block)",
+    "snippet": "Variation Selectors is a Unicode block containing 16 variation selectors used to specify a glyph variant for a preceding character. They are currently used ... Read more",
+    "host_name": "en.wikipedia.org",
     "rank": 4,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://www.promptfoo.dev/blog/invisible-unicode-threats",
-    "name": "The Invisible Threat: How Zero-Width Unicode Characters",
-    "snippet": "Apr 10, 2025 — Explore how invisible Unicode characters can be used to manipulate AI coding assistants and LLMs, potentially leading to security ...",
-    "host_name": "www.promptfoo.dev",
+    "url": "https://invisible-characters.com/E0100-VARIATION-SELECTOR-17.html",
+    "name": "U+E0100 VARIATION SELECTOR-17 - Copy & Paste",
+    "snippet": "Copy and paste this invisible Unicode character with one click. This character is commonly used for blank names, hidden text, and formatting edge cases. Read more",
+    "host_name": "invisible-characters.com",
     "rank": 5,
-    "date": "Apr 10, 2025",
-    "favicon": ""
-  },
-  {
-    "url": "https://null-byte.wonderhowto.com/how-to/use-zero-width-characters-hide-secret-messages-text-even-reveal-leaks-0198692",
-    "name": "How to Use Zero-Width Characters to Hide Secret Messages",
-    "snippet": "May 29, 2020 — With zero-width characters, we can use text-based steganography to stash hidden information inside of plain text, and we can even figure out ... Read more",
-    "host_name": "null-byte.wonderhowto.com",
-    "rank": 6,
-    "date": "May 29, 2020",
-    "favicon": ""
-  },
-  {
-    "url": "https://github.com/kurolabs/stegcloak",
-    "name": "KuroLabs/stegcloak: Hide secrets with invisible characters",
-    "snippet": "Uses 6 Invisible characters in unicode characters that works everywhere in the web - Tweets, Gmail, WhatsApp, Telegram, Instagram, Facebook, and many more! Read more",
-    "host_name": "github.com",
-    "rank": 7,
     "date": "",
     "favicon": ""
   }

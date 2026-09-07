@@ -1,74 +1,74 @@
 [
   {
-    "url": "https://github.com/promptfoo/promptfoo/issues/9898",
-    "name": "Add Arabic-script obfuscation strategy (presentation forms) to Static",
-    "snippet": "Jun 28, 2026 · Arabic presentation forms ( U+FB50–FDFF , U+FE70–FEFF ) — alternate codepoints for the same Arabic letters. The direct Arabic analog of ...",
+    "url": "https://github.com/kurolabs/stegcloak",
+    "name": "KuroLabs/stegcloak: Hide secrets with invisible characters",
+    "snippet": "StegCloak is a pure JavaScript steganography module. Uses 6 Invisible characters in unicode characters that works everywhere in the web - Tweets, Gmail, ...",
     "host_name": "github.com",
     "rank": 0,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/ACMCMC/silverspeak",
-    "name": "GitHub - ACMCMC/silverspeak: A Python library to perform and",
-    "snippet": "A Python library to perform and neutralize homoglyph/homograph attacks on text across multiple languages and scripts. - ACMCMC/silverspeak.",
+    "url": "https://github.com/topics/antispam",
+    "name": "antispam · GitHub Topics",
+    "snippet": "Free, open-source and self-hosted CAPTCHA alternative to reCAPTCHA. Privacy-first and powered by proof-of-work and instrumentation challenges. Read more",
     "host_name": "github.com",
     "rank": 1,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/topics/homoglyphs",
-    "name": "homoglyphs · GitHub Topics",
-    "snippet": "A Python library to perform and neutralize homoglyph/homograph attacks on text across multiple languages and scripts. Useful for simplifying spam/phishing ...",
+    "url": "https://github.com/robstarbuck/z-chars",
+    "name": "robstarbuck/z-chars: Steganography demo using zero-",
+    "snippet": "This library encodes a secret message into a cover text by converting each character of the secret message into a sequence of zero-width characters . Read more",
     "host_name": "github.com",
     "rank": 2,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://stackoverflow.com/questions/57143803/missing-presentation-forms-glyphs-of-some-arabic-characters-in-unicode",
-    "name": "Missing presentation forms (glyphs) of some arabic characters in",
-    "snippet": "Jul 22, 2019 · The Arabic presentation forms should never be used for writing text. They exist only because they were needed for compatibility with older ...",
-    "host_name": "stackoverflow.com",
+    "url": "https://github.com/umputun/tg-spam",
+    "name": "umputun/tg-spam",
+    "snippet": "TG-Spam is an effective, self-hosted anti-spam bot specifically crafted for Telegram groups. Spam oversees messages, leveraging an advanced spam detection ...",
+    "host_name": "github.com",
     "rank": 3,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/GravityKit/gravity-forms-zero-spam",
-    "name": "GitHub - GravityKit/gravity-forms-zero-spam: Enhance your Gravity",
-    "snippet": "Enhance your Gravity Forms to include anti-spam measures without needing to use a CAPTCHA. include anti-spam measures",
-    "host_name": "github.com",
+    "url": "https://330k.github.io/misc_tools/unicode_steganography.html",
+    "name": "Unicode Steganography with Zero-Width Characters",
+    "snippet": "This is plain text steganography with zero-width characters of Unicode. Zero-width characters is inserted within the words. JavaScript library is below.  ...",
+    "host_name": "330k.github.io",
     "rank": 4,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/codebox/homoglyph",
-    "name": "A big list of homoglyphs and some code to detect them · GitHub",
-    "snippet": "Homoglyphs are characters with different meanings, that look similar/identical to each other - like the digit '0' and the capital letter 'O' for example.",
+    "url": "https://github.com/spencermountain/out-of-character",
+    "name": "spencermountain/out-of-character: remove invisible",
+    "snippet": "Unicode has a few-dozen characters that do not render anything, on purpose. This library helps spot and remove these funboys, tag characters ( invisible letters ...",
     "host_name": "github.com",
     "rank": 5,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://github.com/topics/antispam",
-    "name": "antispam · GitHub Topics",
-    "snippet": "A Discord Bot that allows you to protect your Discord server with captcha, anti profanity, anti nudity image, anti spam, account age required, logs...",
+    "url": "https://github.com/maharshijd/Phantom-Text",
+    "name": "maharshijd/Phantom-Text: Unicode steganography tool",
+    "snippet": "Unicode steganography tool that hides secret messages within visible text using invisible zero-width characters. It allows users to encode and decode hidden ...",
     "host_name": "github.com",
     "rank": 6,
     "date": "",
     "favicon": ""
   },
   {
-    "url": "https://learn.microsoft.com/en-us/answers/questions/4889958/arabic-presentation-forms-a-fb50-fdff",
-    "name": "Arabic Presentation Forms-A (FB50—FDFF) - Microsoft Q&A",
-    "snippet": "Nov 2, 2015 · Arabic Presentation Forms-A. After entering the codes, the glyphs should appear as follows yet, They appear in Arial font and cannot be changed.",
-    "host_name": "learn.microsoft.com",
+    "url": "https://github.blog/changelog/2025-05-01-github-now-provides-a-warning-about-hidden-unicode-text",
+    "name": "GitHub now provides a warning about hidden Unicode text",
+    "snippet": "May 1, 2025 — hidden Unicode characters can hide text in a file . This can cause code to appear one way and be interpreted another way, especially by AI.",
+    "host_name": "github.blog",
     "rank": 7,
-    "date": "",
+    "date": "May 1, 2025",
     "favicon": ""
   }
 ]
