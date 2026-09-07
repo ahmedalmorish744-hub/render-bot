@@ -703,7 +703,7 @@ def prepare_content_for_sending(raw_content, group_id=None):
     0. 🧹 تنظيف الأحرف الخفية الخطرة من المُدخل (حماية من النصوص الملصوقة)
     1. 🎲 حل Spintax {خيار1|خيار2} الذي كتبه المستخدم (كلماته هو فقط)
     2. 🫥 Send Mode (وضع الإرسال: normal/spintax/stego - كلها تحافظ على نصك)
-    3. 🔬 Adaptive Obfuscation v3.0 (طبقات غير مرئية آمنة على تشكيل العربية)
+    3. 👻 Ghost Encoding v4.0 (تكويد شفاف للتشكيل - الرسم يبقى كما هو)
     4. 💎 التشفير الخارق (إذا تم تفعيله يدوياً)
     5. 🔬 تشويش خفي StealthObfuscator (إذا تم تفعيله يدوياً)
     6. ✨ Fancy Text (إذا تم تفعيله)
@@ -5859,7 +5859,7 @@ async def main():
             set_setting('adaptive_obfuscation_enabled', new_val)
             status = "مفعل ✅" if new_val == 'on' else "معطل ❌"
             await event.answer(f"🔬 Adaptive Obfuscation: {status}")
-            await event.edit(f"🔬 **Adaptive Obfuscation: {status}**\n\n{'✅ المحرك يعمل الآن وسيطبق 7 طبقات ذكية على كل رسالة' if new_val == 'on' else '❌ المحرك متوقف - سيتم استخدام التشفير العادي'}", buttons=get_adaptive_menu())
+            await event.edit(f"👻 **Ghost Encoding v4.0: {status}**\n\n{'✅ المحرك يعمل الآن - تكويد حديث غير مرئي، رسم كلماتك يبقى كما هو 100%' if new_val == 'on' else '❌ المحرك متوقف - سيتم استخدام التشفير العادي'}", buttons=get_adaptive_menu())
 
         elif data == 'adaptive_profile':
             current = get_setting('adaptive_obfuscation_profile', 'medium')
@@ -5873,23 +5873,23 @@ async def main():
             await event.answer(f"⚡ القوة: {new_profile}")
             emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[new_profile]
             descriptions = {
-                'light': '🟢 خفيف - 10% تشويش (للنصوص الحساسة)',
-                'medium': '🟡 متوسط - 20% تشويش (الافتراضي)',
-                'aggressive': '🟠 قوي - 35% تشويش (لبوتات الحماية الصارمة)',
-                'insane': '🔴 عنيف - 50% تشويش (للحالات القصوى)',
+                'light': '🟢 خفيف - كثافة خفية منخفضة (النص شبه نظيف من الداخل)',
+                'medium': '🟡 متوسط - توازن مثالي بين التخفي والطول (الافتراضي)',
+                'aggressive': '🟠 قوي - لبوتات الحماية الصارمة',
+                'insane': '🔴 عنيف - أقصى تكويد للحالات القصوى',
             }
             await event.edit(f"⚡ **مستوى القوة تغيّر**\n\n{descriptions[new_profile]}", buttons=get_adaptive_menu())
 
         elif data == 'adaptive_layers':
-            layers_info = "📊 **حالة طبقات Adaptive Obfuscation**\n\n"
+            layers_info = "👻 **قنوات Ghost Encoding v4.0**\n\n"
             layers_ar = {
-                'arabic_forms': '1️⃣ Arabic Presentation Forms',
-                'zw_distribution': '2️⃣ Smart ZW Distribution',
-                'bayes_evasion': '3️⃣ Bayes Evasion',
-                'spintax': '4️⃣ Adaptive Spintax',
-                'tag_chars': '5️⃣ Tag Characters',
-                'nfd': '6️⃣ NFD Decomposition',
-                'salt': '7️⃣ Anti-Similarity Salt',
+                'ghost_vs_channel': '1️⃣ قناة VS الشفافة (256 حرف خفي حديث)',
+                'cf_boundary': '2️⃣ قناة الحدود الآمنة (مواضع محسوبة)',
+                'keyword_boost': '3️⃣ تعزيز الكلمات المفتاحية',
+                'salt': '4️⃣ بصمة الأشباح (فريدة لكل رسالة)',
+                'arabic_forms': '⛔ أشكال العرض (معطلة - كانت تغير الرسم)',
+                'nfd': '⛔ NFD (معطلة - كانت تفكك الحروف)',
+                'tag_chars': '⛔ Tag Characters (معطلة - كانت تخفي الحروف)',
             }
             for key, name in layers_ar.items():
                 status = "✅" if adaptive_engine.get_layer_status(key) else "❌"
@@ -5904,7 +5904,7 @@ async def main():
                 result, info = eng.obfuscate(sample)
                 emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[profile]
                 msg += f"{emoji} **{profile.upper()}** ({len(result)} حرف):\n{result}\n\n"
-            msg += "💡 كل النصوص تبدو متطابقة بصرياً لكنها مختلفة في Unicode!"
+            msg += "💡 كل النصوص تبدو **متطابقة تماماً** للعين لكن الكود الداخلي مختلف كلياً - بوتات الحماية لا تجد الكلمات المفتاحية!"
             await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"adaptive_menu")]])
 
         elif data == 'adaptive_info':
