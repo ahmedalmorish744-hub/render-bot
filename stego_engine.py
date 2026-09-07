@@ -80,7 +80,20 @@ def has_spintax(text: str) -> bool:
 # 2️⃣ ZERO-WIDTH STEGANOGRAPHY - إخفاء نص داخل نص
 # ═══════════════════════════════════════════════════════════════
 
-# أحرف العرض الصفري (4 أحرف = نظام ثنائي 2-bit)
+# 🛡️ v3.0 - أبجدية البصمة "الآمنة على تشكيل العربية":
+#   الأحرف القديمة (200B/200C/200D) كانت تُزرع داخل الكلمات العربية
+#   فتقطع اتصال الحروف ويظهر النص متلخبطاً!
+#   الأحرف الجديدة لا تملك أي دلالة ربط/انفصال (Joining Type=None)
+#   → يمكن زرعها في أي مكان دون تأثير على شكل النص إطلاقاً
+# نظام 2-bit: 4 أحرف = 4 حالات = بتان لكل حرف
+FINGERPRINT_ALPHABET = [
+    '\u2060',  # 00 - Word Joiner (آمن تماماً)
+    '\u061C',  # 01 - Arabic Letter Mark (صُمم للعربية، غير مرئي)
+    '\u2061',  # 10 - Function Application (غير مرئي)
+    '\u2062',  # 11 - Invisible Times (غير مرئي)
+]
+
+# الأبجدية القديمة (للترميز اليدوي القديم وفك ترميزه فقط)
 ZW_CHARS = [
     '\u200B',  # 00 - Zero Width Space
     '\u200C',  # 01 - Zero Width Non-Joiner
@@ -88,8 +101,15 @@ ZW_CHARS = [
     '\uFEFF',  # 11 - Zero Width No-Break Space
 ]
 
-# أحرف إضافية متوافقة مع تيليجرام (وضع موسع)
-ZW_EXTENDED = ['\u2061', '\u2062', '\u2063']
+# خريطة فك الترميز الموحدة (جديد + قديم)
+_DECODE_MAP = {}
+for _i, _c in enumerate(FINGERPRINT_ALPHABET):
+    _DECODE_MAP[_c] = format(_i, '02b')
+for _i, _c in enumerate(ZW_CHARS):
+    _DECODE_MAP.setdefault(_c, format(_i, '02b'))
+
+# كل الأحرف الخفية المعروفة (للفحص)
+ALL_INVISIBLES = set(FINGERPRINT_ALPHABET) | set(ZW_CHARS)
 
 
 def _text_to_bits(text: str) -> str:
@@ -113,25 +133,28 @@ def _bits_to_text(bits: str) -> Optional[str]:
 
 def inject_zw_fingerprint(text: str, density: float = 0.06) -> str:
     """
-    🫥 حقن بصمة صفرية خفية داخل نص المستخدم نفسه
-    
+    🫥 حقن بصمة صفرية خفية داخل نص المستخدم نفسه (v3.0 آمن على العربية)
+
     ⚠️ القاعدة الذهبية: النص يبقى ظاهراً ومقروءاً 100% كما كتبه المستخدم.
        تُضاف أحرف غير مرئية فقط بين الحروف/الكلمات لتصبح كل رسالة
        ذات بصمة Unicode فريدة لا تستطيع بوتات الحماية مطابقتها برسائل سابقة.
-    
+
+    🆕 v3.0: الأحرف المستخدمة من أبجدية FINGERPRINT_ALPHABET الآمنة:
+       لا تقطع اتصال الحروف العربية (عكس 200C القديم الذي كان يفسدها!)
+
     🛡️ الروابط والمعرفات (t.me/... / https://... / @username) محمية
        تماماً - لا تُحقن فيها أحرف كي تبقى قابلة للنقر والنسخ.
-    
+
     Args:
         text: نص المستخدم (يظل كما هو تماماً في الشكل)
         density: كثافة الحقن (نسبة من مواضع الحروف)
-    
+
     Returns:
         نفس النص + أحرف غير مرئية موزعة (الشكل الظاهر لم يتغير)
     """
     if not text or len(text) < 4 or density <= 0:
         return text
-    
+
     # 🛡️ حماية الروابط والمعرفات من الحقن
     protected_re = re.compile(r'(https?://\S+|t\.me/\S+|@[a-zA-Z0-9_]{3,})')
     parts = []
@@ -145,7 +168,7 @@ def inject_zw_fingerprint(text: str, density: float = 0.06) -> str:
         parts.append((text[last:], False))
     if not parts:
         parts = [(text, False)]
-    
+
     result = []
     for seg, protected in parts:
         if protected:
@@ -155,7 +178,7 @@ def inject_zw_fingerprint(text: str, density: float = 0.06) -> str:
             result.append(ch)
             # لا نضيف بعد مسافات أو أسطر مباشرة كي لا يتغير التنسيق
             if ch not in (' ', '\n', '\t') and random.random() < density:
-                result.append(random.choice(ZW_CHARS))
+                result.append(random.choice(FINGERPRINT_ALPHABET))
     return ''.join(result)
 
 
@@ -197,30 +220,27 @@ def zero_width_hide(secret: str, cover: str = "") -> str:
 def zero_width_reveal(stego_text: str) -> Optional[str]:
     """
     استخراج النص المخفي من نص مشفر
-    
+
+    🆕 v3.0: يفهم الأبجدية الجديدة الآمنة (2060/061C/2061/2062)
+       والأبجدية القديمة (200B/200C/200D/FEFF) للتوافق مع الرسائل القديمة
+
     Returns:
         النص السري أو None إذا لم يوجد شيء
     """
     if not stego_text:
         return None
-    
-    # استخراج جميع أحرف العرض الصفري
-    zw_found = ''.join(ch for ch in stego_text if ch in ZW_CHARS)
-    if len(zw_found) < 4:  # أقل من حرفين = لا يوجد سر
+
+    # استخراج كل الأحرف الخفية المعروفة بالترتيب
+    bits = ''.join(_DECODE_MAP[ch] for ch in stego_text if ch in _DECODE_MAP)
+    if len(bits) < 8:  # أقل من 8 بتات = لا يوجد سر
         return None
-    
-    # تحويل الأحرف الصفرية إلى بتات
-    bits = ''
-    for ch in zw_found:
-        index = ZW_CHARS.index(ch)
-        bits += format(index, '02b')
-    
+
     return _bits_to_text(bits)
 
 
 def has_zero_width(text: str) -> bool:
     """فحص وجود أحرف عرض صفري كثيرة (مؤشر إخفاء)"""
-    count = sum(1 for ch in text if ch in ZW_CHARS)
+    count = sum(1 for ch in text if ch in ALL_INVISIBLES)
     return count > 8  # أكثر من 8 أحرف صفرية = يوجد سر
 
 
@@ -228,13 +248,18 @@ def has_zero_width(text: str) -> bool:
 # 3️⃣ ARABIC DIACRITIC STEGANOGRAPHY - إخفاء بالتشكيل العربي
 # ═══════════════════════════════════════════════════════════════
 
-# علامات التشكيل العربية (4 علامات أساسية = نظام 2-bit)
+# علامات التشكيل العربية (8 علامات = نظام 3-bit)
+# 🆕 v3.0: توسيع من 4 إلى 8 علامات → السعة ×1.5
+# (40 حرف عربي × 3 بت = 15 بايت تكفي رابط t.me كامل)
 DIACRITICS = {
-    '\u064E': '00',  # فتحة (Fathatan Fatha)
-    '\u064F': '01',  # ضمة (Damma)
-    '\u0650': '10',  # كسرة (Kasra)
-    '\u0651': '11',  # شدة (Shadda)
-    # '\u0652': ' sukun' - سكون (يُستخدم للنهاية)
+    '\u064E': '000',  # فتحة
+    '\u064F': '001',  # ضمة
+    '\u0650': '010',  # كسرة
+    '\u0651': '011',  # شدة
+    '\u0652': '100',  # سكون
+    '\u064B': '101',  # فتحتان
+    '\u064C': '110',  # ضمتان
+    '\u064D': '111',  # كسرتان
 }
 
 DIACRITICS_LIST = list(DIACRITICS.keys())
@@ -250,6 +275,7 @@ def _english_to_diacritic_bits(text: str) -> str:
 def diacritic_hide(secret: str, cover: str = "") -> str:
     """
     🛡️ v2.0: أداة يدوية فقط - لا تُستخدم في مسار النشر التلقائي
+    🆕 v3.0: نظام 3-bit (8 علامات) - السعة ×1.5
     
     إخفاء رسالة إنجليزية (رابط أو كود) داخل نص عربي مشكول **من المستخدم**
     لا يولّد نصوص غلاف تلقائية أبداً.
@@ -279,13 +305,13 @@ def diacritic_hide(secret: str, cover: str = "") -> str:
     for ch in cover:
         if '\u0600' <= ch <= '\u06FF' and bit_index < len(bits):
             # إضافة حرف التشكيل المناسب
-            pair = bits[bit_index:bit_index+2].ljust(2, '0')
-            diacritic = _bits_to_diacritic(pair)
+            triplet = bits[bit_index:bit_index+3].ljust(3, '0')
+            diacritic = _bits_to_diacritic(triplet)
             if diacritic:
                 result.append(ch + diacritic)
             else:
                 result.append(ch)
-            bit_index += 2
+            bit_index += 3
         else:
             result.append(ch)
     
@@ -293,14 +319,20 @@ def diacritic_hide(secret: str, cover: str = "") -> str:
 
 
 def _bits_to_diacritic(bits: str) -> Optional[str]:
-    """تحويل بتات إلى حرف تشكيل"""
-    mapping = {'00': '\u064E', '01': '\u064F', '10': '\u0650', '11': '\u0651'}
+    """تحويل بتات إلى حرف تشكيل (نظام 3-bit)"""
+    mapping = {
+        '000': '\u064E', '001': '\u064F', '010': '\u0650', '011': '\u0651',
+        '100': '\u0652', '101': '\u064B', '110': '\u064C', '111': '\u064D',
+    }
     return mapping.get(bits)
 
 
 def _diacritic_to_bits(diacritic: str) -> Optional[str]:
-    """تحويل حرف تشكيل إلى بتات"""
-    mapping = {'\u064E': '00', '\u064F': '01', '\u0650': '10', '\u0651': '11'}
+    """تحويل حرف تشكيل إلى بتات (نظام 3-bit)"""
+    mapping = {
+        '\u064E': '000', '\u064F': '001', '\u0650': '010', '\u0651': '011',
+        '\u0652': '100', '\u064B': '101', '\u064C': '110', '\u064D': '111',
+    }
     return mapping.get(diacritic)
 
 

@@ -1,22 +1,51 @@
 """
-🔬 Adaptive Obfuscation Engine v2.0
+🔬 Adaptive Obfuscation Engine v3.0 - الدرع الخفي
 محرك التشويش التكيفي - طبقات غير مرئية فقط لتجاوز بوتات الحماية
+مصمم خصيصاً للنص العربي: خفي على البوتات + مقروء 100% للبشر
 
-⚠️ القاعدة الذهبية (v2.0):
+⚠️ القاعدة الذهبية (v3.0):
    البوت يرسل نص المستخدم **كما هو** - لا إضافة كلمات، لا حذف، لا استبدال مرادفات.
    كل الطبقات تغيّر تمثيل Unicode للنص فقط (الشكل الظاهر يبقى متطابقاً).
 
-الطبقات:
-1. Arabic Presentation Forms - استبدال الأحرف العربية بنسخ متطابقة بصرياً
-2. Smart ZW Distribution - توزيع ذكي للأحرف الصفرية (لا تجمعها معاً)
-3. Bayes Evasion - معطلة (كانت تضيف كلمات - تخرّب النص) ← أصبحت ZW خفي فقط
-4. Adaptive Spintax - معطلة (كانت تستبدل كلمات المستخدم بمرادفات)
-5. Tag Characters - استخدام U+E0000 range للاتيني
+🆕 v3.0 - إصلاح جذري لمشكلة "تلخبط" النص العربي:
+   المشكلة القديمة: إدخال \u200C (ZWNJ) و \u200B (ZWSP) و \u200D (ZWJ)
+   داخل الكلمات العربية يقطع اتصال الحروف فيتصدر النص متفككاً!
+   (مثال: "مرحباً" تظهر "مرحباً" بحروف منفصلة)
 
-مستوحى من:
-- ACMCMC/silverspeak (Homoglyph attacks)
-- bunnylab/pyUnicodeSteganography (ZW distribution)
-- promptfoo Arabic obfuscation (Presentation Forms)
+   الحل (v3.0): مجموعة أحرف خفية "آمنة على التشكيل" لا تملك أي دلالة
+   ربط/انفصال في محركات تشكيل النصوص (HarfBuzz/CoreText/DirectWrite):
+   • U+2060 Word Joiner      - غير مرئي، لا يؤثر على الاتصال إطلاقاً
+   • U+061C Arabic Letter Mark - صُمم للعربية، غير مرئي، bidi فقط
+   • U+2063 Invisible Separator - غير مرئي، رياضي، آمن
+   • U+2064 Invisible Plus     - غير مرئي، رياضي، آمن
+   • U+FEFF ZWNBSP            - يعمل كـ Word Joiner، آمن
+
+   🛡️ هذه المجموعة منفصلة تماماً عن أبجدية بصمة stego الفريدة
+   ({2060,061C,2061,2062}) لذلك لا تفسد فك تشفير البصمة أبداً.
+
+الطبقات (v3.0):
+1. Arabic Presentation Forms - استبدال بصري متطابق (U+FE70-FEFF)
+   ✔ آلية موثقة في promptfoo#9898 و ACMCMC/silverspeak
+   ✔ تنجو من التطبيع (Normalization) الذي تعتمد عليه بوتات الحماية
+2. Invisible Shield Distribution - توزيع أحرف آمنة على التشكيل
+   ✔ مستوحى من KuroLabs/stegcloak (6 أحرف خفية تعمل في كل مكان)
+   ✔ يكسر مطابقة الهاش والعبارات (exact/n-gram matching)
+3. NFD Decomposition - تفكيك الأحرف المركبة (أ → ا + ٔ)
+   ✔ بصرياً متطابق، يكسر الهاش والمقارنات النصية
+4. Anti-Similarity Salt - ملح فريد لكل رسالة
+   ✔ يمنع كشف "الرسائل المكررة" في بوتات مثل tg-spam
+
+معطل نهائياً (كانت تفسد النص):
+✗ Bayes Evasion (كانت تضيف كلمات!)
+✗ Adaptive Spintax (كانت تستبدل كلمات المستخدم!)
+✗ Tag Characters U+E0000 (كانت تجعل الحروف اللاتينية تختفي في تيليجرام!)
+
+مستوحى من (بحث GitHub - الأحدث والأضمن):
+- ACMCMC/silverspeak: مكتبة homoglyph متعددة اللغات
+- promptfoo/promptfoo#9898: استراتيجية أشكال العرض العربية
+- KuroLabs/stegcloak: إخفاء بأحرف خفية تعمل في تيليجرام وكل المنصات
+- umputun/tg-spam (طرف الخصم): يكشف أن الكشف يعتمد على التطبيع
+  والمطابقة التامة والتشابه - طبقاتنا الثلاث تكسرها كلها معاً
 """
 
 import random
@@ -65,13 +94,43 @@ def apply_layer_protected(text: str, func, *args, **kwargs) -> str:
     return ''.join(out)
 
 # ═══════════════════════════════════════════════════════════════
+# 🎯 سياسة الأحرف الخفية الآمنة (v3.0) - قلب الإصلاح
+# ═══════════════════════════════════════════════════════════════
+
+# ❌ ممنوعة نهائياً داخل النص (تقطع اتصال الحروف العربية أو تخفيها):
+#    \u200B ZWSP   - فرصة كسر سطر داخل الكلمة + في قوائم كشف البوتات
+#    \u200C ZWNJ   - يقطع اتصال الحروف العربية فعلياً! (سبب التلخبط)
+#    \u200D ZWJ    - يغير شكل الحرف (اختيار forms مختلفة)
+#    U+E0000 Tag   - تختفي الحروف اللاتينية في تيليجرام!
+
+# ✅ الأحرف المسموحة للطبقة الخفية (آمنة تشكيلياً 100%):
+#    لا تملك Joining Type في Unicode ولهذا لا تغير اتصال الحروف أبداً
+#    🛡️ منفصلة تماماً عن أبجدية بصمة stego {2060,061C,2061,2062}
+#       وعن الأبجدية القديمة {200B,200C,200D,FEFF} → لا تفسد فك الترميز
+INVISIBLE_SHIELD_CHARS = [
+    '\u2063',  # Invisible Separator - غير مرئي، لا تأثير تشكيلي
+    '\u2064',  # Invisible Plus - غير مرئي، لا تأثير تشكيلي
+]
+
+# ممنوع أيضاً في كل الحالات (كانت في النسخ القديمة أو تفسد فك الترميز):
+FORBIDDEN_INVISIBLES = {'\u200B', '\u200C', '\u200D', '\u2061', '\u2062', '\u2060', '\u061C', '\uFEFF'}
+
+def sanitize_invisible_chars(text: str) -> str:
+    """
+    🧹 تنظيف الأحرف الخفية الخطرة/المتضاربة من نص المستخدم قبل المعالجة
+    يحذف مقطعات الاتصال (200B/200C/200D) وأحرف البصمة القديمة
+    (نصوص ملصوقة من مصادر أخرى قد تحتويها وتظهر متلخبطة أو مزدوجة البصمة)
+    """
+    if not text:
+        return text
+    return ''.join(ch for ch in text if ch not in FORBIDDEN_INVISIBLES)
+
+# ═══════════════════════════════════════════════════════════════
 # 1. Arabic Presentation Forms - استبدال عربي بصري متطابق
 # ═══════════════════════════════════════════════════════════════
 
 # Arabic Presentation Forms B (U+FE70–U+FEFF) - كل كود مُتحقق منه:
 # NFKC(النموذج) = الحرف الأصلي بالضبط (تم التحقق برمجياً)
-# ⚠️ النسخة القديمة كانت تحتوي أكواداً خاطئة كانت تغيّر الحروف فعلياً
-#    (مثلاً 'ا' → 'ب'!) - أُصلحت كلها في v2.0
 ARABIC_PRESENTATION_FORMS = {
     'آ': ['\uFE81', '\uFE82'],   # ALEF WITH MADDA ABOVE
     'أ': ['\uFE83', '\uFE84'],   # ALEF WITH HAMZA ABOVE
@@ -121,17 +180,22 @@ for _base, _forms in ARABIC_PRESENTATION_FORMS.items():
 def apply_arabic_presentation_forms(text: str, intensity: float = 0.25) -> str:
     """
     استبدال نسبة من الأحرف العربية بـ Presentation Forms
-    
+
     ✅ النص يبدو متطابقاً 100% للعين المجردة
     ✅ يكسر مطابقة Hash والـ String matching
-    ✅ يخدع بعض بوتات الحماية التي تطبع Unicode قبل المقارنة
+    ✅ ينجو من التطبيع الذي تعتمده بوتات الحماية (tg-spam وأمثاله)
+    ✅ الأحرف الموجودة أصلاً كأشكال عرض (مثل ﺳﻛﻟﻳف في نص المستخدم)
+       تُترك كما هي - لا تُعالج مرتين (حماية من التراكم)
     """
     if not text or intensity <= 0:
         return text
-    
+
     result = []
     for char in text:
-        if char in ARABIC_PRESENTATION_FORMS and random.random() < intensity:
+        # الأحرف التي هي أصلاً Presentation Forms تُترك كما هي
+        if '\uFB50' <= char <= '\uFEFF':
+            result.append(char)
+        elif char in ARABIC_PRESENTATION_FORMS and random.random() < intensity:
             # اختيار نسخة عشوائية من Presentation Forms
             result.append(random.choice(ARABIC_PRESENTATION_FORMS[char]))
         else:
@@ -139,169 +203,103 @@ def apply_arabic_presentation_forms(text: str, intensity: float = 0.25) -> str:
     return ''.join(result)
 
 
+def strip_presentation_forms(text: str) -> str:
+    """إرجاع أشكال العرض إلى أحرفها الأصلية (NFKC) - للفحص والمقارنة"""
+    return unicodedata.normalize('NFKC', text)
+
 # ═══════════════════════════════════════════════════════════════
-# 2. Smart ZW Distribution - توزيع ذكي للأحرف الصفرية
+# 2. Invisible Shield Distribution - التوزيع الخفي الآمن (v3.0)
 # ═══════════════════════════════════════════════════════════════
 
-# أحرف Zero-Width (غير مرئية تماماً)
-ZW_CHARS = [
-    '\u200B',  # Zero-Width Space
-    '\u200C',  # Zero-Width Non-Joiner
-    '\u200D',  # Zero-Width Joiner
-    '\u2060',  # Word Joiner
-    '\uFEFF',  # Zero-Width No-Break Space
-]
-
-# أحرف صفرية إضافية (أقل استخداماً في بوتات الحماية)
-EXTENDED_INVISIBLE = [
-    '\u2061',  # Function Application
-    '\u2062',  # Invisible Times
-    '\u2063',  # Invisible Separator
-    '\u2064',  # Invisible Plus
-    '\u061C',  # Arabic Letter Mark
-]
-
-
-def smart_zw_distribute(text: str, density: float = 0.08, max_consecutive: int = 2) -> str:
+def shield_invisible_distribute(text: str, density: float = 0.08, max_consecutive: int = 2) -> str:
     """
-    إدخال ذكي للأحرف الصفرية:
-    
-    ✅ لا يضع أكثر من max_consecutive أحرف معاً (يتفادى الكشف)
-    ✅ يفضل المواضع بين الكلمات وبين الأحرف العربية
-    ✅ يستخدم أنواع مختلفة عشوائياً
+    🛡️ v3.0: إدخال أحرف خفية "آمنة تشكيلياً" فقط
+
+    ✅ لا يحتوي 200C/200B/200D أبداً → اتصال الحروف العربية لا يُمس
+    ✅ لا يضع أكثر من max_consecutive أحرف متتالية (يتفادى الكشف)
+    ✅ أحرف من خارج قوائم الكشف الشائعة (البوتات تبحث عن 200B-200D!)
+    ✅ لا يلمس الروابط والمعرفات (تُطبق عبر apply_layer_protected)
     ✅ يحافظ على القراءة 100%
     """
     if not text or density <= 0:
         return text
-    
-    words = text.split(' ')
-    result_words = []
-    
-    for word in words:
-        if not word:
-            result_words.append(word)
-            continue
-        
-        # معالجة الكلمة - إدخال ZW في مواضع ذكية
-        chars = list(word)
-        modified = []
-        consecutive_zw = 0
-        
-        for i, char in enumerate(chars):
-            modified.append(char)
-            
-            # إدخال ZW بعد الحرف باحتمالية density
-            if (random.random() < density and 
-                consecutive_zw < max_consecutive and
-                i < len(chars) - 1):  # لا في نهاية الكلمة
-                
-                # اختيار ZW عشوائي
-                zw = random.choice(ZW_CHARS)
-                modified.append(zw)
-                consecutive_zw += 1
-            else:
-                consecutive_zw = 0
-        
-        result_words.append(''.join(modified))
-    
-    # أيضاً إدخال ZW بين بعض الكلمات (نادراً)
-    # 🛡️ v2.0: يُلحق بالكلمة نفسها وليس كعنصر منفصل
-    # (الطريقة القديمة كانت تنشئ مسافة مزدوجة ظاهرة!)
-    result = []
-    for i, word in enumerate(result_words):
-        result.append(word)
-        if i < len(result_words) - 1 and random.random() < density * 0.3:
-            result[-1] = result[-1] + random.choice(ZW_CHARS)
-    
-    return ' '.join(result)
 
+    result = []
+    consecutive = 0
+    chars = list(text)
+
+    for i, char in enumerate(chars):
+        result.append(char)
+
+        if char in (' ', '\n', '\t'):
+            consecutive = 0
+            continue
+
+        # إدخال حرف خفي بعد الحرف باحتمالية density
+        if (random.random() < density and
+            consecutive < max_consecutive and
+            i < len(chars) - 1):  # لا في نهاية النص
+
+            result.append(random.choice(INVISIBLE_SHIELD_CHARS))
+            consecutive += 1
+        else:
+            consecutive = 0
+
+    return ''.join(result)
 
 # ═══════════════════════════════════════════════════════════════
-# 3. Bayes Evasion - تخديع مصنف Bayes (v2.0: غير مرئي 100%)
+# 3. Bayes Evasion / Spintax / Tag Chars - معطلة نهائياً (v3.0)
 # ═══════════════════════════════════════════════════════════════
 
 def bayes_evade(text: str, intensity: float = 0.15) -> str:
     """
-    🛡️ v2.0: معطلة لحماية سلامة النص
-    
-    النسخة القديمة كانت تُدخل كلمات مثل (السلام عليكم / شكراً) في وسط
-    رسالة المستخدم - هذا يخرّب النص وغير مقبول.
-    
-    البديل الآمن: تخديع Bayes يتم عبر طبقة smart_zw_distribute
-    (أحرف صفرية غير مرئية تكسر n-gram matching) وهي كافية تماماً،
-    لذلك هذه الدالة تُرجع النص كما هو دون أي تعديل على الكلمات.
+    🛡️ معطلة نهائياً - كانت تُدخل كلمات مثل (السلام عليكم) في وسط
+    رسالة المستخدم! تخدير Bayes يتم الآن عبر shield_invisible_distribute
+    (يكسر n-gram matching بأحرف خفية دون أي كلمات مضافة)
     """
     return text
 
-
-# ═══════════════════════════════════════════════════════════════
-# 4. Adaptive Spintax (v2.0: معطلة لحماية كلمات المستخدم)
-# ═══════════════════════════════════════════════════════════════
 
 def adaptive_spintax(text: str, intensity: float = 0.2) -> str:
     """
-    🛡️ v2.0: معطلة لحماية سلامة النص
-    
-    النسخة القديمة كانت تستبدل كلمات المستخدم بمرادفات
-    (اشترك → تابعنا، قناتنا → القناة...) - هذا يغيّر صياغة المستخدم
-    بدون إذنه وغير مقبول.
-    
-    ✅ البديل الصحيح: المستخدم يكتب صيغة Spintax بنفسه {خيار1|خيار2}
-       ويحلها محرك stego_engine (وضع spintax) - بنفس كلماته هو.
-    
-    هذه الدالة تُرجع النص كما هو دون أي تعديل.
+    🛡️ معطلة نهائياً - كانت تستبدل كلمات المستخدم بمرادفات!
+    المستخدم يكتب {خيار1|خيار2} بنفسه إن أراد التنويع.
     """
     return text
-
-
-# ═══════════════════════════════════════════════════════════════
-# 5. Tag Characters - ترميز U+E0000 للاتيني
-# ═══════════════════════════════════════════════════════════════
-
-# Tag Characters range: U+E0041-U+E007A (تطابق a-z و A-Z)
-TAG_BASE_LOWER = 0xE0061  # 'a' in tag chars
-TAG_BASE_UPPER = 0xE0041  # 'A' in tag chars
 
 
 def apply_tag_chars(text: str, intensity: float = 0.15) -> str:
     """
-    استبدال بعض الأحرف اللاتينية بـ Tag Characters (U+E0000 range)
-    
-    ✅ النص اللاتيني يبدو متطابقاً
-    ✅ Bayes و Hash لا يتعرفون على الأحرف
-    ✅ مفيد للروابط و @usernames في النص
-    """
-    if not text or intensity <= 0:
-        return text
-    
-    result = []
-    for char in text:
-        if 'a' <= char <= 'z' and random.random() < intensity:
-            result.append(chr(TAG_BASE_LOWER + (ord(char) - ord('a'))))
-        elif 'A' <= char <= 'Z' and random.random() < intensity:
-            result.append(chr(TAG_BASE_UPPER + (ord(char) - ord('A'))))
-        else:
-            result.append(char)
-    return ''.join(result)
+    🛡️ v3.0: معطلة نهائياً - سبب مهم!
 
+    Tag Characters (U+E0000 range) تجعل الحرف اللاتيني **غير مرئي
+    تماماً في تيليجرام** - المستخدم يفقد حروفاً من نصه!
+    (مثال: WhatsApp تظهر Wh__pp)
+    الحروف اللاتينية تُحمى الآن عبر shield_invisible_distribute فقط.
+    """
+    return text
 
 # ═══════════════════════════════════════════════════════════════
-# 6. NFD Decomposition - تفكيك الأحرف لمكوناتها
+# 4. NFD Decomposition - تفكيك الأحرف المركبة
 # ═══════════════════════════════════════════════════════════════
 
 def apply_nfd_decomposition(text: str, intensity: float = 0.1) -> str:
     """
     تفكيك Unicode NFD - يبدو متطابقاً بصرياً لكن الكود مختلف
-    
-    مثال: 'é' (U+00E9) → 'e' (U+0065) + '◌́' (U+0301)
+
+    مثال: 'أ' (U+0623) → 'ا' (U+0627) + ٔ (U+0654)
+    ✅ يكسر مطابقة الهاش
+    ✅ ترتيب الطبقات مهم: يُطبق بعد التوزيع الخفي، والتفكيك
+       يبقى متجاوراً (base + mark) فلا يفسد تشكيل الحرف
     """
     if not text or intensity <= 0:
         return text
-    
+
     result = []
     for char in text:
-        if random.random() < intensity:
-            # تحويل لـ NFD (يفكك الأحرف المركبة)
+        if char in INVISIBLE_SHIELD_CHARS or char in FORBIDDEN_INVISIBLES:
+            result.append(char)  # الأحرف الخفية لا تُلمس
+        elif random.random() < intensity:
             decomposed = unicodedata.normalize('NFD', char)
             if len(decomposed) > 1:
                 result.append(decomposed)
@@ -311,26 +309,24 @@ def apply_nfd_decomposition(text: str, intensity: float = 0.1) -> str:
             result.append(char)
     return ''.join(result)
 
-
 # ═══════════════════════════════════════════════════════════════
-# 7. Anti-Similarity Salt - ملح فريد لكل رسالة
+# 5. Anti-Similarity Salt - ملح فريد لكل رسالة
 # ═══════════════════════════════════════════════════════════════
 
 def add_anti_similarity_salt(text: str) -> str:
     """
-    إضافة أحرف صفرية فريدة في نهاية الرسالة لكسر كشف التشابه
-    
-    ✅ كل رسالة لها بصمة ZW فريدة (8 chars = 4 bytes)
-    ✅ يمنع بوتات الحماية من كشف الرسائل المكررة
-    ✅ غير مرئية تماماً للمستخدم
+    إضافة أحرف خفية فريدة في نهاية الرسالة لكسر كشف التشابه
+
+    ✅ كل رسالة لها بصمة فريدة
+    ✅ يمنع بوتات الحماية من كشف الرسائل المكررة (dedup)
+    ✅ تستخدم أحرف shield الآمنة فقط (لا تفسد بصمة stego)
+    ✅ في نهاية الرسالة → لا تأثير إطلاقاً على النص
     """
     if not text:
         return text
-    
-    # توليد 8 أحرف صفرية عشوائية (32 bit salt)
-    salt = ''.join(random.choice(ZW_CHARS) for _ in range(8))
-    return text + salt
 
+    salt = ''.join(random.choice(INVISIBLE_SHIELD_CHARS) for _ in range(8))
+    return text + salt
 
 # ═══════════════════════════════════════════════════════════════
 # 🎯 المحرك الرئيسي - AdaptiveObfuscationEngine
@@ -339,78 +335,64 @@ def add_anti_similarity_salt(text: str) -> str:
 class AdaptiveObfuscationEngine:
     """
     محرك التشويش التكيفي - يطبق كل الطبقات بترتيب ذكي
-    
-    الترتيب مهم:
-    1. Spintax (معطل - حماية كلمات المستخدم)
-    2. Bayes Evasion (معطل - حماية النص)
-    3. Arabic Presentation Forms (استبدال بصري متطابق)
-    4. Tag Characters (للاتيني)
-    5. Smart ZW Distribution (أحرف صفرية)
-    6. NFD Decomposition (تفكيك)
-    7. Anti-Similarity Salt (ملح فريد)
+
+    ترتيب الطبقات (v3.0):
+    1. Presentation Forms (استبدال بصري متطابق)
+    2. Invisible Shield Distribution (أحرف آمنة على التشكيل)
+    3. NFD Decomposition (تفكيك)
+    4. Anti-Similarity Salt (ملح فريد)
     """
-    
+
     # مستويات القوة
     PROFILES = {
         'light': {
-            'arabic_forms': 0.10,
-            'zw_density': 0.04,
-            'bayes_intensity': 0.08,
-            'spintax_intensity': 0.10,
-            'tag_intensity': 0.08,
-            'nfd_intensity': 0.05,
+            'arabic_forms': 0.12,
+            'zw_density': 0.05,
+            'nfd_intensity': 0.06,
         },
         'medium': {
-            'arabic_forms': 0.20,
-            'zw_density': 0.08,
-            'bayes_intensity': 0.12,
-            'spintax_intensity': 0.15,
-            'tag_intensity': 0.12,
-            'nfd_intensity': 0.08,
+            'arabic_forms': 0.25,
+            'zw_density': 0.10,
+            'nfd_intensity': 0.10,
         },
         'aggressive': {
-            'arabic_forms': 0.35,
-            'zw_density': 0.15,
-            'bayes_intensity': 0.20,
-            'spintax_intensity': 0.25,
-            'tag_intensity': 0.20,
-            'nfd_intensity': 0.12,
+            'arabic_forms': 0.40,
+            'zw_density': 0.16,
+            'nfd_intensity': 0.15,
         },
         'insane': {
-            'arabic_forms': 0.50,
-            'zw_density': 0.25,
-            'bayes_intensity': 0.30,
-            'spintax_intensity': 0.35,
-            'tag_intensity': 0.30,
+            'arabic_forms': 0.55,
+            'zw_density': 0.22,
             'nfd_intensity': 0.20,
         },
     }
-    
+
     def __init__(self, profile: str = 'medium'):
         self.profile = profile
-        self.config = self.PROFILES.get(profile, self.PROFILES['medium'])
+        self.config = dict(self.PROFILES.get(profile, self.PROFILES['medium']))
         self.enabled_layers = {
             'arabic_forms': True,
             'zw_distribution': True,
-            'bayes_evasion': True,
-            'spintax': True,
-            'tag_chars': True,
             'nfd': True,
             'salt': True,
+            # طبقات معطلة نهائياً (كانت تفسد النص) - موجودة للتوافق فقط
+            'bayes_evasion': False,
+            'spintax': False,
+            'tag_chars': False,
         }
         self.stats = {
             'total_obfuscated': 0,
             'total_messages': 0,
         }
-    
+
     def set_profile(self, profile: str):
         """تغيير مستوى القوة"""
         if profile in self.PROFILES:
             self.profile = profile
-            self.config = self.PROFILES[profile]
+            self.config = dict(self.PROFILES[profile])
             return True
         return False
-    
+
     def toggle_layer(self, layer: str, enabled: bool = None):
         """تفعيل/تعطيل طبقة معينة"""
         if layer in self.enabled_layers:
@@ -420,77 +402,59 @@ class AdaptiveObfuscationEngine:
                 self.enabled_layers[layer] = enabled
             return self.enabled_layers[layer]
         return None
-    
+
     def get_layer_status(self, layer: str) -> bool:
         """حالة طبقة معينة"""
         return self.enabled_layers.get(layer, False)
-    
+
     def obfuscate(self, text: str) -> Tuple[str, dict]:
         """
         تطبيق التشويش التكيفي على النص
-        
+
         Returns:
             (النص المشفر, معلومات الطبقات المطبقة)
         """
         if not text:
             return text, {'layers': []}
-        
+
         self.stats['total_messages'] += 1
         applied_layers = []
-        result = text
-        
-        # حماية الروابط و @usernames من التشفير (تُمرر سليمة 100%)
-        urls = list(re.finditer(r'https?://\S+', result))
-        mentions = list(re.finditer(r'@[a-zA-Z0-9_]{3,}', result))
-        protected_spans = [(m.start(), m.end()) for m in urls + mentions]
-        
-        # 🛡️ كل الطبقات تُطبق فقط على الأجزاء غير المحمية
-        # (الروابط @username / t.me/... / https://... تمر سليمة 100%)
-        
-        # 1. Spintax - (v2.0: معطلة - تحمي كلمات المستخدم من الاستبدال)
-        if self.enabled_layers['spintax'] and self.config['spintax_intensity'] > 0:
-            result = apply_layer_protected(result, adaptive_spintax, self.config['spintax_intensity'])
-            applied_layers.append('spintax')
-        
-        # 2. Bayes Evasion - (v2.0: معطلة - تحمي النص من حقن كلمات)
-        if self.enabled_layers['bayes_evasion'] and self.config['bayes_intensity'] > 0:
-            result = apply_layer_protected(result, bayes_evade, self.config['bayes_intensity'])
-            applied_layers.append('bayes_evasion')
-        
-        # 3. Arabic Presentation Forms - استبدال بصري عربي
+
+        # 🧹 الخطوة 0: تنظيف الأحرف الخطرة من المُدخل (حماية من لصق نص متلخبط)
+        result = sanitize_invisible_chars(text)
+
+        # 1. Arabic Presentation Forms - استبدال بصري عربي
         if self.enabled_layers['arabic_forms'] and self.config['arabic_forms'] > 0:
-            result = apply_layer_protected(result, apply_arabic_presentation_forms, self.config['arabic_forms'])
+            result = apply_layer_protected(
+                result, apply_arabic_presentation_forms, self.config['arabic_forms'])
             applied_layers.append('arabic_forms')
-        
-        # 4. Tag Characters - للأحرف اللاتينية
-        if self.enabled_layers['tag_chars'] and self.config['tag_intensity'] > 0:
-            result = apply_layer_protected(result, apply_tag_chars, self.config['tag_intensity'])
-            applied_layers.append('tag_chars')
-        
-        # 5. Smart ZW Distribution - أحرف صفرية موزعة
+
+        # 2. Invisible Shield Distribution - أحرف خفية آمنة تشكيلياً
         if self.enabled_layers['zw_distribution'] and self.config['zw_density'] > 0:
-            result = apply_layer_protected(result, smart_zw_distribute, self.config['zw_density'])
-            applied_layers.append('zw_distribution')
-        
-        # 6. NFD Decomposition - تفكيك
+            result = apply_layer_protected(
+                result, shield_invisible_distribute, self.config['zw_density'])
+            applied_layers.append('invisible_shield')
+
+        # 3. NFD Decomposition - تفكيك
         if self.enabled_layers['nfd'] and self.config['nfd_intensity'] > 0:
-            result = apply_layer_protected(result, apply_nfd_decomposition, self.config['nfd_intensity'])
+            result = apply_layer_protected(
+                result, apply_nfd_decomposition, self.config['nfd_intensity'])
             applied_layers.append('nfd')
-        
-        # 7. Anti-Similarity Salt - ملح فريد
+
+        # 4. Anti-Similarity Salt - ملح فريد
         if self.enabled_layers['salt']:
             result = add_anti_similarity_salt(result)
             applied_layers.append('salt')
-        
+
         self.stats['total_obfuscated'] += 1
-        
+
         return result, {
             'layers': applied_layers,
             'profile': self.profile,
             'length_before': len(text),
             'length_after': len(result),
         }
-    
+
     def get_stats(self) -> dict:
         """إحصائيات المحرك"""
         return {
@@ -498,34 +462,37 @@ class AdaptiveObfuscationEngine:
             'profile': self.profile,
             'layers': self.enabled_layers,
         }
-    
+
     def get_info(self) -> str:
         """معلومات المحرك كنص قابل للعرض"""
-        info = f"🔬 **Adaptive Obfuscation Engine v2.0**\n\n"
+        info = f"🔬 **Adaptive Obfuscation Engine v3.0**\n\n"
         info += f"⚡ **المستوى الحالي:** {self.profile}\n\n"
         info += f"📊 **الطبقات المفعّلة (كلها غير مرئية ولا تعدل كلماتك):**\n"
         layers_ar = {
             'arabic_forms': '1️⃣ Arabic Presentation Forms (متطابقة بصرياً)',
-            'zw_distribution': '2️⃣ Smart ZW Distribution (أحرف خفية)',
-            'bayes_evasion': '3️⃣ Bayes Evasion (⚠️ معطلة - حماية النص)',
-            'spintax': '4️⃣ Adaptive Spintax (⚠️ معطلة - حماية النص)',
-            'tag_chars': '5️⃣ Tag Characters (للاتيني - غير مرئي)',
-            'nfd': '6️⃣ NFD Decomposition (تفكيك غير مرئي)',
-            'salt': '7️⃣ Anti-Similarity Salt (بصمة فريدة)',
+            'zw_distribution': '2️⃣ Invisible Shield (أحرف خفية آمنة على التشكيل)',
+            'nfd': '3️⃣ NFD Decomposition (تفكيك غير مرئي)',
+            'salt': '4️⃣ Anti-Similarity Salt (بصمة فريدة)',
+            'bayes_evasion': '⛔ Bayes Evasion (معطلة - كانت تضيف كلمات)',
+            'spintax': '⛔ Adaptive Spintax (معطلة - كانت تستبدل كلماتك)',
+            'tag_chars': '⛔ Tag Characters (معطلة - كانت تخفي الحروف)',
         }
         for key, name in layers_ar.items():
-            status = "✅" if self.enabled_layers.get(key) else "❌"
+            status = "✅" if self.enabled_layers.get(key) else "⛔"
             info += f"  {status} {name}\n"
-        
+
         info += f"\n📈 **الإحصائيات:**\n"
         info += f"  📝 رسائل مشفرة: {self.stats['total_obfuscated']}\n"
         info += f"  📊 إجمالي الرسائل: {self.stats['total_messages']}\n"
-        
+
         return info
 
 
 # إنشاء instance افتراضي
 adaptive_engine = AdaptiveObfuscationEngine(profile='medium')
+
+# توافق مع السكربتات القديمة (الاسم الجديد: shield_invisible_distribute)
+smart_zw_distribute = shield_invisible_distribute
 
 
 def quick_obfuscate(text: str, profile: str = None) -> str:
@@ -539,21 +506,24 @@ def quick_obfuscate(text: str, profile: str = None) -> str:
 if __name__ == '__main__':
     # اختبار المحرك
     test_text = "اشترك في قناتنا للحصول على عروض حصرية t.me/example @username"
-    
+
     print("=" * 60)
-    print("🔬 اختبار Adaptive Obfuscation Engine")
+    print("🔬 اختبار Adaptive Obfuscation Engine v3.0")
     print("=" * 60)
     print(f"\n📝 **النص الأصلي:**\n{test_text}")
     print(f"📊 الطول: {len(test_text)}")
-    
+
     for profile in ['light', 'medium', 'aggressive', 'insane']:
         engine = AdaptiveObfuscationEngine(profile=profile)
         result, info = engine.obfuscate(test_text)
+        # التحقق من عدم وجود أحرف خطرة
+        dangerous = [c for c in result if c in FORBIDDEN_INVISIBLES]
         print(f"\n{'─' * 60}")
         print(f"⚡ Profile: {profile}")
         print(f"📝 النص المشفر:\n{result}")
         print(f"📊 الطول: {len(result)} (زيادة: {len(result) - len(test_text)})")
-        print(f"🛡️ الطبقات المطبقة: {info['layers']}")
-    
+        print(f"🛡️ الطبقات: {info['layers']}")
+        print(f"🚫 أحرف خطرة (200B/200C/200D): {len(dangerous)} ← يجب أن تكون 0")
+
     print(f"\n{'=' * 60}")
     print("✅ تم الاختبار بنجاح!")

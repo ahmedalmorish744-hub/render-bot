@@ -696,30 +696,53 @@ def encrypt_text(text, group_id=None):
 
 def prepare_content_for_sending(raw_content, group_id=None):
     """
-    تجهيز المحتوى قبل الإرسال - الأولوية:
-    0. 🫥 Send Mode (وضع الإرسال: normal/spintax/stego - كلها تحافظ على نصك)
-    1. 🔬 Adaptive Obfuscation (طبقات غير مرئية فقط)
-    2. 💎 التشفير الخارق (إذا تم تفعيله يدوياً)
-    3. 🔬 تشويش خفي StealthObfuscator (إذا تم تفعيله يدوياً)
-    4. ✨ Fancy Text (إذا تم تفعيله)
-    5. تشفير عادي
-    
+    تجهيز المحتوى قبل الإرسال - المسار الموحد v3.0
+    (نفس المعالجة بالضبط للنشر العادي والسريع والمجدول والشبحي)
+
+    الخطوات:
+    0. 🧹 تنظيف الأحرف الخفية الخطرة من المُدخل (حماية من النصوص الملصوقة)
+    1. 🎲 حل Spintax {خيار1|خيار2} الذي كتبه المستخدم (كلماته هو فقط)
+    2. 🫥 Send Mode (وضع الإرسال: normal/spintax/stego - كلها تحافظ على نصك)
+    3. 🔬 Adaptive Obfuscation v3.0 (طبقات غير مرئية آمنة على تشكيل العربية)
+    4. 💎 التشفير الخارق (إذا تم تفعيله يدوياً)
+    5. 🔬 تشويش خفي StealthObfuscator (إذا تم تفعيله يدوياً)
+    6. ✨ Fancy Text (إذا تم تفعيله)
+    7. تشفير عادي
+
     🛡️ القاعدة الذهبية: النص الظاهر النهائي = نص المستخدم دائماً.
     لا إضافة كلمات، لا حذف، لا نصوص غلاف - تحويلات Unicode غير مرئية فقط.
-    
+
     يُرجع: (content, use_html)
     """
     if not raw_content:
         return raw_content, False
-    
-    # 🫥 الأولوية 0: وضع الإرسال الموحد (v2.0 - كل الأوضاع تحافظ على نص المستخدم)
+
+    # 🧹 الخطوة 0: تنظيف مقطعات الاتصال (200B/200C/200D) من المُدخل
+    # (سبب تلف النصوص الملصوقة + تضارب مع الطبقات الجديدة)
+    try:
+        from adaptive_obfuscation import sanitize_invisible_chars
+        raw_content = sanitize_invisible_chars(raw_content)
+    except Exception:
+        pass
+
+    # 🎲 الخطوة 1: حل Spintax الموحد - نفس السلوك في كل مسارات النشر
+    # (القديم: النشر السريع فقط كان يحل Spintax وبدء النشر لا يحله!)
+    if get_setting('spintax_enabled', 'on') == 'on':
+        try:
+            from stego_engine import has_spintax
+            if has_spintax(raw_content):
+                raw_content = parse_spintax(raw_content)
+        except Exception:
+            pass
+
+    # 🫥 الخطوة 2: وضع الإرسال الموحد (v2.0 - كل الأوضاع تحافظ على نص المستخدم)
     send_mode = get_setting('send_mode', 'normal')
     if send_mode != 'normal':
         stego_engine.set_mode(send_mode)
         raw_content, mode_info = stego_engine.process(raw_content)
         logger.info(f"🫥 Send Mode [{send_mode}]: {mode_info.get('original_length')} → {mode_info.get('final_length')} حرف (النص الظاهر محفوظ 100%)")
-    
-    # 🔬 الأولوية 1: Adaptive Obfuscation Engine (الجديد - المحرك الذكي)
+
+    # 🔬 الخطوة 3: Adaptive Obfuscation Engine v3.0 (الافتراضي - درع خفي)
     if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
         profile = get_setting('adaptive_obfuscation_profile', 'medium')
         adaptive_engine.set_profile(profile)
@@ -727,8 +750,8 @@ def prepare_content_for_sending(raw_content, group_id=None):
         # حفظ معلومات التشفير للسجل
         logger.info(f"🔬 Adaptive Obfuscation: {info['layers']} (profile={profile})")
         return result, False
-    
-    # 💎 الأولوية 2: التشفير الخارق (يدوي - نادراً)
+
+    # 💎 الخطوة 4: التشفير الخارق (يدوي - نادراً)
     if get_setting('super_encryption_enabled', 'off') == 'on':
         encrypted = super_encryption.super_encrypt_full(raw_content)
         # إذا كان هناك روابط، نخفيها في HTML
@@ -738,12 +761,12 @@ def prepare_content_for_sending(raw_content, group_id=None):
             encrypted_with_html, use_html = _apply_html_links(raw_content, encrypted)
             return encrypted_with_html, use_html
         return encrypted, False
-    
-    # 🔬 الأولوية 3: تشويش خفي (يدوي)
+
+    # 🔬 الخطوة 5: تشويش خفي (يدوي)
     if get_setting('stealth_obfuscator_enabled', 'on') == 'on':
         return stealth_obfuscator.obfuscate(raw_content, group_id)
-    
-    # 🔄 الأولوية 4: YayText/Messletters
+
+    # 🔄 الخطوة 6: YayText/Messletters
     if get_setting('yaytext_messletters_obfuscation', 'on') == 'on':
         old_style = yaytext_obfuscator._last_style
         content, use_html = yaytext_obfuscate(raw_content)
@@ -752,8 +775,8 @@ def prepare_content_for_sending(raw_content, group_id=None):
             content, use_html = yaytext_obfuscate(raw_content)
             retries += 1
         return content, use_html
-    
-    # الأولوية 5: تشفير عادي
+
+    # الخطوة 7: تشفير عادي
     obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
     varied = vary_text(raw_content)
     if obfuscation_on:
@@ -4389,9 +4412,9 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
             except:
                 pass
         elif mode == 'empty':
-            # تفريغ الرسالة (تبديل بنقطة أو رمز)
+            # تفريغ الرسالة (نقاط فقط - القاعدة الذهبية: لا نصوص وهمية)
             try:
-                replacements = ['.', '..', '...', '👋', '✅', '👍', 'تم', 'شكراً']
+                replacements = ['.', '..', '...']
                 await client.edit_message(int(group_id), msg_id, random.choice(replacements))
                 logger.info(f"👻 شبح: تفريغ رسالة في {group_id}")
             except:
@@ -4399,12 +4422,12 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
         elif mode == 'replace':
             # 👻 التعديل بنفس الإعلان بتكويد مختلف أو بالإعلان التالي
             # النظام المحسّن: يضمن دائماً تكويد مختلف عن الأصلي
+            # 🛡️ v3.0: يستخدم المسار الموحد prepare_content_for_sending
+            # (نفس طبقات النشر الرئيسي - بدل الأنظمة القديمة stealth/yaytext)
             try:
                 new_content = None
                 use_html = False
-                stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
-                yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-                
+
                 # الخيار 1: استخدام الإعلان التالي (أقوى ضد البوتات)
                 if all_messages and len(all_messages) > 1:
                     other_msgs = [m for m in all_messages if m[1]]  # رسائل فيها محتوى
@@ -4413,48 +4436,19 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                         chosen = random.choice(other_msgs)
                         raw_content = chosen[1]
                         if raw_content:
-                            if stealth_on:
-                                new_content, use_html = stealth_obfuscator.obfuscate(raw_content, group_id)
-                            elif yaytext_on:
-                                old_style = yaytext_obfuscator._last_style
-                                new_content, use_html = yaytext_obfuscate(raw_content)
-                                retries = 0
-                                while yaytext_obfuscator._last_style == old_style and retries < 5:
-                                    new_content, use_html = yaytext_obfuscate(raw_content)
-                                    retries += 1
-                            else:
-                                obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
-                                varied = vary_text(raw_content)
-                                if obfuscation_on:
-                                    varied = obfuscate_for_humans(varied)
-                                new_content = encrypt_text(varied, group_id)
+                            new_content, use_html = prepare_content_for_sending(raw_content, group_id)
                             logger.info(f"👻 شبح: استبدال بإعلان مختلف مكوّد في {group_id}")
-                
+
                 # الخيار 2: نفس الإعلان بتكويد جديد (نمط مختلف مضمون)
                 if not new_content and original_raw_content:
-                    if stealth_on:
-                        new_content, use_html = stealth_obfuscator.obfuscate(original_raw_content, group_id)
-                    elif yaytext_on:
-                        old_style = yaytext_obfuscator._last_style
-                        new_content, use_html = yaytext_obfuscate(original_raw_content)
-                        retries = 0
-                        while yaytext_obfuscator._last_style == old_style and retries < 5:
-                            new_content, use_html = yaytext_obfuscate(original_raw_content)
-                            retries += 1
-                    else:
-                        obfuscation_on = get_setting('obfuscation_enabled', 'on') == 'on'
-                        varied = vary_text(original_raw_content)
-                        if obfuscation_on:
-                            varied = obfuscate_for_humans(varied)
-                        new_content = encrypt_text(varied, group_id)
+                    new_content, use_html = prepare_content_for_sending(original_raw_content, group_id)
                     logger.info(f"👻 شبح: إعادة تكويد نفس الإعلان بنمط مختلف في {group_id}")
-                
-                # الخيار 3: نص محايد (fallback أخير فقط)
+
+                # الخيار 3: نقطة فقط (fallback أخير - القاعدة الذهبية: لا نصوص وهمية)
                 if not new_content:
-                    neutral_texts = ['شكراً للجميع 👍', 'تم ✅', 'شكراً', '👍', '✅', 'تمام', 'حسناً', '👌', 'thanks', 'ok', '.']
-                    new_content = random.choice(neutral_texts)
-                    logger.info(f"👻 شبح: استبدال بنص محايد في {group_id}")
-                
+                    new_content = '.'
+                    logger.info(f"👻 شبح: استبدال بنقطة محايدة في {group_id}")
+
                 parse_mode = 'html' if use_html else None
                 await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
             except Exception as e:
@@ -4480,9 +4474,8 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
         try:
             new_content = None
             use_html = False
-            stealth_on = get_setting('stealth_obfuscator_enabled', 'on') == 'on'
-            yaytext_on = get_setting('yaytext_messletters_obfuscation', 'on') == 'on'
-            
+
+            # 🛡️ v3.0: يستخدم المسار الموحد prepare_content_for_sending
             # استخدام الإعلان التالي أو نفس الإعلان بتكويد مختلف
             if all_messages and len(all_messages) > 1 and random.random() < 0.5:
                 other_msgs = [m for m in all_messages if m[1]]
@@ -4490,28 +4483,13 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
                     chosen = random.choice(other_msgs)
                     raw = chosen[1]
                     if raw:
-                        if stealth_on:
-                            new_content, use_html = stealth_obfuscator.obfuscate(raw, group_id)
-                        elif yaytext_on:
-                            new_content, use_html = yaytext_obfuscate(raw)
-                        else:
-                            new_content = encrypt_text(vary_text(raw), group_id)
+                        new_content, use_html = prepare_content_for_sending(raw, group_id)
             elif original_raw_content:
-                if stealth_on:
-                    new_content, use_html = stealth_obfuscator.obfuscate(original_raw_content, group_id)
-                elif yaytext_on:
-                    old_style = yaytext_obfuscator._last_style
-                    new_content, use_html = yaytext_obfuscate(original_raw_content)
-                    retries = 0
-                    while yaytext_obfuscator._last_style == old_style and retries < 5:
-                        new_content, use_html = yaytext_obfuscate(original_raw_content)
-                        retries += 1
-                else:
-                    new_content = encrypt_text(vary_text(original_raw_content), group_id)
-            
+                new_content, use_html = prepare_content_for_sending(original_raw_content, group_id)
+
             if not new_content:
-                neutral = ['✅', '👍', 'تم', 'شكراً', '👌', 'حسناً', 'تمام']
-                new_content = random.choice(neutral)
+                # القاعدة الذهبية: لا نصوص وهمية أبداً - نقطة فقط
+                new_content = '.'
                 use_html = False
             
             # 🆕 استخدام edit_hide لإخفاء علامة "معدّل"
@@ -4606,10 +4584,7 @@ async def fast_post_to_all_groups(messages):
                 msg_type = msg[3]
                 media_data = msg[4] if len(msg) > 4 else None
 
-                # 🆕 تطبيق Spintax على المحتوى
-                if content and spintax_on:
-                    content = parse_spintax(content)
-
+                # 🛡️ v3.0: Spintax يُحل داخل prepare_content_for_sending موحداً
                 use_html = False
                 if content:
                     # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
@@ -5126,8 +5101,6 @@ async def main():
         message_interval = get_setting('message_interval', '3')
         fast_delay = get_setting('fast_post_delay', '3')
         pending_sched = len(get_pending_scheduled_posts())
-        example_text = "اشترك في قناتنا للحصول على عروض حصرية"
-        encrypted_example = encrypt_text(example_text)
         await event.respond(
             "🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
             "🛡 **قاعدة ذهبية:** البوت يرسل رسالتك **كما كتبتها بالضبط**\n"
@@ -5136,8 +5109,9 @@ async def main():
             "• 📝 normal - النص كما هو تماماً\n"
             "• 🔄 spintax - حل {خيار1|خيار2} التي تكتبها أنت\n"
             "• 🫥 stego - نصك ظاهر 100% + بصمة خفية فريدة لكل رسالة\n\n"
-            "🔬 **Adaptive Obfuscation - طبقات غير مرئية:**\n"
-            "• Arabic Presentation Forms + ZW ذكي + Tag Chars\n"
+            "🔬 **Adaptive Obfuscation v3.0 - درع خفي:**\n"
+            "• أشكال عرض عربية + أحرف خفية آمنة على التشكيل + تفكيك NFD\n"
+            "• النص العربي مقروء 100% ولا تتخلبط حروفه!\n"
             "• الروابط والمعرفات تبقى قابلة للنقر!\n\n"
             "🐝 **أنظمة متقدمة:**\n"
             "• ⏱️ Human Delay | ⚖️ Load Balancer\n\n"
@@ -5240,7 +5214,12 @@ async def main():
             return
         text = event.raw_text.replace('/encrypt', '').strip()
         if not text:
-            text = "اشترك في قناتنا للحصول على عروض حصرية"
+            await event.respond(
+                "🧪 **معاينة التشفير**\n\n"
+                "📝 **الاستخدام:** أرسل النص بعد الأمر ليُشفَّر:\n"
+                "`/encrypt نصك هنا`\n\n"
+                "💡 يعرض المعاينة فقط - لا يُنشر في المجموعات")
+            return
         varied = vary_text(text)
         obfuscated = obfuscate_for_humans(varied)
         encrypted = encrypt_text(obfuscated, group_id=-1001234567890)
@@ -5285,7 +5264,11 @@ async def main():
             return
         text = event.raw_text.replace('/encrypt_test', '').strip()
         if not text:
-            text = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
+            await event.respond(
+                "🧪 **اختبار HyperEncryption - 4 مستويات**\n\n"
+                "📝 **الاستخدام:** أرسل النص بعد الأمر:\n"
+                "`/encrypt_test نصك هنا`")
+            return
         from hyper_encryption import HyperEncryptionEngine as _HEE, char_analysis as _ca
         msg = f"🧪 **اختبار HyperEncryption - 4 مستويات**\n\n📝 **النص الأصلي:**\n{text}\n\n"
         for level in ['light', 'medium', 'aggressive', 'insane']:
