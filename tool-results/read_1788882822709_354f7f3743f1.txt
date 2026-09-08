@@ -1,0 +1,712 @@
+     1→"""
+     2→👻 Ghost Encoding Engine v4.0 - تكويد الأشباح
+     3→محرك التكويد الحديث: شكل الكلمات يبقى كما هو 100% + مستحيل الكشف على بوتات الحماية
+     4→
+     5→⚠️ القاعدة الذهبية (v4.0):
+     6→   1. البوت يرسل نص المستخدم **كما هو** - لا إضافة كلمات، لا حذف، لا استبدال.
+     7→   2. **رسم الكلمات لا يتغير أبداً** - لا أشكال عرض (Presentation Forms)،
+     8→      لا تفكيك (NFD)، لا تغيير مسافات، لا كاشيدة، لا تشكيل ظاهر.
+     9→      الحروف تظهر بالضبط كما كتبها المستخدم في كل الأجهزة والخطوط.
+    10→
+    11→🧪 التشخيص الذي أدى إلى v4.0 (مثبت بفحص معيار Unicode):
+    12→   ✗ v3.0 كانت تحقن U+2063/U+2064 وسط الكلمات العربية:
+    13→     فئة هذين الحرفين Cf وحسب معيار Unicode (ArabicShaping.txt) أي حرف
+    14→     غير مدرج وغير Combining Mark يعتبر Joining_Type=U (غير واصل)
+    15→     → يقطع اتصال الحروف في المحركات الصارمة (CoreText/DirectWrite)!
+    16→   ✗ v3.0 كانت تستبدل حروفاً بأشكال عرض عشوائية (معزول/وسطي/نهائي)
+    17→     بغض النظر عن موقع الحرف → تفكك بصري واضح (سبب "رسم الكلمات يتغير")
+    18→   ✗ NFD تفكيك (أ → ا + ٔ) يظهر الهمزة منفصلة في بعض الخطوط
+    19→
+    20→🔬 تقنية v4.0 الحديثة (من بحث GitHub 2024-2026):
+    21→   القناة الأساسية: Variation Selectors (256 كودبونت!)
+    22→   ─ U+FE00–U+FE0F  (16 حرف VS1-VS16)
+    23→   ─ U+E0100–U+E01EF (240 حرف VS17-VS256)
+    24→   لماذا هي الأضمن تشكيلياً؟
+    25→   ✅ فئتها العامة Mn (Nonspacing Mark) → Joining_Type = Transparent
+    26→      حسب معيار Unicode رسمياً (مؤكد في codepoints.net/U+E0100)
+    27→      → لا تقطع اتصال الحروف العربية في أي محرك عرض على الإطلاق
+    28→      (HarfBuzz وCoreText وDirectWrite كلها تتجاهلها في تشكيل الاتصال)
+    29→   ✅ غير مرئية في تيليجرام (Default_Ignorable_Code_Point = Yes)
+    30→   ✅ من خارج قوائم الكشف الكلاسيكية (البوتات تنظف 200B-200D و2060-2064
+    31→      و061C وFEFF — دليل: spencermountain/out-of-character وklaroskope)
+    32→   ✅ 256 كودبونت = مساحة عملاقة تجعل الإحصاء الكمي عديم الفائدة
+    33→   ✅ استخدامها مشروع (الإيموجي VS15/VS16) لذا أدوات التنظيف تخاف حذفها
+    34→      وحتى لو حذفتها كلها → النص يعود لأصله سليماً مقروءاً (تدهور رشيق)
+    35→
+    36→   المصادر المقتبسة منها (الأحدث والأضمن):
+    37→   - Paul Butler / josephthacker "VS Data Hiding": إخفاء بيانات داخل
+    38→     Variation Selectors المرفقة بحروف ظاهرة (تقنية 2024-2025)
+    39→   - KuroLabs/stegcloak: مبدأ التكويد الخفي داخل النص (6 أحرف فقط) -
+    40→     طوّرناه إلى قناة 256 حرف بدون الأحرف مقطعات الاتصال لديهم
+    41→   - umputun/tg-spam (طرف الخصم): الكشف = تطبيع + مطابقة تامة + تشابه
+    42→     → تجزئة الكلمات بحروف خفية تكسر الثلاثة معاً
+    43→   - spencermountain/out-of-character (طرف الخصم): قائمة الأحرف التي
+    44→     تعرفها أدوات التنظيف — قناتنا الجديدة خارج عملياً من هذه القوائم
+    45→
+    46→الطبقات (v4.0):
+    47→1. ghost_vs_channel  - حقن Variation Selectors في أي موضع (شفافة للتشكيل)
+    48→2. cf_boundary       - حقن 2063/2064 فقط في مواضع حيادية للاتصال
+    49→                       (نهاية الكلمات / بعد الحروف غير الواصلة للأمام)
+    50→3. keyword_boost     - كثافة مضاعفة داخل الكلمات المفتاحية الإعلانية
+    51→4. salt              - بصمة VS فريدة لكل رسالة (كسر dedup/hash)
+    52→
+    53→معطل نهائياً (كانت تغير رسم الكلمات):
+    54→✗ arabic_forms / Presentation Forms (تفكك الكلمات بصرياً!)
+    55→✗ NFD Decomposition (همزة منفصلة في بعض الخطوط!)
+    56→✗ Tag Characters (تخفي الحروف اللاتينية في تيليجرام!)
+    57→✗ Bayes Evasion / Adaptive Spintax (كانت تضيف/تستبدل كلمات!)
+    58→
+    59→🛡️ حماية مزدوجة ضد التكرار (سبب "تلبّط بدء النشر" سابقاً):
+    60→   المحرك يفحص نسبة الأحرف الشبحية في المُدخل - إذا كان النص مشفراً
+    61→   مسبقاً ينظفه أولاً ثم يشفر مرة واحدة → لا تكديس تحويلات أبداً.
+    62→"""
+    63→
+    64→import bisect
+    65→import random
+    66→import re
+    67→import unicodedata
+    68→from typing import Tuple
+    69→
+    70→# ═══════════════════════════════════════════════════════════════
+    71→# 🛡️ حماية الروابط والمعرفات - لا يجوز تعديلها إطلاقاً
+    72→# ═══════════════════════════════════════════════════════════════
+    73→
+    74→PROTECTED_PATTERN = re.compile(
+    75→    r'(https?://\S+'          # http://... أو https://...
+    76→    r'|t\.me/\S+'             # t.me/...
+    77→    r'|@[a-zA-Z0-9_]{3,})'    # @username
+    78→)
+    79→
+    80→
+    81→def split_protected(text: str):
+    82→    """يقسم النص إلى [(جزء, محمي؟)] - المحمي = روابط ومعرفات"""
+    83→    parts = []
+    84→    last = 0
+    85→    for m in PROTECTED_PATTERN.finditer(text):
+    86→        if m.start() > last:
+    87→            parts.append((text[last:m.start()], False))
+    88→        parts.append((m.group(0), True))
+    89→        last = m.end()
+    90→    if last < len(text):
+    91→        parts.append((text[last:], False))
+    92→    return parts if parts else [(text, False)]
+    93→
+    94→
+    95→def apply_layer_protected(text: str, func, *args, **kwargs) -> str:
+    96→    """
+    97→    🛡️ يطبق دالة الطبقة فقط على الأجزاء غير المحمية
+    98→    الروابط (@username / t.me/... / https://...) تمر سليمة 100%
+    99→    """
+   100→    parts = split_protected(text)
+   101→    out = []
+   102→    for seg, protected in parts:
+   103→        if protected or not seg:
+   104→            out.append(seg)
+   105→        else:
+   106→            out.append(func(seg, *args, **kwargs))
+   107→    return ''.join(out)
+   108→
+   109→# ═══════════════════════════════════════════════════════════════
+   110→# 🎯 قنوات التكويد الخفي (v4.0)
+   111→# ═══════════════════════════════════════════════════════════════
+   112→
+   113→# القناة 1: Variation Selectors - 256 كودبونت - فئة Mn = شفافة للتشكيل
+   114→# (مؤكد: codepoints.net/U+E0100 → Joining Type: Transparent)
+   115→VS_POOL = (
+   116→    [chr(c) for c in range(0xFE00, 0xFE10)] +      # VS1  - VS16
+   117→    [chr(c) for c in range(0xE0100, 0xE01F0)]      # VS17 - VS256
+   118→)
+   119→
+   120→# القناة 2: أحرف Cf حدودية - توضع فقط في المواضع الحيادية للاتصال
+   121→INVISIBLE_SHIELD_CHARS = [
+   122→    '\u2063',  # Invisible Separator
+   123→    '\u2064',  # Invisible Plus
+   124→]
+   125→
+   126→# ❌ ممنوعة نهائياً كقنوات حقن (مقطعات اتصال أو في قوائم كشف البوتات
+   127→#    أو تتعارض مع أبجدية بصمة stego {2060,061C,2061,2062}):
+   128→FORBIDDEN_INVISIBLES = {
+   129→    '\u200B', '\u200C', '\u200D',            # مقطعات اتصال عربية!
+   130→    '\u2060', '\u2061', '\u2062',            # أبجدية بصمة stego
+   131→    '\u061C',                                 # أبجدية بصمة stego
+   132→    '\uFEFF',                                 # الأبجدية القديمة
+   133→}
+   134→
+   135→
+   136→def sanitize_invisible_chars(text: str) -> str:
+   137→    """
+   138→    🧹 تنظيف الأحرف الخفية الخطرة/المتضاربة من نص المستخدم قبل المعالجة
+   139→    يحذف مقطعات الاتصال (200B/200C/200D) وأحرف البصمة القديمة
+   140→    (نصوص ملصوقة من مصادر أخرى قد تحتويها وتظهر متلخبطة أو مزدوجة البصمة)
+   141→    """
+   142→    if not text:
+   143→        return text
+   144→    return ''.join(ch for ch in text if ch not in FORBIDDEN_INVISIBLES)
+   145→
+   146→
+   147→# ═══════════════════════════════════════════════════════════════
+   148→# 🔬 أدوات قواعد الاتصال العربي (قلب الحفاظ على رسم الكلمات)
+   149→# ═══════════════════════════════════════════════════════════════
+   150→
+   151→# حروف لا تتصل بالحرف الذي بعدها أبداً (Joining_Type = U أو R):
+   152→# ا أ إ آ ٱ د ذ ر ز و ؤ ة ء
+   153→NON_FORWARD_JOINERS = set('اأإآٱدذرزوؤةء')
+   154→
+   155→ARABIC_LETTER_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+   156→
+   157→
+   158→def _is_arabic_letter(ch: str) -> bool:
+   159→    """هل الحرف عربي (له قواعد اتصال)؟"""
+   160→    return bool(ch) and bool(ARABIC_LETTER_RE.match(ch))
+   161→
+   162→
+   163→def _is_combining_mark(ch: str) -> bool:
+   164→    """هل الحرف علامة تشكيل ملتصقة (حركة/شدّة)؟"""
+   165→    return bool(ch) and unicodedata.category(ch) in ('Mn', 'Me')
+   166→
+   167→
+   168→def _cf_safe_after(chars, i: int) -> bool:
+   169→    """
+   170→    هل وضعنا بعد الحرف i آمن لحرف Cf (غير واصل حسب المعيار)؟
+   171→
+   172→    القاعدة: يقطع الحرف غير الواصل الاتصال بين حرفين عربيين متجاورين
+   173→    فقط إذا كان الحرف الأول يتصل للأمام والحرف الثاني يتصل من الخلف.
+   174→    ⚠️ يجب تخطي الأحرف الشفافة (Mn/Me - ومنها VS المزرعة) على الجانبين
+   175→    للوصول إلى الحرفين الحقيقيين المسؤولين عن الاتصال.
+   176→    """
+   177→    chars_len = len(chars)
+   178→    if i + 1 >= chars_len:
+   179→        return True                                   # نهاية النص
+   180→    # لا نفصل الحرف عن تشكيله المباشر (حركة/شدّة/VS)
+   181→    if _is_combining_mark(chars[i + 1]):
+   182→        return False
+   183→    # الحرف الحقيقي السابق (تخطي الشفاف)
+   184→    p = i
+   185→    while p >= 0 and _is_combining_mark(chars[p]):
+   186→        p -= 1
+   187→    prev = chars[p] if p >= 0 else ''
+   188→    # الحرف الحقيقي التالي (تخطي الشفاف)
+   189→    q = i + 1
+   190→    while q < chars_len and _is_combining_mark(chars[q]):
+   191→        q += 1
+   192→    nxt = chars[q] if q < chars_len else ''
+   193→    if not nxt or not prev:
+   194→        return True                                   # لا يوجد زوج متصل
+   195→    if _is_arabic_letter(prev) and _is_arabic_letter(nxt):
+   196→        return prev in NON_FORWARD_JOINERS            # حرف غير واصل للأمام
+   197→    return True                                       # لاتيني/أرقام/رموز/إيموجي
+   198→
+   199→
+   200→def _find_keyword_spans(text: str):
+   201→    """نطاقات الكلمات المفتاحية الإعلانية في النص [(بداية, نهاية)]"""
+   202→    spans = []
+   203→    if not text:
+   204→        return spans
+   205→    lower = text.lower()
+   206→    for kw in AD_KEYWORDS:
+   207→        kl = kw.lower()
+   208→        start = 0
+   209→        while True:
+   210→            idx = lower.find(kl, start)
+   211→            if idx == -1:
+   212→                break
+   213→            spans.append((idx, idx + len(kw)))
+   214→            start = idx + 1
+   215→    return spans
+   216→
+   217→
+   218→def _find_keyword_ranges(text: str):
+   219→    """مواضع الكلمات المفتاحية كـ set (توافق داخلي)"""
+   220→    ranges = set()
+   221→    for s, e in _find_keyword_spans(text):
+   222→        ranges.update(range(s, e))
+   223→    return ranges
+   224→
+   225→
+   226→# كلمات تستهدفها بوتات الحماية في الإعلانات (تُموه بكثافة أعلى داخلها فقط)
+   227→AD_KEYWORDS = [
+   228→    'اشترك', 'قناة', 'قناتنا', 'قنوات', 'عرض', 'عروض',
+   229→    'خصم', 'تخفيض', 'تخفيضات', 'مجاني', 'مجانا', 'رابط', 'بيع', 'شراء',
+   230→    'سعر', 'اسعار', 'أسعار', 'تواصل', 'واتساب', 'واتس', 'واتس اب',
+   231→    'تيليجرام', 'تلجرام', 'سوق', 'خدمات', 'متابعين', 'أعضاء', 'اعضاء',
+   232→    'subscribe', 'join', 'offer', 'offers', 'free', 'deal', 'deals',
+   233→    'price', 'contact', 'whatsapp', 'buy', 'sell', 'shop', 'store',
+   234→    'promo', 'discount', 'crypto', 'vip',
+   235→]
+   236→
+   237→# ═══════════════════════════════════════════════════════════════
+   238→# القناة 1: Ghost VS Injection - تكويد شفاف للتشكيل (256 حرف)
+   239→# ═══════════════════════════════════════════════════════════════
+   240→
+   241→def ghost_vs_inject(text: str, density: float = 0.20,
+   242→                    keyword_boost: bool = True, max_consecutive: int = 2) -> str:
+   243→    """
+   244→    👻 حقن Variation Selectors داخل النص - القناة الحديثة v4.0
+   245→
+   246→    ✅ فئة Mn → Joining_Type = Transparent حسب معيار Unicode
+   247→       → اتصال الحروف العربية محفوظ 100% في كل محركات العرض
+   248→    ✅ يوضع في أي موضع حتى وسط الكلمة - لا يؤثر على الرسم أبداً
+   249→    ✅ 256 كودبونت → يكسر المطابقة التامة والـ n-gram والإحصاء الكمي
+   250→    ✅ لا يفصل الحرف عن تشكيله (حركة/شدّة تسبقه دائماً)
+   251→    🎯 ضمان التجزئة: كل كلمة مفتاحية تحتوي حرفاً خفياً واحداً على الأقل
+   252→       (إدخال قسري وليس احتمالياً) → مستحيل على بوتات المطابقة أن تجدها
+   253→    """
+   254→    if not text or density <= 0:
+   255→        return text
+   256→
+   257→    chars = list(text)
+   258→    boosted = set()
+   259→    forced = set()
+   260→    if keyword_boost:
+   261→        for s, e in _find_keyword_spans(text):
+   262→            boosted.update(range(s, e))
+   263→            # إدخال قسري مضمون بين حروف الكلمة نفسها (وليس بعدها!)
+   264→            # بين حرفين داخليين لا يلي أحدهما تشكيل حتى تتجزأ الكلمة فعلاً
+   265→            candidates = [
+   266→                i for i in range(s, max(s, e - 1))
+   267→                if not _is_combining_mark(chars[i])
+   268→                and not _is_combining_mark(chars[i + 1])
+   269→            ]
+   270→            if candidates:
+   271→                forced.add(random.choice(candidates))
+   272→
+   273→    out = []
+   274→    consecutive = 0
+   275→
+   276→    for i, ch in enumerate(chars):
+   277→        out.append(ch)
+   278→
+   279→        if ch in (' ', '\n', '\t'):
+   280→            consecutive = 0
+   281→            continue
+   282→
+   283→        # لا ندرج حرفاً خفياً بين الحرف وتشكيله التالي (حركة/شدّة)
+   284→        if i + 1 < len(chars) and _is_combining_mark(chars[i + 1]):
+   285→            continue
+   286→
+   287→        # 🎯 الإدخال القسري داخل الكلمات المفتاحية (ضمان التجزئة)
+   288→        if i in forced:
+   289→            out.append(random.choice(VS_POOL))
+   290→            consecutive += 1
+   291→            continue
+   292→
+   293→        # كثافة محلية مضاعفة داخل الكلمات المفتاحية
+   294→        local = density * (1.5 if i in boosted else 1.0)
+   295→        local = min(local, 0.80)
+   296→
+   297→        if consecutive < max_consecutive and random.random() < local:
+   298→            out.append(random.choice(VS_POOL))
+   299→            consecutive += 1
+   300→        else:
+   301→            consecutive = 0
+   302→
+   303→    return ''.join(out)
+   304→
+   305→
+   306→# ═══════════════════════════════════════════════════════════════
+   307→# القناة 2: Boundary Cf Injection - مواضع حيادية فقط
+   308→# ═══════════════════════════════════════════════════════════════
+   309→
+   310→def cf_boundary_inject(text: str, density: float = 0.10) -> str:
+   311→    """
+   312→    🧱 حقن U+2063/U+2064 (Cf) في المواضع الحيادية للاتصال فقط
+   313→
+   314→    ✅ نهايات الكلمات + بعد الحروف غير الواصلة للأمام (اأإآدذرزوؤةء)
+   315→    ✅ لا يوضع أبداً وسط الكلمة بعد حرف واصل → لا يقطع الاتصال
+   316→       حتى في المحركات الصارمة التي تتبع المعيار حرفياً
+   317→    ✅ تنويع القنوات: لو نظّفت بوتات الحماية فئة معينة تبقى القناة الأخرى
+   318→    """
+   319→    if not text or density <= 0:
+   320→        return text
+   321→
+   322→    chars = list(text)
+   323→    out = []
+   324→
+   325→    for i, ch in enumerate(chars):
+   326→        out.append(ch)
+   327→
+   328→        if ch in (' ', '\n', '\t'):
+   329→            continue
+   330→
+   331→        if i + 1 < len(chars) and _is_combining_mark(chars[i + 1]):
+   332→            continue
+   333→
+   334→        if random.random() < density and _cf_safe_after(chars, i):
+   335→            out.append(random.choice(INVISIBLE_SHIELD_CHARS))
+   336→
+   337→    return ''.join(out)
+   338→
+   339→
+   340→# اسم متوافق مع الإصدارات السابقة (يستخدمه كود قديم/سكربتات)
+   341→def shield_invisible_distribute(text: str, density: float = 0.10, max_consecutive: int = 2) -> str:
+   342→    """التوزيع الخفي v4.0 = قناة VS + قناة Cf الحدودية معاً"""
+   343→    if not text or density <= 0:
+   344→        return text
+   345→    result = ghost_vs_inject(text, density=density)
+   346→    result = cf_boundary_inject(result, density=density * 0.5)
+   347→    return result
+   348→
+   349→
+   350→smart_zw_distribute = shield_invisible_distribute
+   351→
+   352→# ═══════════════════════════════════════════════════════════════
+   353→# القناة 3: Keyword Boost - تُطبق داخل ghost_vs_inject (كثافة ×2)
+   354→# ═══════════════════════════════════════════════════════════════
+   355→
+   356→# ═══════════════════════════════════════════════════════════════
+   357→# القناة 4: Ghost Fingerprint - بصمة فريدة لكل رسالة
+   358→# ═══════════════════════════════════════════════════════════════
+   359→
+   360→def add_anti_similarity_salt(text: str) -> str:
+   361→    """
+   362→    بصمة VS فريدة في نهاية كل رسالة (8-14 حرف خفي)
+   363→
+   364→    ✅ يكسر كشف الرسائل المكررة (dedup) والهاش المتطابق
+   365→    ✅ كل رسالة في كل مجموعة لها بصمة مختلفة عشوائياً
+   366→    ✅ يستخدم قناة VS فقط → لا يتعارض مع أبجدية بصمة stego
+   367→    ✅ في نهاية الرسالة → صفر تأثير على النص أو رسمه
+   368→    ✅ الطول يتناسب مع طول الرسالة (حتى لا ترتفع نسبة الخفي
+   369→       في الرسائل القصيرة فوق رادار الكشف الإحصائي)
+   370→    """
+   371→    if not text:
+   372→        return text
+   373→    salt_len = min(random.randint(8, 14), max(4, len(text) // 10))
+   374→    salt = ''.join(random.choice(VS_POOL) for _ in range(salt_len))
+   375→    return text + salt
+   376→
+   377→# ═══════════════════════════════════════════════════════════════
+   378→# 🧹 أدوات التنظيف الذاتي (الحماية من التشفير المزدوج)
+   379→# ═══════════════════════════════════════════════════════════════
+   380→
+   381→_GHOST_CHARS = set(VS_POOL) | set(INVISIBLE_SHIELD_CHARS)
+   382→
+   383→
+   384→def strip_ghost_chars(text: str) -> str:
+   385→    """إزالة كل الأحرف الشبحية (VS + Cf الحدودية) وإرجاع النص الظاهر الخالص"""
+   386→    if not text:
+   387→        return text
+   388→    return ''.join(ch for ch in text if ch not in _GHOST_CHARS)
+   389→
+   390→
+   391→def ghost_ratio(text: str) -> float:
+   392→    """نسبة الأحرف الشبحية في النص (للكشف عن نص مشفر مسبقاً)"""
+   393→    if not text:
+   394→        return 0.0
+   395→    count = sum(1 for ch in text if ch in _GHOST_CHARS)
+   396→    return count / max(1, len(text))
+   397→
+   398→
+   399→def _thin_invisibles(text: str, max_ratio: float = 0.30) -> str:
+   400→    """
+   401→    ✂️ ترقيق تلقائي: إن تجاوزت نسبة الأحرف الشبحية الحد الآمن
+   402→    (يحفظنا من كشف بوتات الإحصاء الكمي للطابعات الخفية)
+   403→    نحذف الفائض عشوائياً مع:
+   404→    ✅ حماية الأحرف داخل الكلمات المفتاحية (لا تنفك التجزئة المضمونة)
+   405→    ✅ حماية بصمة النهاية (salt آخر 20 حرف)
+   406→    ✅ النص الظاهر لا يُمس أبداً
+   407→    """
+   408→    if not text:
+   409→        return text
+   410→    ratio = ghost_ratio(text)
+   411→    if ratio <= max_ratio:
+   412→        return text
+   413→
+   414→    chars = list(text)
+   415→
+   416→    # مواضع الكلمات المفتاحية محسوبة على النص الظاهر
+   417→    vis_positions = [i for i, ch in enumerate(chars) if ch not in _GHOST_CHARS]
+   418→    kw_visible_pos = set()
+   419→    if vis_positions:
+   420→        vis_str = ''.join(chars[i] for i in vis_positions)
+   421→        for s, e in _find_keyword_spans(vis_str):
+   422→            kw_visible_pos.update(range(s, e))
+   423→
+   424→    # ✂️ الحماية: الحرف الشبحي المجاور (يسار/يمين) لحرف كلمة مفتاحية
+   425→    # لا يُحذف حتى لا تنفك التجزئة المضمونة للكلمات المفتاحية
+   426→    removable = []
+   427→    for i, ch in enumerate(chars):
+   428→        if ch not in _GHOST_CHARS or i >= len(chars) - 20:
+   429→            continue  # البصمة الأخيرة محمية
+   430→        j = bisect.bisect_left(vis_positions, i) - 1  # آخر حرف ظاهر قبل i
+   431→        prev_in_kw = j >= 0 and j in kw_visible_pos
+   432→        next_in_kw = (j + 1 < len(vis_positions)) and ((j + 1) in kw_visible_pos)
+   433→        if prev_in_kw or next_in_kw:
+   434→            continue  # داخل/ملاصق لكلمة مفتاحية - محمي
+   435→        removable.append(i)
+   436→
+   437→    need = sum(1 for ch in chars if ch in _GHOST_CHARS) - int(max_ratio * len(chars))
+   438→    if need <= 0 or not removable:
+   439→        return text
+   440→
+   441→    random.shuffle(removable)
+   442→    remove_set = set(removable[:need])
+   443→    return ''.join(ch for i, ch in enumerate(chars) if i not in remove_set)
+   444→
+   445→
+   446→# ═══════════════════════════════════════════════════════════════
+   447→# ⛔ الطبقات القديمة - معطلة نهائياً (كانت تغير رسم الكلمات)
+   448→# ═══════════════════════════════════════════════════════════════
+   449→
+   450→def apply_arabic_presentation_forms(text: str, intensity: float = 0.0) -> str:
+   451→    """⛔ معطلة نهائياً v4.0 - أشكال العرض العشوائية تفكك رسم الكلمات"""
+   452→    return text
+   453→
+   454→
+   455→def strip_presentation_forms(text: str) -> str:
+   456→    """إرجاع أشكال العرض إلى أحرفها الأصلية (NFKC) - للفحص والمقارنة"""
+   457→    return unicodedata.normalize('NFKC', text)
+   458→
+   459→
+   460→def apply_nfd_decomposition(text: str, intensity: float = 0.0) -> str:
+   461→    """⛔ معطلة نهائياً v4.0 - التفكيك يظهر الهمزة منفصلة في بعض الخطوط"""
+   462→    return text
+   463→
+   464→
+   465→def bayes_evade(text: str, intensity: float = 0.0) -> str:
+   466→    """⛔ معطلة نهائياً - كانت تُدخل كلمات في وسط رسالة المستخدم"""
+   467→    return text
+   468→
+   469→
+   470→def adaptive_spintax(text: str, intensity: float = 0.0) -> str:
+   471→    """⛔ معطلة نهائياً - كانت تستبدل كلمات المستخدم بمرادفات"""
+   472→    return text
+   473→
+   474→
+   475→def apply_tag_chars(text: str, intensity: float = 0.0) -> str:
+   476→    """⛔ معطلة نهائياً - Tag Characters تجعل الحروف اللاتينية تختفي في تيليجرام"""
+   477→    return text
+   478→
+   479→# ═══════════════════════════════════════════════════════════════
+   480→# 🎯 المحرك الرئيسي - AdaptiveObfuscationEngine (Ghost Encoding v4.0)
+   481→# ═══════════════════════════════════════════════════════════════
+   482→
+   483→# حد طول رسالة تيليجرام (4096) مع هامش أمان
+   484→MAX_TELEGRAM_LENGTH = 4096
+   485→SAFE_LENGTH_BUDGET = 3900
+   486→
+   487→
+   488→class AdaptiveObfuscationEngine:
+   489→    """
+   490→    👻 Ghost Encoding Engine v4.0
+   491→
+   492→    شكل الكلمات يبقى كما هو 100% + تكويد حديث يستحيل على بوتات الحماية.
+   493→
+   494→    الطبقات:
+   495→    1. ghost_vs_channel : حقن VS (256 حرف) شفافة للتشكيل - القناة الأساسية
+   496→    2. cf_boundary      : حقن Cf حدودي آمن - تنويع القنوات
+   497→    3. keyword_boost    : كثافة مضاعفة داخل الكلمات المفتاحية
+   498→    4. salt             : بصمة فريدة لكل رسالة
+   499→
+   500→    🛡️ حماية من التكرار: النص المشفر مسبقاً يُنظف ويُشفر مرة واحدة.
+   501→    📏 حماية الطول: يقلص الأحرف الخفية تلقائياً ليبقى تحت حد تيليجرام.
+   502→    """
+   503→
+   504→    PROFILES = {
+   505→        'light':      {'vs_density': 0.10, 'cf_density': 0.05},
+   506→        'medium':     {'vs_density': 0.20, 'cf_density': 0.10},
+   507→        'aggressive': {'vs_density': 0.30, 'cf_density': 0.15},
+   508→        'insane':     {'vs_density': 0.42, 'cf_density': 0.20},
+   509→    }
+   510→
+   511→    # طبقات v4.0 الفعلية
+   512→    ACTIVE_LAYERS = ('ghost_vs_channel', 'cf_boundary', 'keyword_boost', 'salt')
+   513→
+   514→    # أسماء قديمة → الطبقة الجديدة المقابلة (توافق واجهة bot.py)
+   515→    LEGACY_ALIASES = {
+   516→        'zw_distribution': 'ghost_vs_channel',
+   517→        'invisible_shield': 'ghost_vs_channel',
+   518→    }
+   519→
+   520→    # طبقات قديمة معطلة نهائياً (تُرجع False دائماً)
+   521→    DISABLED_LAYERS = {'arabic_forms', 'nfd', 'bayes_evasion', 'spintax', 'tag_chars'}
+   522→
+   523→    def __init__(self, profile: str = 'medium'):
+   524→        self.profile = profile
+   525→        self.config = dict(self.PROFILES.get(profile, self.PROFILES['medium']))
+   526→        self.enabled_layers = {
+   527→            'ghost_vs_channel': True,
+   528→            'cf_boundary': True,
+   529→            'keyword_boost': True,
+   530→            'salt': True,
+   531→        }
+   532→        self.stats = {
+   533→            'total_obfuscated': 0,
+   534→            'total_messages': 0,
+   535→            'double_encode_saved': 0,
+   536→        }
+   537→
+   538→    def set_profile(self, profile: str) -> bool:
+   539→        """تغيير مستوى القوة"""
+   540→        if profile in self.PROFILES:
+   541→            self.profile = profile
+   542→            self.config = dict(self.PROFILES[profile])
+   543→            return True
+   544→        return False
+   545→
+   546→    def toggle_layer(self, layer: str, enabled: bool = None):
+   547→        """تفعيل/تعطيل طبقة معينة (أسماء جديدة وقديمة مقبولة)"""
+   548→        layer = self.LEGACY_ALIASES.get(layer, layer)
+   549→        if layer in self.DISABLED_LAYERS:
+   550→            return False  # الطبقات القديمة الخطرة معطلة دائماً
+   551→        if layer in self.enabled_layers:
+   552→            if enabled is None:
+   553→                self.enabled_layers[layer] = not self.enabled_layers[layer]
+   554→            else:
+   555→                self.enabled_layers[layer] = enabled
+   556→            return self.enabled_layers[layer]
+   557→        return None
+   558→
+   559→    def get_layer_status(self, layer: str) -> bool:
+   560→        """حالة طبقة معينة (أسماء جديدة وقديمة مقبولة)"""
+   561→        layer = self.LEGACY_ALIASES.get(layer, layer)
+   562→        if layer in self.DISABLED_LAYERS:
+   563→            return False
+   564→        return self.enabled_layers.get(layer, False)
+   565→
+   566→    def _fit_length(self, text: str, budget: int = SAFE_LENGTH_BUDGET) -> str:
+   567→        """
+   568→        📏 حماية الطول: إن تجاوز النص ميزانية تيليجرام نحذف أحرفاً شبحية
+   569→        (النص الظاهر لا يُمس أبداً) حتى نرجع تحت الحد.
+   570→        """
+   571→        if len(text) <= budget:
+   572→            return text
+   573→        chars = [ch for ch in text if ch not in _GHOST_CHARS]
+   574→        # لو النص الظاهر نفسه أطول من الحد فلا يمكننا المساس به
+   575→        if len(chars) > budget:
+   576→            return text
+   577→        return ''.join(chars)
+   578→
+   579→    def obfuscate(self, text: str) -> Tuple[str, dict]:
+   580→        """
+   581→        تطبيق Ghost Encoding على النص
+   582→
+   583→        Returns:
+   584→            (النص المشفر, معلومات الطبقات المطبقة)
+   585→        """
+   586→        if not text:
+   587→            return text, {'layers': []}
+   588→
+   589→        self.stats['total_messages'] += 1
+   590→        applied_layers = []
+   591→
+   592→        # 🧹 الخطوة 0: تنظيف الأحرف الخطرة من المُدخل
+   593→        result = sanitize_invisible_chars(text)
+   594→
+   595→        # 🛡️ حماية التكرار: نص مشفر مسبقاً؟ نظف الأحرف الشبحية أولاً
+   596→        # (سبب "تلبّط بدء النشر" سابقاً كان تكديس التحويلات - الآن مستحيل)
+   597→        if ghost_ratio(result) > 0.12:
+   598→            result = strip_ghost_chars(result)
+   599→            self.stats['double_encode_saved'] += 1
+   600→
+   601→        # 1️⃣ Ghost VS Channel - قناة VS الشفافة للتشكيل (الأساسية)
+   602→        if self.enabled_layers['ghost_vs_channel'] and self.config['vs_density'] > 0:
+   603→            result = apply_layer_protected(
+   604→                result, ghost_vs_inject, self.config['vs_density'], True)
+   605→            applied_layers.append('ghost_vs_channel')
+   606→
+   607→        # 2️⃣ CF Boundary - أحرف حدودية آمنة (تنويع القنوات)
+   608→        if self.enabled_layers['cf_boundary'] and self.config['cf_density'] > 0:
+   609→            result = apply_layer_protected(
+   610→                result, cf_boundary_inject, self.config['cf_density'])
+   611→            applied_layers.append('cf_boundary')
+   612→
+   613→        # ✂️ ترقيق تلقائي - يبقي نسبة الأحرف الخفية تحت رادار الكشف الإحصائي
+   614→        # (مع حماية تجزئة الكلمات المفتاحية وبصمة النهاية)
+   615→        result = _thin_invisibles(result, max_ratio=0.30)
+   616→
+   617→        # 3️⃣ Keyword Boost - مطبق داخلياً في قناة VS (توثيق فقط هنا)
+   618→        if self.enabled_layers['keyword_boost']:
+   619→            applied_layers.append('keyword_boost')
+   620→
+   621→        # 4️⃣ Salt - بصمة فريدة لكل رسالة
+   622→        if self.enabled_layers['salt']:
+   623→            result = add_anti_similarity_salt(result)
+   624→            applied_layers.append('salt')
+   625→
+   626→        # 📏 حماية الطول
+   627→        result = self._fit_length(result)
+   628→
+   629→        self.stats['total_obfuscated'] += 1
+   630→
+   631→        invisible_count = sum(1 for ch in result if ch in _GHOST_CHARS)
+   632→
+   633→        return result, {
+   634→            'layers': applied_layers,
+   635→            'profile': self.profile,
+   636→            'length_before': len(text),
+   637→            'length_after': len(result),
+   638→            'invisible_chars': invisible_count,
+   639→        }
+   640→
+   641→    def get_stats(self) -> dict:
+   642→        """إحصائيات المحرك"""
+   643→        return {
+   644→            **self.stats,
+   645→            'profile': self.profile,
+   646→            'layers': self.enabled_layers,
+   647→        }
+   648→
+   649→    def get_info(self) -> str:
+   650→        """معلومات المحرك كنص قابل للعرض"""
+   651→        info = "👻 **Ghost Encoding Engine v4.0**\n\n"
+   652→        info += f"⚡ **المستوى الحالي:** {self.profile}\n\n"
+   653→        info += "🎨 **الضمانة:** رسم كلماتك يبقى كما هو 100% في كل الأجهزة\n\n"
+   654→        info += "📊 **القنوات المفعّلة (كلها غير مرئية ولا تعدل كلماتك):**\n"
+   655→        layers_ar = {
+   656→            'ghost_vs_channel': '1️⃣ قناة VS الشفافة (256 حرف خفي حديث)',
+   657→            'cf_boundary': '2️⃣ قناة الحدود الآمنة (مواضع محسوبة)',
+   658→            'keyword_boost': '3️⃣ تعزيز الكلمات المفتاحية (تمويه جراحي)',
+   659→            'salt': '4️⃣ بصمة الأشباح (فريدة لكل رسالة)',
+   660→            'arabic_forms': '⛔ أشكال العرض (معطلة - كانت تغير الرسم)',
+   661→            'nfd': '⛔ NFD (معطلة - كانت تفكك الحروف)',
+   662→            'tag_chars': '⛔ Tag Characters (معطلة - كانت تخفي حروفاً)',
+   663→        }
+   664→        for key, name in layers_ar.items():
+   665→            status = "✅" if self.get_layer_status(key) else "⛔"
+   666→            info += f"  {status} {name}\n"
+   667→
+   668→        info += "\n📈 **الإحصائيات:**\n"
+   669→        info += f"  📝 رسائل مشفرة: {self.stats['total_obfuscated']}\n"
+   670→        info += f"  📊 إجمالي الرسائل: {self.stats['total_messages']}\n"
+   671→        info += f"  🛡️ حماية تكرار (نُظفت): {self.stats['double_encode_saved']}\n"
+   672→
+   673→        return info
+   674→
+   675→
+   676→# إنشاء instance افتراضي
+   677→adaptive_engine = AdaptiveObfuscationEngine(profile='medium')
+   678→
+   679→
+   680→def quick_obfuscate(text: str, profile: str = None) -> str:
+   681→    """دالة سريعة للتشفير - تستخدم المحرك الافتراضي"""
+   682→    if profile:
+   683→        adaptive_engine.set_profile(profile)
+   684→    result, _ = adaptive_engine.obfuscate(text)
+   685→    return result
+   686→
+   687→
+   688→if __name__ == '__main__':
+   689→    # اختبار سريع للمحرك
+   690→    test_text = "اشترك في قناتنا للحصول على عروض حصرية t.me/example @username"
+   691→
+   692→    print("=" * 60)
+   693→    print("👻 اختبار Ghost Encoding Engine v4.0")
+   694→    print("=" * 60)
+   695→    print(f"\n📝 **النص الأصلي:**\n{test_text}")
+   696→    print(f"📊 الطول: {len(test_text)}")
+   697→
+   698→    for profile in ['light', 'medium', 'aggressive', 'insane']:
+   699→        engine = AdaptiveObfuscationEngine(profile=profile)
+   700→        result, info = engine.obfuscate(test_text)
+   701→        visible = strip_ghost_chars(result)
+   702→        same_shape = unicodedata.normalize('NFKC', visible) == unicodedata.normalize('NFKC', test_text)
+   703→        print(f"\n{'─' * 60}")
+   704→        print(f"⚡ Profile: {profile}")
+   705→        print(f"📝 النص المشفر:\n{result}")
+   706→        print(f"📊 الطول: {len(result)} (خفي: {info['invisible_chars']})")
+   707→        print(f"🛡️ الطبقات: {info['layers']}")
+   708→        print(f"🎨 رسم الكلمات محفوظ: {'✅' if same_shape else '❌ خطأ!'}")
+   709→
+   710→    print(f"\n{'=' * 60}")
+   711→    print("✅ تم الاختبار بنجاح!")
+   712→
