@@ -735,21 +735,30 @@ def prepare_content_for_sending(raw_content, group_id=None):
         except Exception:
             pass
 
-    # 🫥 الخطوة 2: وضع الإرسال الموحد (v2.0 - كل الأوضاع تحافظ على نص المستخدم)
+    # 🔬 الخطوة 2: Ghost Encoding v4.1 (الافتراضي - درع خفي شامل)
+    # يُطبق أولاً: ينظف الأحرف المتضاربة من المُدخل + درع اليوزرات والأرقام
+    # والروابط + تجزئة كل كلمة - وبصمة stego تُضاف بعده حتى لا تُمحى
+    if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
+        profile = get_setting('adaptive_obfuscation_profile', 'medium')
+        adaptive_engine.set_profile(profile)
+        result, info = adaptive_engine.obfuscate(raw_content)
+        logger.info(f"👻 Ghost Encoding v4.1: {info['layers']} (profile={profile})")
+
+        # 🫥 الخطوة 2.5: وضع الإرسال فوق التكويد الشبحي
+        # (البصمة الآن بقناة VS17+ الشفافة للتشكيل → تتكامل ولا تتضارب)
+        send_mode = get_setting('send_mode', 'normal')
+        if send_mode != 'normal':
+            stego_engine.set_mode(send_mode)
+            result, mode_info = stego_engine.process(result)
+            logger.info(f"🫥 Send Mode [{send_mode}]: {mode_info.get('original_length')} → {mode_info.get('final_length')} حرف (النص الظاهر محفوظ 100%)")
+        return result, False
+
+    # 🫥 الخطوة 3: وضع الإرسال (عندما يكون Ghost Encoding معطلاً)
     send_mode = get_setting('send_mode', 'normal')
     if send_mode != 'normal':
         stego_engine.set_mode(send_mode)
         raw_content, mode_info = stego_engine.process(raw_content)
         logger.info(f"🫥 Send Mode [{send_mode}]: {mode_info.get('original_length')} → {mode_info.get('final_length')} حرف (النص الظاهر محفوظ 100%)")
-
-    # 🔬 الخطوة 3: Adaptive Obfuscation Engine v3.0 (الافتراضي - درع خفي)
-    if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
-        profile = get_setting('adaptive_obfuscation_profile', 'medium')
-        adaptive_engine.set_profile(profile)
-        result, info = adaptive_engine.obfuscate(raw_content)
-        # حفظ معلومات التشفير للسجل
-        logger.info(f"🔬 Adaptive Obfuscation: {info['layers']} (profile={profile})")
-        return result, False
 
     # 💎 الخطوة 4: التشفير الخارق (يدوي - نادراً)
     if get_setting('super_encryption_enabled', 'off') == 'on':
@@ -783,6 +792,36 @@ def prepare_content_for_sending(raw_content, group_id=None):
         varied = obfuscate_for_humans(varied)
     content = encrypt_text(varied, group_id)
     return content, False
+
+
+def build_style_entities(text):
+    """
+    ✍️ تقوية العرض (v4.1) - خيار المستخدم:
+    "الكويد يكون بطريقة ما يؤثر على مظهره... مثلاً يرجع الخط غامق قوي
+     أو يوضع خط تحت النصوص بحيث ما يتشوهش زيادة ويسطيع المستخدمون قراءته"
+
+    تُبنى كيانات تنسيق Telegram (غامق/تحته خط) فوق النص المكوَّد:
+    ✅ الكيانات تنسيق عرض فقط - لا تضيف ولا تحذف ولا تعدل حرفاً واحداً
+    ✅ الأحرف الخفية (VS) تبقى داخل النص الغامق وتعمل كالمعتاد
+    ✅ الطول محسوب بوحدات UTF-16 (معيار Telegram) - صحيح حتى مع VS
+       غير BMP (E0100+ = وحدتين في UTF-16)
+    يُرجع قائمة كيانات أو None
+    """
+    style = get_setting('text_style_boost', 'off')
+    if style == 'off' or not text:
+        return None
+    try:
+        from telethon.tl.types import MessageEntityBold, MessageEntityUnderline
+        u16_len = len(text.encode('utf-16-le')) // 2
+        entities = []
+        if style in ('bold', 'both'):
+            entities.append(MessageEntityBold(offset=0, length=u16_len))
+        if style in ('underline', 'both'):
+            entities.append(MessageEntityUnderline(offset=0, length=u16_len))
+        return entities or None
+    except Exception as e:
+        logger.debug(f"⚠️ build_style_entities: {e}")
+        return None
 
 
 def _apply_html_links(original_text, encrypted_text):
@@ -4338,25 +4377,27 @@ def get_join_history(limit=30):
 async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False):
     """إرسال رسالة لمجموعة مع دعم HTML للروابط المخفية"""
     parse_mode = 'html' if use_html else None
+    # ✍️ تقوية العرض (غامق/تحته خط) - كيانات عرض فقط لا تعدل الأحرف
+    fmt_entities = None if use_html else build_style_entities(encrypted_content)
     try:
         if msg_type == 'text':
-            await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+            await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'photo' and media_path and os.path.exists(media_path):
-            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'video' and media_path and os.path.exists(media_path):
-            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'audio' and media_path and os.path.exists(media_path):
-            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'document' and media_path and os.path.exists(media_path):
-            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'contact' and media_data:
             contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
             await send_contact_message(client, int(group_id), contact_data, encrypted_content)
         else:
             if media_path and os.path.exists(media_path):
-                await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+                await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
             else:
-                await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+                await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
     except Exception as e:
         # إذا فشل الإرسال بـ HTML، حاول بدونه
         if use_html:
@@ -4658,25 +4699,27 @@ async def fast_post_to_all_groups(messages):
 async def _send_and_get_message(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False):
     """إرسال رسالة وإرجاع الرسالة المرسلة (للنشر الشبحي)"""
     parse_mode = 'html' if use_html else None
+    # ✍️ تقوية العرض (غامق/تحته خط) - كيانات عرض فقط لا تعدل الأحرف
+    fmt_entities = None if use_html else build_style_entities(encrypted_content)
     try:
         if msg_type == 'text':
-            return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+            return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'photo' and media_path and os.path.exists(media_path):
-            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'video' and media_path and os.path.exists(media_path):
-            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'audio' and media_path and os.path.exists(media_path):
-            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'document' and media_path and os.path.exists(media_path):
-            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+            return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
         elif msg_type == 'contact' and media_data:
             contact_data = json.loads(media_data) if isinstance(media_data, str) else media_data
             return await send_contact_message(client, int(group_id), contact_data, encrypted_content)
         else:
             if media_path and os.path.exists(media_path):
-                return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode)
+                return await client.send_file(int(group_id), media_path, caption=encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
             else:
-                return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode)
+                return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
     except Exception as e:
         if use_html:
             clean_text = re.sub(r'<a href="[^"]*">([^<]*)</a>', r'\1', encrypted_content)
@@ -5011,11 +5054,15 @@ def get_adaptive_menu():
     ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
     profile = get_setting('adaptive_obfuscation_profile', 'medium')
     profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(profile, '🟡')
+    # ✍️ تقوية العرض
+    style_boost = get_setting('text_style_boost', 'off')
+    style_labels = {'off': 'عادي', 'bold': 'غامق', 'underline': 'تحته خط', 'both': 'غامق + خط'}
     return [
         [Button.inline(f"🔬 تفعيل المحرك {ao_status}", b"toggle_adaptive"),
          Button.inline(f"{profile_emoji} القوة: {profile}", b"adaptive_profile")],
         [Button.inline("📊 حالة الطبقات", b"adaptive_layers"),
          Button.inline("🧪 اختبار المحرك", b"adaptive_test")],
+        [Button.inline(f"✍️ تقوية العرض: {style_labels.get(style_boost, 'عادي')}", b"style_boost_menu")],
         [Button.inline("ℹ️ معلومات المحرك", b"adaptive_info")],
         [Button.inline("🔙 رجوع", b"back")],
     ]
@@ -5109,10 +5156,12 @@ async def main():
             "• 📝 normal - النص كما هو تماماً\n"
             "• 🔄 spintax - حل {خيار1|خيار2} التي تكتبها أنت\n"
             "• 🫥 stego - نصك ظاهر 100% + بصمة خفية فريدة لكل رسالة\n\n"
-            "🔬 **Adaptive Obfuscation v3.0 - درع خفي:**\n"
-            "• أشكال عرض عربية + أحرف خفية آمنة على التشكيل + تفكيك NFD\n"
-            "• النص العربي مقروء 100% ولا تتخلبط حروفه!\n"
-            "• الروابط والمعرفات تبقى قابلة للنقر!\n\n"
+            "👻 **Ghost Encoding v4.1 - التكويد الحديث:**\n"
+            "• رسم كلماتك يبقى كما هو 100% في كل الأجهزة (بدون أشكال عرض!)\n"
+            "• تجزئة خفية لكل كلمة - بوتات الحماية لا تطابق شيئاً\n"
+            "• 🎯 درع اليوزرات والأرقام والروابط: @يوزر + الهواتف + الروابط\n"
+            "  تُكوَّد بحروف غير مرئية → البوتات لا تكتشفها أبداً\n"
+            "• ✍️ تقوية العرض (غامق/تحته خط) من قائمة المحرك\n\n"
             "🐝 **أنظمة متقدمة:**\n"
             "• ⏱️ Human Delay | ⚖️ Load Balancer\n\n"
             f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
@@ -5220,40 +5269,24 @@ async def main():
                 "`/encrypt نصك هنا`\n\n"
                 "💡 يعرض المعاينة فقط - لا يُنشر في المجموعات")
             return
-        varied = vary_text(text)
-        obfuscated = obfuscate_for_humans(varied)
-        encrypted = encrypt_text(obfuscated, group_id=-1001234567890)
-        level = get_setting('encryption_strength', 'medium')
-        he_on = get_setting('hyper_encryption_enabled', 'on') == 'on'
-        info = hyper_encryption.get_strength_info() if (hyper_encryption and he_on) else None
-        from hyper_encryption import char_analysis as _ca
-        counts = _ca(encrypted)
-        invisible = sum(v for k, v in counts.items() if k != 'visible')
-        he_line = f"• 🔥 HyperEncryption: ✅ {level} ({info['active_count']}/{info['total_count']} طبقة)\n" if info else "• 🔥 HyperEncryption: ❌ معطل\n"
-        # حالة Fancy Text
-        ft_enabled = get_setting('fancy_text_enabled', 'on') == 'on'
-        ft_style_name = fancy_engine.STYLES.get(get_setting('fancy_text_style', 'strikethrough'), {}).get('name', 'Strikethrough')
-        ft_line = f"• ✨ Fancy Text: ✅ {ft_style_name}\n" if ft_enabled else "• ✨ Fancy Text: ❌ معطل\n"
-        # تطبيق Fancy Text على النص الأصلي للعرض
-        ft_preview = ""
-        if ft_enabled:
-            try:
-                style_id = get_setting('fancy_text_style', 'strikethrough')
-                if style_id == 'zalgo':
-                    intensity = get_setting('fancy_text_zalgo_intensity', 'medium')
-                    ft_preview_text = fancy_engine.zalgo(text, intensity=intensity)
-                else:
-                    ft_preview_text = fancy_engine.apply_style(text, style_id)
-                ft_preview = f"✨ **بعد Fancy Text** ({ft_style_name}):\n{ft_preview_text}\n\n"
-            except Exception:
-                pass
+        # 🛡️ المعاينة الحقيقية: نفس المسار الموحد المستخدم فعلياً في النشر
+        # (القديم كان يستخدم خط أنابيب قديم لا يعكس ما يُنشر!)
+        real_output, use_html = prepare_content_for_sending(text)
+        profile = get_setting('adaptive_obfuscation_profile', 'medium')
+        ao_on = get_setting('adaptive_obfuscation_enabled', 'on') == 'on'
+        send_mode = get_setting('send_mode', 'normal')
+        shield_note = "🎯 درع اليوزرات والأرقام والروابط: مفعّل\n" if ao_on else ""
+        style_boost = get_setting('text_style_boost', 'off')
+        style_note = f"✍️ تقوية العرض: {style_boost}\n" if style_boost != 'off' else ""
         await event.respond(
             f"📝 **النص الأصلي:**\n{text}\n\n"
-            f"{ft_preview}"
-            f"🔀 **بعد التشويش:**\n{obfuscated}\n\n"
-            f"🛡 **بعد التشفير الخارق** ({len(encrypted)} حرف، {invisible} غير مرئي):\n{encrypted}\n\n"
-            f"📊 **الحالة:**\n{he_line}{ft_line}"
-            f"💡 النص يبدو متطابقاً بصرياً - الفرق فقط في الأحرف غير المرئية التي تكسر بوتات الحماية!\n\n"
+            f"👻 **كما سيُنشر فعلياً** (Ghost Encoding v4.1، مستوى {profile}):\n{real_output}\n\n"
+            f"📊 **الحالة:**\n"
+            f"• 👻 Ghost Encoding: {'✅ مفعّل' if ao_on else '❌ معطل'} (مستوى {profile})\n"
+            f"{shield_note}{style_note}"
+            f"• 🎛 وضع الإرسال: {send_mode}\n"
+            f"💡 النص يبدو متطابقاً بصرياً 100% - الفرق فقط في الأحرف غير المرئية\n"
+            f"   التي تكسر مطابقة بوتات الحماية وتخفي يوزراتك وأرقامك وروابطك!\n\n"
             f"جرّب أيضاً: /encrypt_test <text> لعرض كل المستويات الأربعة"
         )
 
@@ -5305,6 +5338,10 @@ async def main():
             f"• إجمالي الحسابات: {len(all_accs)}\n"
             f"• الحسابات المتصلة: {len(user_clients)}\n"
             f"• النشر: {'🟢 نشط' if is_posting_active else '🔴 متوقف'}\n"
+            f"• 👻 Ghost Encoding v4.1: {'✅ مفعّل' if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else '❌ معطل'} (مستوى {get_setting('adaptive_obfuscation_profile', 'medium')})\n"
+            f"• 🎯 درع اليوزرات والأرقام والروابط: {'✅ يعمل' if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else '❌ معطل'}\n"
+            f"• ✍️ تقوية العرض: {get_setting('text_style_boost', 'off')}\n"
+            f"• 🎛 وضع الإرسال: {get_setting('send_mode', 'normal')}\n"
             f"• التشفير: {'✅ مفعل' if get_setting('encryption', 'on') == 'on' else '❌ معطل'}\n"
             f"{he_line}{ft_line}"
             f"• مكافحة الكشف: {'✅ مفعلة' if get_setting('anti_detect', 'on') == 'on' else '❌ معطلة'}\n"
@@ -5626,6 +5663,7 @@ async def main():
                 [Button.inline("➕ إضافة", b"add_acc")],
                 [Button.inline("📋 عرض", b"list_acc")],
                 [Button.inline("🗑 حذف", b"del_acc")],
+                [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
                 [Button.inline("🔙 رجوع", b"back")],
             ])
         elif data == 'add_acc':
@@ -5685,122 +5723,6 @@ async def main():
             set_setting('encryption', new_val)
             await event.answer(f"التشفير: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
-        elif data == 'toggle_stealth':
-            current = get_setting('stealth_obfuscator_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('stealth_obfuscator_enabled', new_val)
-            if new_val == 'on':
-                example = "أحد عنده حرمان تبي تشيل الحرمان https://wa.me/+966571482466"
-                stealth_text, _ = stealth_obfuscator.obfuscate(example)
-                await event.answer("🔬 تشويش خفي: مفعل ✨")
-                await event.edit(
-                    f"🔬 **تشويش خفي StealthObfuscator: مفعل** ✅\n\n"
-                    f"النص يبقى مقروءاً 100% - بدون كشيدة بدون PFB بدون homoglyphs!\n\n"
-                    f"📝 **الأصل:**\n{example}\n\n"
-                    f"🔬 **بعد التشويش الخفي:**\n{stealth_text}\n\n"
-                    f"💡 الفرق غير مرئي للعين لكن البوتات لا تستطيع قراءته!",
-                    buttons=get_main_menu()
-                )
-            else:
-                await event.answer("🔬 تشويش خفي: معطل")
-                await event.edit("🔬 **تشويش خفي StealthObfuscator: معطل** ❌\n\nالنظام القديم (AntiGuardian/YayText) سيعمل بدلاً منه.", buttons=get_main_menu())
-
-        elif data == 'toggle_super_encryption':
-            current = get_setting('super_encryption_enabled', 'off')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('super_encryption_enabled', new_val)
-            if new_val == 'on':
-                example = "سلام عليكم تابعونا https://wa.me/+966568479168"
-                encrypted = super_encryption.super_encrypt_full(example)
-                await event.answer("💎 التشفير الخارق: مفعل ✨")
-                await event.edit(
-                    f"💎 **التشفير الخارق Super Encryption: مفعل** ✅\n\n"
-                    f"أقوى تشفير ضد بوتات الحماية!\n"
-                    f"كل حرف عربي يُفصل بنمط كشيدة + فاصل + كشيدة\n"
-                    f"النص مقروء بشرياً لكن مستحيل كشفه آلياً 🛡️\n\n"
-                    f"📝 **الأصل:**\n{example}\n\n"
-                    f"💎 **بعد التشفير الخارق:**\n{encrypted}\n\n"
-                    f"💡 الفواصل تُختار عشوائياً لكل رسالة!",
-                    buttons=get_main_menu()
-                )
-            else:
-                await event.answer("💎 التشفير الخارق: معطل")
-                await event.edit("💎 **التشفير الخارق: معطل** ❌\n\nسيتم استخدام التشفير العادي بدلاً منه.", buttons=get_main_menu())
-
-        elif data == 'toggle_hyper_enc':
-            current = get_setting('hyper_encryption_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('hyper_encryption_enabled', new_val)
-            if new_val == 'on':
-                example = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
-                encrypted = encrypt_text(example, group_id=-1001234567890)
-                info = hyper_encryption.get_strength_info() if hyper_encryption else {}
-                from hyper_encryption import char_analysis as _ca
-                counts = _ca(encrypted)
-                invisible = sum(v for k, v in counts.items() if k != 'visible')
-                await event.answer("🔥 HyperEncryption: مفعل ✨")
-                await event.edit(
-                    f"🔥 **HyperEncryptionEngine v2.1: مفعل** ✅\n\n"
-                    f"محرك تشفير خارق بـ 26 طبقة متقدمة (8 طبقات جديدة!):\n"
-                    f"• Homoglyph (عربي + لاتيني + أرقام)\n"
-                    f"• Zero-width chars (5 أنواع)\n"
-                    f"• Tatweel + Harakat عربي\n"
-                    f"• Combining diacritical marks\n"
-                    f"• Space variants (7 أنواع)\n"
-                    f"• Directional marks (LRM/RLM)\n"
-                    f"• Variation selectors\n"
-                    f"• Link + Mention obfuscation\n"
-                    f"• Per-group hash + trailing invisibles\n"
-                    f"• Mid-word ZWSP (يكسر keyword matching)\n"
-                    f"• Keyword heavy + Numeric + Punctuation subs\n"
-                    f"🆕 **طبقات v2.1 الجديدة:**\n"
-                    f"• L19: Tag Characters (U+E0000) - إخفاء كامل\n"
-                    f"• L20: Hangul Fillers - أحرف كورية غير مرئية\n"
-                    f"• L21: Bidi Isolates (FSI/PDI) - يكسر regex\n"
-                    f"• L22: Math Symbols (Fraktur/Script/Double-struck)\n"
-                    f"• L23: Smart Punctuation (smart quotes/dashes)\n"
-                    f"• L24: Expanded Confusables Database\n"
-                    f"• L25: Emoji Variation Sequences\n"
-                    f"• L26: Hash-busting Padding (يكسر hash matching)\n\n"
-                    f"📊 المستوى الحالي: **{info.get('level', 'medium')}** ({info.get('active_count', '?')}/{info.get('total_count', 26)} طبقة)\n\n"
-                    f"📝 **الأصل:**\n{example}\n\n"
-                    f"🔥 **بعد HyperEncryption** ({len(encrypted)} حرف، {invisible} غير مرئي):\n{encrypted}\n\n"
-                    f"💡 النص يبدو متطابقاً بصرياً - الفرق فقط في الأحرف غير المرئية!",
-                    buttons=get_main_menu()
-                )
-            else:
-                await event.answer("🔥 HyperEncryption: معطل")
-                await event.edit("🔥 **HyperEncryptionEngine: معطل** ❌\n\nسيتم استخدام UltimateAntiDetection القديم.", buttons=get_main_menu())
-
-        elif data == 'enc_strength':
-            current = get_setting('encryption_strength', 'medium')
-            levels = ['light', 'medium', 'aggressive', 'insane']
-            try:
-                idx = levels.index(current)
-            except ValueError:
-                idx = 1
-            new_level = levels[(idx + 1) % len(levels)]
-            set_setting('encryption_strength', new_level)
-            # تحديث المحرك لالتقاط الإعداد الجديد
-            if hyper_encryption is not None:
-                hyper_encryption.get_setting = get_setting
-            info = hyper_encryption.get_strength_info() if hyper_encryption else {}
-            emojis = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}
-            descriptions = {
-                'light': 'أخف تمويه - 9 طبقات (للحسابات الحساسة)',
-                'medium': 'متوازن - 17 طبقة (افتراضي)',
-                'aggressive': 'قوي - 24 طبقة (يكسر بوتات قوية)',
-                'insane': 'أقصى تمويه - 26 طبقة (كل الطبقات مفعلة)',
-            }
-            await event.answer(f"{emojis[new_level]} قوة التشفير: {new_level}")
-            await event.edit(
-                f"{emojis[new_level]} **قوة التشفير: {new_level}**\n\n"
-                f"📊 الطبقات المفعلة: {info.get('active_count', '?')}/{info.get('total_count', 26)}\n"
-                f"📝 {descriptions[new_level]}\n\n"
-                f"اضغط الزر مرة أخرى للتبديل للمستوى التالي.",
-                buttons=get_main_menu()
-            )
-
         elif data == 'enc_test':
             sample = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
             from hyper_encryption import HyperEncryptionEngine as _HEE, char_analysis as _ca
@@ -5881,12 +5803,13 @@ async def main():
             await event.edit(f"⚡ **مستوى القوة تغيّر**\n\n{descriptions[new_profile]}", buttons=get_adaptive_menu())
 
         elif data == 'adaptive_layers':
-            layers_info = "👻 **قنوات Ghost Encoding v4.0**\n\n"
+            layers_info = "👻 **قنوات Ghost Encoding v4.1**\n\n"
             layers_ar = {
-                'ghost_vs_channel': '1️⃣ قناة VS الشفافة (256 حرف خفي حديث)',
+                'ghost_vs_channel': '1️⃣ قناة VS الشفافة (240 حرف خفي حديث)',
                 'cf_boundary': '2️⃣ قناة الحدود الآمنة (مواضع محسوبة)',
                 'keyword_boost': '3️⃣ تعزيز الكلمات المفتاحية',
                 'salt': '4️⃣ بصمة الأشباح (فريدة لكل رسالة)',
+                'sensitive_shield': '🎯 درع اليوزرات والأرقام والروابط (v4.1)',
                 'arabic_forms': '⛔ أشكال العرض (معطلة - كانت تغير الرسم)',
                 'nfd': '⛔ NFD (معطلة - كانت تفكك الحروف)',
                 'tag_chars': '⛔ Tag Characters (معطلة - كانت تخفي الحروف)',
@@ -5913,36 +5836,52 @@ async def main():
             info = adaptive_engine.get_info()
             await event.edit(info, buttons=get_adaptive_menu())
 
+        # ✍️ تقوية العرض - تنسيق غامق/تحته خط فوق النص المكوَّد
+        elif data == 'style_boost_menu':
+            cur = get_setting('text_style_boost', 'off')
+            opts = [
+                ('off', '📝 عادي (بدون تنسيق)'),
+                ('bold', '🔠 غامق قوي'),
+                ('underline', '🖊 تحته خط'),
+                ('both', '✨ غامق + خط'),
+            ]
+            buttons = [[Button.inline(f"{label}{' ✅' if key == cur else ''}", f"set_style_{key}".encode())] for key, label in opts]
+            buttons.append([Button.inline("🔙 رجوع", b"adaptive_menu")])
+            await event.edit(
+                "✍️ **تقوية العرض**\n\n"
+                "تنسيق عرض فقط فوق نصك المكوَّد:\n"
+                "• يجعل الخط **غامقاً قوياً** أو يضع **خطاً تحت النص**\n"
+                "• لا يعدل حرفاً واحداً من كلماتك - تنسيق عرض فقط\n"
+                "• يزيد وضوح القراءة للمستخدمين\n"
+                "• التكويد الخفي يستمر بالعمل كالمعتاد تحته\n\n"
+                "اختر الشكل:",
+                buttons=buttons
+            )
+        elif data.startswith('set_style_'):
+            style = data.replace('set_style_', '', 1)
+            if style in ('off', 'bold', 'underline', 'both'):
+                set_setting('text_style_boost', style)
+                labels = {'off': '📝 عادي', 'bold': '🔠 غامق قوي', 'underline': '🖊 تحته خط', 'both': '✨ غامق + خط'}
+                await event.answer(f"تقوية العرض: {labels[style]}")
+                await event.edit(
+                    f"✅ **تم ضبط تقوية العرض: {labels[style]}**\n\n"
+                    "🔍 **معاينة حية** (نص مكوَّد فعلياً كما سيُنشر في المجموعات):\n",
+                    buttons=[[Button.inline("🔙 رجوع", b"adaptive_menu")]]
+                )
+                # معاينة حية: نص حقيقي مكوَّد + تنسيق العرض المختار
+                sample = "✅اعذار طبية تطبيق صحتي\n✅مرافق @ppppokl اتصل 0555123456"
+                encoded, _ = adaptive_engine.obfuscate(sample)
+                ents = build_style_entities(encoded)
+                try:
+                    await event.respond(encoded, formatting_entities=ents)
+                except Exception:
+                    await event.respond(sample)
+            else:
+                await event.answer("خيار غير معروف", alert=True)
+
         # ═══════════════════════════════════════════════════════════
         #  ✨ Fancy Text - محرك الأنماط النصية الخارق (26 نمط)
         # ═══════════════════════════════════════════════════════════
-
-        elif data == 'toggle_fancy_text':
-            current = get_setting('fancy_text_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('fancy_text_enabled', new_val)
-            current_style = get_setting('fancy_text_style', 'strikethrough')
-            style_info = fancy_engine.STYLES.get(current_style, {})
-            if new_val == 'on':
-                example = "اشترك في قناتنا https://t.me/example عروض حصرية!"
-                transformed = fancy_engine.apply_style(example, current_style)
-                await event.answer("✨ Fancy Text: مفعل")
-                await event.edit(
-                    f"✨ **FancyTextEngine: مفعل** ✅\n\n"
-                    f"محرك 26 نمط بصري مستوحى من FSymbols:\n"
-                    f"• 8 أنماط تشكيل (Strikethrough/Underline/Overline...)\n"
-                    f"• 4 أنماط إحاطة (Boxed/Circled/Squared/Bubble)\n"
-                    f"• 9 أنماط استبدال (Fraktur/Script/Monospace...)\n"
-                    f"• 5 أنماط متقدمة (Mirrored/Upside Down/Zalgo...)\n\n"
-                    f"📊 النمط الحالي: **{style_info.get('name', current_style)}** ({style_info.get('ar', '')})\n\n"
-                    f"📝 **الأصل:**\n{example}\n\n"
-                    f"✨ **بعد التطبيق:**\n{transformed}\n\n"
-                    f"💡 اختر نمطاً مختلفاً من زر 'النمط' في القائمة الرئيسية.",
-                    buttons=get_main_menu()
-                )
-            else:
-                await event.answer("✨ Fancy Text: معطل")
-                await event.edit("✨ **FancyTextEngine: معطل** ❌\n\nسيتم استخدام HyperEncryption فقط.", buttons=get_main_menu())
 
         elif data == 'fancy_text_menu':
             # قائمة اختيار النمط - مقسمة حسب التصنيف
@@ -6166,135 +6105,6 @@ async def main():
                 await event.edit("🔄 **تشويش YayText & Messletters: معطل** ❌", buttons=get_settings_menu())
 
         # 🆕 تبديل Spintax
-        elif data == 'toggle_spintax':
-            current = get_setting('spintax_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('spintax_enabled', new_val)
-            await event.answer(f"Spintax: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🎲 **Spintax: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"📝 **صيغة Spintax:** {{خيار1|خيار2|خيار3}}\n"
-                f"مثال: {{مرحباً|أهلاً|سلام}} بكم في {{قناتنا|مجموعتنا}}\n\n"
-                f"كل رسالة تُرسل تختار خيارات مختلفة تلقائياً\n"
-                f"→ بوتات الحماية لا تجد نفس النص مرتين أبداً!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل كشيدة
-        elif data == 'toggle_kashida':
-            current = get_setting('kashida_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('kashida_enabled', new_val)
-            await event.answer(f"كشيدة: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"〰️ **كشيدة/Tatweel: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"أقوى طبقة تشفير عربية - تبقى بعد كل أنواع التطبيع!\n"
-                f"تضيف أحرف ـ (Tatweel U+0640) بين الحروف العربية\n"
-                f"→ النص يبقى مقروءاً طبيعياً\n"
-                f"→ بوتات الحماية لا تستطيع إزالتها",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Arabic Homoglyphs
-        elif data == 'toggle_arabic_homoglyph':
-            current = get_setting('arabic_homoglyph_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('arabic_homoglyph_enabled', new_val)
-            await event.answer(f"Homoglyphs عربي: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🔀 **Homoglyphs عربي: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"يبدل الأحرف العربية ببدائل متطابقة مرئياً:\n"
-                f"• ا ↔ أ ↔ إ ↔ آ ↔ ٱ\n"
-                f"• ه ↔ ة ↔ ھ\n"
-                f"• ي ↔ ى ↔ ئ\n"
-                f"• و ↔ ؤ\n"
-                f"→ تبدو نفس الحروف لكن بكود Unicode مختلف!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Variation Selectors
-        elif data == 'toggle_vs':
-            current = get_setting('variation_selectors_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('variation_selectors_enabled', new_val)
-            await event.answer(f"Variation Selectors: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🔤 **Variation Selectors: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"أحرف تجميع غير مرئية (VS1-VS16)\n"
-                f"تُضاف بعد الحروف العربية بشكل عشوائي\n"
-                f"→ غير مرئية تماماً للمستخدم\n"
-                f"→ تبقى بعد تطبيع Unicode",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Tag Characters
-        elif data == 'toggle_tag':
-            current = get_setting('tag_characters_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('tag_characters_enabled', new_val)
-            await event.answer(f"Tag Characters: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🏷️ **Tag Characters: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"أحرف Unicode Tag (U+E0000+) مخفية تماماً\n"
-                f"تُضاف في بداية ونهاية النص\n"
-                f"→ غير مرئية للمستخدم\n"
-                f"→ تُغيّر بصمة النص كلياً",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Ghost Swarm
-        elif data == 'toggle_ghost_swarm':
-            current = get_setting('ghost_swarm_enabled', 'off')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('ghost_swarm_enabled', new_val)
-            stages = get_setting('ghost_swarm_stages', '3')
-            interval = get_setting('ghost_swarm_interval', '10')
-            await event.answer(f"Ghost Swarm: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"🐝 **Ghost Swarm: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"نظام سرب الأشباح: تعديلات متتالية بتكويد مختلف\n"
-                f"• المراحل: {stages} تعديلات متتالية\n"
-                f"• الفاصل: كل {interval} ثانية\n"
-                f"• كل مرحلة تستخدم نمط تشفير مختلف\n"
-                f"• مع edit_hide لا تظهر علامة 'معدّل'!\n\n"
-                f"→ بوتات الحماية تحلل الرسالة بعد كل تعديل = لا تجد نفس النمط أبداً!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Human Delay
-        elif data == 'toggle_human_delay':
-            current = get_setting('human_delay_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('human_delay_enabled', new_val)
-            min_d = get_setting('human_delay_min', '3')
-            max_d = get_setting('human_delay_max', '15')
-            await event.answer(f"Human Delay: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"⏱️ **Human Delay: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"محاكاة تأخير بشري واقعي:\n"
-                f"• التأخير: {min_d}-{max_d} ثانية عشوائية\n"
-                f"• 10% احتمال توقف أطول (محاكاة تشتت)\n"
-                f"• 5% احتمال إرسال سريع\n\n"
-                f"→ يمنع بوتات الحماية من كشف النمط الآلي!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 تبديل Load Balancer
-        elif data == 'toggle_load_balancer':
-            current = get_setting('load_balancer_enabled', 'on')
-            new_val = 'off' if current == 'on' else 'on'
-            set_setting('load_balancer_enabled', new_val)
-            await event.answer(f"Load Balancer: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}")
-            await event.edit(
-                f"⚖️ **Load Balancer: {'مفعل ✅' if new_val == 'on' else 'معطل ❌'}**\n\n"
-                f"توزيع ذكي للرسائل عبر الحسابات:\n"
-                f"• الحد: 40 رسالة/ساعة و 10/دقيقة لكل حساب\n"
-                f"• يختار الحساب الأقل استخداماً تلقائياً\n\n"
-                f"→ يمنع حظر الحسابات ويقلل FloodWait!",
-                buttons=get_main_menu()
-            )
-
-        # 🆕 إعدادات التشفير المتقدمة
         elif data == 'advanced_enc_settings':
             kashida_i = get_setting('kashida_intensity', '0.3')
             swarm_s = get_setting('ghost_swarm_stages', '3')
@@ -6476,26 +6286,6 @@ async def main():
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
 
-        elif data == 'auto_join':
-            acc_count = len(user_clients)
-            join_interval = get_setting('join_interval', '30')
-            queue_count = len(join_queue)
-            queue_info = f"\n  📋 روابط في الطابور: {queue_count}" if queue_count > 0 else ""
-            await event.edit(
-                f"🚀 **الانضمام التلقائي**\n\n"
-                f"📤 أرسل الروابط مباشرة (يدعم مئات الروابط)\n"
-                f"🔗 الأنواع المدعومة:\n"
-                f"  • https://t.me/channel\n"
-                f"  • https://t.me/+invite\n"
-                f"  • https://t.me/joinchat/xxx\n"
-                f"  • @username\n"
-                f"\n📊 الإعدادات:\n"
-                f"  ⏱ الفاصل بين الروابط: {join_interval}ث\n"
-                f"  👥 حسابات متاحة: {acc_count}{queue_info}\n\n"
-                f"💡 أرسل الروابط الآن /cancel للإلغاء\n"
-                f"💡 الروابط تُحفظ في الطابور تلقائياً إذا كان هناك انضمام جاري"
-            )
-            set_setting('awaiting_auto_join', 'true')
         elif data == 'stop_joining':
             join_cancelled = True
             await event.edit("⏹ جاري إيقاف الانضمام...", buttons=get_main_menu())
@@ -6535,12 +6325,6 @@ async def main():
                         icon = "❌"
                     text += f"{icon} {group_name[:25]}\n   🔗 {link[:40]}\n   👤 {joined_by}\n\n"
                 await event.edit(text, buttons=get_join_reports_menu())
-        elif data == 'set_join_limit':
-            # تم إزالة حد الساعة - الحسابات تنظم بدون حد
-            await event.edit("✅ لا يوجد حد على عدد الانضمامات - الحسابات تنظم بلا قيود\nالفاصل الزمني فقط هو المحدد", buttons=get_join_settings_menu())
-        elif data == 'toggle_join_human_delay':
-            # تم إزالة التأخير البشري - فقط الفاصل الزمني
-            await event.edit("✅ التأخير البشري تمت إزالته\nيُستخدم فقط الفاصل الزمني المحدد بين الروابط", buttons=get_join_settings_menu())
         elif data == 'view_join_queue':
             queue_count = len(join_queue)
             if queue_count == 0:
@@ -6552,29 +6336,6 @@ async def main():
                 if queue_count > 20:
                     text += f"\n... و{queue_count - 20} رابط آخر"
                 await event.edit(text, buttons=get_join_settings_menu())
-
-        elif data == 'clean_db':
-            await event.edit(
-                "⚠️ **تنظيف قاعدة البيانات**\n\nسيتم حذف كل شيء ما عدا الحسابات\n\nهل أنت متأكد؟",
-                buttons=[[Button.inline("✅ نعم", b"confirm_clean")], [Button.inline("❌ إلغاء", b"back")]]
-            )
-        elif data == 'confirm_clean':
-            try:
-                saved = clean_database_keep_accounts()
-                set_setting('message_interval', '3')
-                set_setting('fast_post_delay', '3')
-                set_setting('join_interval', '30')
-                set_setting('join_per_account_limit', '15')
-                set_setting('join_human_delay', 'on')
-                set_setting('encryption', 'on')
-                set_setting('anti_detect', 'on')
-                set_setting('obfuscation_enabled', 'on')
-                set_setting('yaytext_messletters_obfuscation', 'on')
-                set_setting('super_encryption_enabled', 'off')
-                await event.edit(f"✅ تم التنظيف! ✅ تم حفظ {saved} حساب",
-                               buttons=[[Button.inline("🔄 تحديث", b"refresh_groups")]])
-            except Exception as e:
-                await event.edit(f"❌ فشل: {e}", buttons=[[Button.inline("🔙 رجوع", b"back")]])
 
     # معالج الرسائل النصية والوسائط
     @bot.on(events.NewMessage)

@@ -80,20 +80,34 @@ def has_spintax(text: str) -> bool:
 # 2️⃣ ZERO-WIDTH STEGANOGRAPHY - إخفاء نص داخل نص
 # ═══════════════════════════════════════════════════════════════
 
-# 🛡️ v3.0 - أبجدية البصمة "الآمنة على تشكيل العربية":
-#   الأحرف القديمة (200B/200C/200D) كانت تُزرع داخل الكلمات العربية
-#   فتقطع اتصال الحروف ويظهر النص متلخبطاً!
-#   الأحرف الجديدة لا تملك أي دلالة ربط/انفصال (Joining Type=None)
-#   → يمكن زرعها في أي مكان دون تأثير على شكل النص إطلاقاً
+# 🛡️ v4.1 - أبجدية البصمة المطورة (قناة Variation Selectors):
+#   ❌ الأبجدية v3.0 (2060/061C/2061/2062) حروف Cf غير واصلة حسب معيار
+#      Unicode (ArabicShaping.txt) - لو زُرعت وسط كلمة عربية تقطع اتصال
+#      الحروف في المحركات الصارمة (سبب تلبّط إضافي في وضع stego)!
+#   ✅ الأبجدية الجديدة VS17+ (E0100-E0103) فئتها Mn = Joining Transparent
+#      → لا تقطع الاتصال في أي محرك عرض، وغير مرئية 100%، وخارج قوائم
+#      التنظيف المعروفة (out-of-character وغيرها)
 # نظام 2-bit: 4 أحرف = 4 حالات = بتان لكل حرف
 FINGERPRINT_ALPHABET = [
-    '\u2060',  # 00 - Word Joiner (آمن تماماً)
-    '\u061C',  # 01 - Arabic Letter Mark (صُمم للعربية، غير مرئي)
-    '\u2061',  # 10 - Function Application (غير مرئي)
-    '\u2062',  # 11 - Invisible Times (غير مرئي)
+    '\U0001E0100',  # 00 - VS17
+    '\U0001E0101',  # 01 - VS18
+    '\U0001E0102',  # 10 - VS19
+    '\U0001E0103',  # 11 - VS20
 ]
 
-# الأبجدية القديمة (للترميز اليدوي القديم وفك ترميزه فقط)
+# 🔁 مجمع الحقن العشوائي للبصمة (النسخة الكاملة 240 حرف VS17+)
+# يُستخدم في inject_zw_fingerprint لزيادة الإنتروبيا ضد الإحصاء الكمي
+FINGERPRINT_POOL = [chr(c) for c in range(0xE0100, 0xE01F0)]
+
+# الأبجدية v3.0 القديمة (لفتح ترميز الرسائل القديمة فقط)
+LEGACY_FINGERPRINT_ALPHABET = [
+    '\u2060',  # 00 - Word Joiner
+    '\u061C',  # 01 - Arabic Letter Mark
+    '\u2061',  # 10 - Function Application
+    '\u2062',  # 11 - Invisible Times
+]
+
+# الأبجدية الأقدم (للترميز اليدوي القديم وفك ترميزه فقط)
 ZW_CHARS = [
     '\u200B',  # 00 - Zero Width Space
     '\u200C',  # 01 - Zero Width Non-Joiner
@@ -101,15 +115,18 @@ ZW_CHARS = [
     '\uFEFF',  # 11 - Zero Width No-Break Space
 ]
 
-# خريطة فك الترميز الموحدة (جديد + قديم)
+# خريطة فك الترميز الموحدة (جديد + قديم + أقدم)
 _DECODE_MAP = {}
 for _i, _c in enumerate(FINGERPRINT_ALPHABET):
     _DECODE_MAP[_c] = format(_i, '02b')
+for _i, _c in enumerate(LEGACY_FINGERPRINT_ALPHABET):
+    _DECODE_MAP.setdefault(_c, format(_i, '02b'))
 for _i, _c in enumerate(ZW_CHARS):
     _DECODE_MAP.setdefault(_c, format(_i, '02b'))
 
 # كل الأحرف الخفية المعروفة (للفحص)
-ALL_INVISIBLES = set(FINGERPRINT_ALPHABET) | set(ZW_CHARS)
+ALL_INVISIBLES = (set(FINGERPRINT_ALPHABET) | set(LEGACY_FINGERPRINT_ALPHABET)
+                  | set(ZW_CHARS))
 
 
 def _text_to_bits(text: str) -> str:
@@ -139,8 +156,10 @@ def inject_zw_fingerprint(text: str, density: float = 0.06) -> str:
        تُضاف أحرف غير مرئية فقط بين الحروف/الكلمات لتصبح كل رسالة
        ذات بصمة Unicode فريدة لا تستطيع بوتات الحماية مطابقتها برسائل سابقة.
 
-    🆕 v3.0: الأحرف المستخدمة من أبجدية FINGERPRINT_ALPHABET الآمنة:
-       لا تقطع اتصال الحروف العربية (عكس 200C القديم الذي كان يفسدها!)
+    🆕 v4.1: مجمع الحقن = قناة VS17+ كاملة (240 حرف):
+       فئة Mn → Joining Transparent → لا تقطع اتصال الحروف العربية أبداً
+       (عكس 2060/061C/2061/2062 القديمة التي كانت تقطعه في المحركات الصارمة،
+        وعكس 200C الأقدم التي كانت تفسدها في كل المحركات!)
 
     🛡️ الروابط والمعرفات (t.me/... / https://... / @username) محمية
        تماماً - لا تُحقن فيها أحرف كي تبقى قابلة للنقر والنسخ.
@@ -178,7 +197,7 @@ def inject_zw_fingerprint(text: str, density: float = 0.06) -> str:
             result.append(ch)
             # لا نضيف بعد مسافات أو أسطر مباشرة كي لا يتغير التنسيق
             if ch not in (' ', '\n', '\t') and random.random() < density:
-                result.append(random.choice(FINGERPRINT_ALPHABET))
+                result.append(random.choice(FINGERPRINT_POOL))
     return ''.join(result)
 
 
@@ -221,8 +240,9 @@ def zero_width_reveal(stego_text: str) -> Optional[str]:
     """
     استخراج النص المخفي من نص مشفر
 
-    🆕 v3.0: يفهم الأبجدية الجديدة الآمنة (2060/061C/2061/2062)
-       والأبجدية القديمة (200B/200C/200D/FEFF) للتوافق مع الرسائل القديمة
+    🆕 v4.1: يفهم الأبجدية الجديدة VS17+ (E0100-E0103)
+       والأبجدية القديمة (2060/061C/2061/2062) والأقدم (200B/200C/200D/FEFF)
+       للتوافق مع الرسائل القديمة
 
     Returns:
         النص السري أو None إذا لم يوجد شيء

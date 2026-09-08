@@ -43,12 +43,17 @@
    - spencermountain/out-of-character (طرف الخصم): قائمة الأحرف التي
      تعرفها أدوات التنظيف — قناتنا الجديدة خارج عملياً من هذه القوائم
 
-الطبقات (v4.0):
+الطبقات (v4.1):
 1. ghost_vs_channel  - حقن Variation Selectors في أي موضع (شفافة للتشكيل)
 2. cf_boundary       - حقن 2063/2064 فقط في مواضع حيادية للاتصال
                        (نهاية الكلمات / بعد الحروف غير الواصلة للأمام)
 3. keyword_boost     - كثافة مضاعفة داخل الكلمات المفتاحية الإعلانية
 4. salt              - بصمة VS فريدة لكل رسالة (كسر dedup/hash)
+5. sensitive_shield  - 🆕 v4.1 درع اليوزرات/الهواتف/الروابط: حقن VS بين
+                       كل حرفين من @username وأرقام الهواتف والروابط
+                       → regex بوتات الحماية لا يجدها أبداً
+6. sanitize v4.1     - 🆕 إصلاح تلوث أشكال العرض: الرسائل القديمة المتلخبطة
+                       (ﺍﻋﺬﺍﺭ) تُصلح تلقائياً عند إعادة النشر
 
 معطل نهائياً (كانت تغير رسم الكلمات):
 ✗ arabic_forms / Presentation Forms (تفكك الكلمات بصرياً!)
@@ -110,12 +115,14 @@ def apply_layer_protected(text: str, func, *args, **kwargs) -> str:
 # 🎯 قنوات التكويد الخفي (v4.0)
 # ═══════════════════════════════════════════════════════════════
 
-# القناة 1: Variation Selectors - 256 كودبونت - فئة Mn = شفافة للتشكيل
+# القناة 1: Variation Selectors - فئة Mn = شفافة للتشكيل
 # (مؤكد: codepoints.net/U+E0100 → Joining Type: Transparent)
-VS_POOL = (
-    [chr(c) for c in range(0xFE00, 0xFE10)] +      # VS1  - VS16
-    [chr(c) for c in range(0xE0100, 0xE01F0)]      # VS17 - VS256
-)
+# ⚠️ v4.1: استبعاد VS1-VS16 (FE00-FE0F) نهائياً!
+#   السبب: FE0F (VS16) له دلالة إيموجي - لو التحق بعد رقم أو رمز
+#   (مثل 1 + FE0F أو # + FE0F) قد يعرضه بعض الأجهزة بشكل إيموجي!
+#   VS17-VS256 (E0100-E01EF) = 240 حرف بلا أي دلالة عرض على الإطلاق
+#   → غير مرئية 100% في كل الأجهزة بلا استثناء
+VS_POOL = [chr(c) for c in range(0xE0100, 0xE01F0)]   # VS17 - VS256 (240 حرف)
 
 # القناة 2: أحرف Cf حدودية - توضع فقط في المواضع الحيادية للاتصال
 INVISIBLE_SHIELD_CHARS = [
@@ -132,16 +139,120 @@ FORBIDDEN_INVISIBLES = {
     '\uFEFF',                                 # الأبجدية القديمة
 }
 
+# نطاقات أشكال العرض العربية (Presentation Forms) - تلوث من نسخ رسائل
+# مشفرة بمحركات قديمة (مثل ﺍ ﻌ ﺬ ﻄ ﺏ) - تظهر الحروف متلخبطة ومفككة
+_PRESENTATION_FORMS_RE = re.compile(r'[\uFB50-\uFDFF\uFE70-\uFEFF]')
+
 
 def sanitize_invisible_chars(text: str) -> str:
     """
-    🧹 تنظيف الأحرف الخفية الخطرة/المتضاربة من نص المستخدم قبل المعالجة
-    يحذف مقطعات الاتصال (200B/200C/200D) وأحرف البصمة القديمة
-    (نصوص ملصوقة من مصادر أخرى قد تحتويها وتظهر متلخبطة أو مزدوجة البصمة)
+    🧹 تنظيف المُدخل قبل المعالجة:
+    1. حذف الأحرف الخفية الخطرة/المتضاربة (مقطعات الاتصال 200B/200C/200D
+       وأحرف البصمات القديمة) - نصوص ملصوقة قد تحتويها وتظهر متلخبطة
+    2. 🆕 v4.1 إصلاح تلوث أشكال العرض: تحويل ﺍﻋﺬﺍﺭ (حروف مفككة من
+       محرك قديم) إلى اعذار سليمة متصلة - يصلح الرسائل القديمة المتلخبطة
     """
     if not text:
         return text
-    return ''.join(ch for ch in text if ch not in FORBIDDEN_INVISIBLES)
+    cleaned = ''.join(ch for ch in text if ch not in FORBIDDEN_INVISIBLES)
+    # 🩹 إصلاح تلوث أشكال العرض (NFKC يعيدها للحروف الأصلية المتصلة)
+    if _PRESENTATION_FORMS_RE.search(cleaned):
+        cleaned = _PRESENTATION_FORMS_RE.sub(
+            lambda m: unicodedata.normalize('NFKC', m.group(0)), cleaned)
+    return cleaned
+
+
+# ═════════════════════════════════════════════════════════
+# 🎯 درع البيانات الحساسة v4.1 - أرقام هواتف + يوزرات + روابط
+# ═════════════════════════════════════════════════════════
+# المستخدم: "الأرقام الهواتف واليوزرات والروابط اريد حل لها عشان
+# بوتات الحماية ما تتعرف عليهن"
+#
+# الحل: حقن VS17+ بين كل حرفين من الرمز الحساس:
+#   ✅ النص الظاهر مطابق 100% (VS غير مرئية بلا أي تأثير)
+#   ✅ regex البوتات (@\w+ / \d{7,} / https?://\S+) لن تجد شيئاً
+#   ✅ لا تقطع اتصال الحروف (VS شفافة للتشكيل حسب معيار Unicode)
+
+SENSITIVE_TOKEN_RE = re.compile(
+    r'(https?://\S+'                       # http:// أو https://
+    r'|t\.me/\S+'                          # t.me/...
+    r'|wa\.me/\S+'                         # wa.me/...
+    r'|www\.[^\s]+'                        # www.example.com
+    r'|@[a-zA-Z0-9_]{4,}'                   # @username
+    r'|\+?[0-9][0-9\s\-()]{5,}[0-9]'       # أرقام غربية (هاتف)
+    r'|[\u0660-\u0669\u06F0-\u06F9][\u0660-\u0669\u06F0-\u06F9\s\-()]{5,}[\u0660-\u0669\u06F0-\u06F9])'  # أرقام عربية
+)
+
+# الأرقام (غربية وعربية) للتحقق من الحد الأدنى
+_DIGITS_RE = re.compile(r'[0-9\u0660-\u0669\u06F0-\u06F9]')
+
+
+def find_sensitive_spans(text: str):
+    """
+    مواضع الرموز الحساسة في النص [(بداية, نهاية)]
+    - يوزرات @username
+    - روابط http/https/t.me/wa.me/www
+    - أرقام هواتف (7+ رقم - غربي أو عربي)
+    """
+    spans = []
+    if not text:
+        return spans
+    for m in SENSITIVE_TOKEN_RE.finditer(text):
+        tok = m.group(0)
+        # فلترة الأرقام: هاتف حقيقي = 7 أرقام على الأقل
+        # (يستبعد التواريخ القصيرة والأسعار مثل 1500 أو 2026)
+        if _DIGITS_RE.match(tok) and '@' not in tok and '.' not in tok and '/' not in tok:
+            if len(_DIGITS_RE.findall(tok)) < 7:
+                continue
+        spans.append((m.start(), m.end()))
+    return spans
+
+
+def cloak_sensitive_tokens(text: str, density: float = 0.55) -> str:
+    """
+    🎯 الدرع الحساس: حقن VS17+ داخل الرموز الحساسة (يوزرات/أرقام/روابط)
+
+    قبل:  مرافق @ppppokl اتصل 0555123456
+    بعد:  نفس النص بالضبط للعين، لكن VS خفية متوزعة داخل كل رمز
+          → regex البوتات لا يجد @username ولا رقم هاتف ولا رابط
+
+    ✅ العين البشرية ترى نفس النص بالضبط (VS غير مرئية 100%)
+    ✅ بوتات الحماية تفشل في استخراج اليوزرات والأرقام والروابط
+    ⚖️ v4.1 كثافة 0.55 مع ضمانات: حرف VS واحد يكسر الـ regex كاملاً،
+       والتوزيع يبقي النسبة الإحصائية منخفضة ضد كشف الإحصاء الكمي
+    """
+    if not text:
+        return text
+    spans = find_sensitive_spans(text)
+    if not spans:
+        return text
+    result = []
+    last = 0
+    for s, e in spans:
+        result.append(text[last:s])
+        token = text[s:e]
+        tlen = len(token)
+        # مواضع القسمة الممكنة (بين الحروف)
+        gaps = list(range(len(token) - 1))
+        chosen = set()
+        # 🎯 ضمان 1: على الأقل حرفان خفيان في الرمز
+        if tlen >= 3 and gaps:
+            chosen.update(random.sample(gaps, min(2, len(gaps))))
+        # 🎯 ضمان 2: لا فجوة 3 أحرف متتالية بلا حرف خفي (توزيع متساوٍ)
+        for g in gaps:
+            if g % 3 == 1:
+                chosen.add(g)
+        # الباقي احتمالي
+        for g in gaps:
+            if g not in chosen and random.random() < density:
+                chosen.add(g)
+        for i, ch in enumerate(token):
+            result.append(ch)
+            if i in chosen:
+                result.append(random.choice(VS_POOL))
+        last = e
+    result.append(text[last:])
+    return ''.join(result)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -224,6 +335,7 @@ def _find_keyword_ranges(text: str):
 
 
 # كلمات تستهدفها بوتات الحماية في الإعلانات (تُموه بكثافة أعلى داخلها فقط)
+# 🆕 v4.1: أضيفت كلمات الإعذار الطبية وأسواق العمل الحر
 AD_KEYWORDS = [
     'اشترك', 'قناة', 'قناتنا', 'قنوات', 'عرض', 'عروض',
     'خصم', 'تخفيض', 'تخفيضات', 'مجاني', 'مجانا', 'رابط', 'بيع', 'شراء',
@@ -232,6 +344,10 @@ AD_KEYWORDS = [
     'subscribe', 'join', 'offer', 'offers', 'free', 'deal', 'deals',
     'price', 'contact', 'whatsapp', 'buy', 'sell', 'shop', 'store',
     'promo', 'discount', 'crypto', 'vip',
+    # 🆕 الإعذار الطبية ومشتقاتها
+    'اعذار', 'اعذرار', 'عذر', 'اعذار طبية', 'طبية', 'طبي', 'تقرير',
+    'صحتي', 'حرمان', 'حرمانية', 'دوام', 'انتقال', 'مرضي', 'مريض',
+    'تطبيق', 'مرافق', 'يومين', 'اسبوع', 'أسبوع',
 ]
 
 # ═══════════════════════════════════════════════════════════════
@@ -239,17 +355,19 @@ AD_KEYWORDS = [
 # ═══════════════════════════════════════════════════════════════
 
 def ghost_vs_inject(text: str, density: float = 0.20,
-                    keyword_boost: bool = True, max_consecutive: int = 2) -> str:
+                    keyword_boost: bool = True, max_consecutive: int = 2,
+                    guarantee_word_break: bool = True) -> str:
     """
-    👻 حقن Variation Selectors داخل النص - القناة الحديثة v4.0
+    👻 حقن Variation Selectors داخل النص - القناة الحديثة v4.1
 
     ✅ فئة Mn → Joining_Type = Transparent حسب معيار Unicode
        → اتصال الحروف العربية محفوظ 100% في كل محركات العرض
     ✅ يوضع في أي موضع حتى وسط الكلمة - لا يؤثر على الرسم أبداً
-    ✅ 256 كودبونت → يكسر المطابقة التامة والـ n-gram والإحصاء الكمي
+    ✅ 240 كودبونت → يكسر المطابقة التامة والـ n-gram والإحصاء الكمي
     ✅ لا يفصل الحرف عن تشكيله (حركة/شدّة تسبقه دائماً)
-    🎯 ضمان التجزئة: كل كلمة مفتاحية تحتوي حرفاً خفياً واحداً على الأقل
-       (إدخال قسري وليس احتمالياً) → مستحيل على بوتات المطابقة أن تجدها
+    🎯 🆕 v4.1 ضمان التجزئة الشامل: كل كلمة (3+ حروف) تحتوي حرفاً خفياً
+       واحداً مضموناً على الأقل (وليس كلمات الإعلانات فقط!) - لأن بوتات
+       الحماية تطابق أي قائمة كلمات، فالتجزئة يجب أن تشمل كل الكلمات
     """
     if not text or density <= 0:
         return text
@@ -264,6 +382,22 @@ def ghost_vs_inject(text: str, density: float = 0.20,
             # بين حرفين داخليين لا يلي أحدهما تشكيل حتى تتجزأ الكلمة فعلاً
             candidates = [
                 i for i in range(s, max(s, e - 1))
+                if not _is_combining_mark(chars[i])
+                and not _is_combining_mark(chars[i + 1])
+            ]
+            if candidates:
+                forced.add(random.choice(candidates))
+
+    # 🆕 v4.1: ضمان تجزئة كل كلمة (وليس كلمات الإعلانات فقط)
+    # أي كلمة ≥3 حروف بلا حرف خفي مضمون → نزرع واحداً بين حرفين آمنين
+    if guarantee_word_break:
+        for m in re.finditer(r'\S{3,}', text):
+            ws, we = m.span()
+            # الكلمات المفتاحية حصلت على إدخال قسري بالفعل
+            if any(ws <= f < we for f in forced):
+                continue
+            candidates = [
+                i for i in range(ws, we - 1)
                 if not _is_combining_mark(chars[i])
                 and not _is_combining_mark(chars[i + 1])
             ]
@@ -335,6 +469,53 @@ def cf_boundary_inject(text: str, density: float = 0.10) -> str:
             out.append(random.choice(INVISIBLE_SHIELD_CHARS))
 
     return ''.join(out)
+
+
+def ensure_word_breaks(text: str, skip_spans=None) -> str:
+    """
+    🎯 ضمان نهائي للتجزئة (v4.1): يتأكد أن كل كلمة (3+ حروف) تحتوي
+    حرفاً خفياً واحداً على الأقل حتى بعد الترقيق.
+
+    يُستدعى بعد _thin_invisibles لأن الترقيق قد يحذف الحرف المضمون
+    في كلمات غير مفتاحية → هنا نعيده فوراً.
+
+    skip_spans: نطاقات لا تُمس (الرموز الحساسة قبل cloak - يجب أن تبقى
+    نظيفة حتى يجدها cloak_sensitive_tokens لاحقاً)
+    """
+    if not text:
+        return text
+    skip = sorted(skip_spans or [])
+
+    def in_skip(pos: int) -> bool:
+        for s, e in skip:
+            if s <= pos < e:
+                return True
+        return False
+
+    chars = list(text)
+    insertions = []  # (موضع الإدراج, الحرف)
+    for m in re.finditer(r'\S{3,}', text):
+        ws, we = m.span()
+        if in_skip(ws) or in_skip(we - 1):
+            continue
+        seg = text[ws:we]
+        has_ghost = any(ch in _GHOST_CHARS for ch in seg)
+        if has_ghost:
+            continue
+        candidates = [
+            i for i in range(ws, we - 1)
+            if not _is_combining_mark(chars[i])
+            and not _is_combining_mark(chars[i + 1])
+        ]
+        if candidates:
+            pos = random.choice(candidates)
+            insertions.append((pos + 1, random.choice(VS_POOL)))
+    if not insertions:
+        return text
+    # الإدراج من النهاية للأمام حتى لا تتزحزح المواضع
+    for pos, ch in sorted(insertions, reverse=True):
+        chars.insert(pos, ch)
+    return ''.join(chars)
 
 
 # اسم متوافق مع الإصدارات السابقة (يستخدمه كود قديم/سكربتات)
@@ -508,8 +689,8 @@ class AdaptiveObfuscationEngine:
         'insane':     {'vs_density': 0.42, 'cf_density': 0.20},
     }
 
-    # طبقات v4.0 الفعلية
-    ACTIVE_LAYERS = ('ghost_vs_channel', 'cf_boundary', 'keyword_boost', 'salt')
+    # طبقات v4.1 الفعلية
+    ACTIVE_LAYERS = ('ghost_vs_channel', 'cf_boundary', 'keyword_boost', 'salt', 'sensitive_shield')
 
     # أسماء قديمة → الطبقة الجديدة المقابلة (توافق واجهة bot.py)
     LEGACY_ALIASES = {
@@ -567,6 +748,7 @@ class AdaptiveObfuscationEngine:
         """
         📏 حماية الطول: إن تجاوز النص ميزانية تيليجرام نحذف أحرفاً شبحية
         (النص الظاهر لا يُمس أبداً) حتى نرجع تحت الحد.
+        ملاحظة: يُستدعى قبل الدرع الحساس (cloak) في الدورة الفعلية.
         """
         if len(text) <= budget:
             return text
@@ -589,7 +771,7 @@ class AdaptiveObfuscationEngine:
         self.stats['total_messages'] += 1
         applied_layers = []
 
-        # 🧹 الخطوة 0: تنظيف الأحرف الخطرة من المُدخل
+        # 🧹 الخطوة 0: تنظيف الأحرف الخطرة + إصلاح تلوث أشكال العرض
         result = sanitize_invisible_chars(text)
 
         # 🛡️ حماية التكرار: نص مشفر مسبقاً؟ نظف الأحرف الشبحية أولاً
@@ -598,21 +780,51 @@ class AdaptiveObfuscationEngine:
             result = strip_ghost_chars(result)
             self.stats['double_encode_saved'] += 1
 
-        # 1️⃣ Ghost VS Channel - قناة VS الشفافة للتشكيل (الأساسية)
-        if self.enabled_layers['ghost_vs_channel'] and self.config['vs_density'] > 0:
-            result = apply_layer_protected(
-                result, ghost_vs_inject, self.config['vs_density'], True)
-            applied_layers.append('ghost_vs_channel')
+        # 🎯 الخطوة 0.5 (v4.1): تقسيم النص إلى مقاطع عادية ورموز حساسة
+        # (اليوزرات/الهواتف/الروابط) - الطبقات تُطبق على المقاطع العادية فقط
+        # ثم تُعاد الرموز الحساسة بتكويد VS بين كل حرفين (درع اليوزرات)
+        spans = find_sensitive_spans(result)
+        segments = []  # [(نص, حساس؟)]
+        last = 0
+        for s, e in spans:
+            if s > last:
+                segments.append((result[last:s], False))
+            segments.append((result[s:e], True))
+            last = e
+        if last < len(result):
+            segments.append((result[last:], False))
 
-        # 2️⃣ CF Boundary - أحرف حدودية آمنة (تنويع القنوات)
-        if self.enabled_layers['cf_boundary'] and self.config['cf_density'] > 0:
-            result = apply_layer_protected(
-                result, cf_boundary_inject, self.config['cf_density'])
+        vs_on = self.enabled_layers['ghost_vs_channel'] and self.config['vs_density'] > 0
+        cf_on = self.enabled_layers['cf_boundary'] and self.config['cf_density'] > 0
+
+        processed = []
+        for seg, is_sensitive in segments:
+            if is_sensitive:
+                processed.append(seg)  # الرمز الحساس يمر نظيفاً الآن - يُكوَّد في النهاية
+                continue
+            out = seg
+            # 1️⃣ Ghost VS Channel - قناة VS الشفافة للتشكيل (الأساسية)
+            if vs_on:
+                out = ghost_vs_inject(out, self.config['vs_density'], True)
+            # 2️⃣ CF Boundary - أحرف حدودية آمنة (تنويع القنوات)
+            if cf_on:
+                out = cf_boundary_inject(out, self.config['cf_density'])
+            processed.append(out)
+        if vs_on:
+            applied_layers.append('ghost_vs_channel')
+        if cf_on:
             applied_layers.append('cf_boundary')
+
+        result = ''.join(processed)
 
         # ✂️ ترقيق تلقائي - يبقي نسبة الأحرف الخفية تحت رادار الكشف الإحصائي
         # (مع حماية تجزئة الكلمات المفتاحية وبصمة النهاية)
-        result = _thin_invisibles(result, max_ratio=0.30)
+        result = _thin_invisibles(result, max_ratio=0.25)
+
+        # 🎯 ضمان نهائي للتجزئة: الترقيق قد يحذف حرفاً مضموناً → نعيده
+        # (نكتشف الرموز الحساسة على النص الحالي حتى تكون المواضع دقيقة،
+        #  ونمسها حتى تبقى نظيفة للدرع لاحقاً)
+        result = ensure_word_breaks(result, skip_spans=find_sensitive_spans(result))
 
         # 3️⃣ Keyword Boost - مطبق داخلياً في قناة VS (توثيق فقط هنا)
         if self.enabled_layers['keyword_boost']:
@@ -623,8 +835,14 @@ class AdaptiveObfuscationEngine:
             result = add_anti_similarity_salt(result)
             applied_layers.append('salt')
 
-        # 📏 حماية الطول
+        # 📏 حماية الطول (قبل الدرع الحساس - الدرع يضيف حروفاً قليلة فقط)
         result = self._fit_length(result)
+
+        # 🎯 الخطوة 5 (v4.1): درع اليوزرات والأرقام والروابط (بعد كل شيء
+        # حتى لا يلمسه الترقيق أو حماية الطول)
+        if spans:
+            result = cloak_sensitive_tokens(result)
+            applied_layers.append('sensitive_shield')
 
         self.stats['total_obfuscated'] += 1
 
@@ -648,15 +866,16 @@ class AdaptiveObfuscationEngine:
 
     def get_info(self) -> str:
         """معلومات المحرك كنص قابل للعرض"""
-        info = "👻 **Ghost Encoding Engine v4.0**\n\n"
+        info = "👻 **Ghost Encoding Engine v4.1**\n\n"
         info += f"⚡ **المستوى الحالي:** {self.profile}\n\n"
         info += "🎨 **الضمانة:** رسم كلماتك يبقى كما هو 100% في كل الأجهزة\n\n"
         info += "📊 **القنوات المفعّلة (كلها غير مرئية ولا تعدل كلماتك):**\n"
         layers_ar = {
-            'ghost_vs_channel': '1️⃣ قناة VS الشفافة (256 حرف خفي حديث)',
+            'ghost_vs_channel': '1️⃣ قناة VS الشفافة (240 حرف خفي حديث)',
             'cf_boundary': '2️⃣ قناة الحدود الآمنة (مواضع محسوبة)',
             'keyword_boost': '3️⃣ تعزيز الكلمات المفتاحية (تمويه جراحي)',
             'salt': '4️⃣ بصمة الأشباح (فريدة لكل رسالة)',
+            'sensitive_shield': '5️⃣ درع اليوزرات والأرقام والروابط 🎯',
             'arabic_forms': '⛔ أشكال العرض (معطلة - كانت تغير الرسم)',
             'nfd': '⛔ NFD (معطلة - كانت تفكك الحروف)',
             'tag_chars': '⛔ Tag Characters (معطلة - كانت تخفي حروفاً)',
