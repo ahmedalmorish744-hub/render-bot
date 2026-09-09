@@ -758,9 +758,17 @@ class AdaptiveObfuscationEngine:
             return text
         return ''.join(chars)
 
-    def obfuscate(self, text: str) -> Tuple[str, dict]:
+    def obfuscate(self, text: str, cloak_sensitive: bool = True) -> Tuple[str, dict]:
         """
         تطبيق Ghost Encoding على النص
+
+        Args:
+            text: النص الأصلي
+            cloak_sensitive: 🛡️ إذا False يتخطى درع حقن VS داخل الرموز
+                الحساسة (يوزرات/هواتف/روابط) وتخرج نظيفة - تستخدم عندما
+                يكون درع الروابط (link_guard) مفعلاً في bot.py لأنه يحوّلها
+                إلى أزرار ارتباط تشعبي قابلة للضغط (الحرف الخفي داخل
+                @username يكسر كشف mention في تيليجرام!)
 
         Returns:
             (النص المشفر, معلومات الطبقات المطبقة)
@@ -840,9 +848,13 @@ class AdaptiveObfuscationEngine:
 
         # 🎯 الخطوة 5 (v4.1): درع اليوزرات والأرقام والروابط (بعد كل شيء
         # حتى لا يلمسه الترقيق أو حماية الطول)
-        if spans:
+        # 🛡️ v4.2: يتخطى عندما يكون درع الروابط متولياً المهمة
+        # (الأزرار الارتباطية تحتاج رموزاً نظيفة ليجدها link_guard)
+        if spans and cloak_sensitive:
             result = cloak_sensitive_tokens(result)
             applied_layers.append('sensitive_shield')
+        elif spans:
+            applied_layers.append('sensitive_skip(link_guard)')
 
         self.stats['total_obfuscated'] += 1
 

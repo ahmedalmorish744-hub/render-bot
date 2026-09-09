@@ -694,9 +694,9 @@ def encrypt_text(text, group_id=None):
     return anti_detection.generate_ultimate_variation(result, group_id)
 
 
-def prepare_content_for_sending(raw_content, group_id=None):
+def _prepare_content_core(raw_content, group_id=None):
     """
-    تجهيز المحتوى قبل الإرسال - المسار الموحد v3.0
+    نواة تجهيز المحتوى (v4.2) - المسار الموحد لكل أنماط النشر
     (نفس المعالجة بالضبط للنشر العادي والسريع والمجدول والشبحي)
 
     الخطوات:
@@ -741,8 +741,12 @@ def prepare_content_for_sending(raw_content, group_id=None):
     if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
         profile = get_setting('adaptive_obfuscation_profile', 'medium')
         adaptive_engine.set_profile(profile)
-        result, info = adaptive_engine.obfuscate(raw_content)
-        logger.info(f"👻 Ghost Encoding v4.1: {info['layers']} (profile={profile})")
+        # 🛡️ v4.2: لو درع الروابط مفعّل نترك اليوزرات/الهواتف/الروابط نظيفة
+        # (سيحوّلها درع الروابط لأزرار ارتباط تشعبي قابلة للضغط -
+        #  الحرف الخفي داخل @username يكسر كشف mention في تيليجرام!)
+        lg_on = get_setting('link_guard_enabled', 'on') == 'on'
+        result, info = adaptive_engine.obfuscate(raw_content, cloak_sensitive=not lg_on)
+        logger.info(f"👻 Ghost Encoding v4.2: {info['layers']} (profile={profile})")
 
         # 🫥 الخطوة 2.5: وضع الإرسال فوق التكويد الشبحي
         # (البصمة الآن بقناة VS17+ الشفافة للتشكيل → تتكامل ولا تتضارب)
@@ -792,6 +796,68 @@ def prepare_content_for_sending(raw_content, group_id=None):
         varied = obfuscate_for_humans(varied)
     content = encrypt_text(varied, group_id)
     return content, False
+
+
+def _finalize_message(content, use_html):
+    """
+    🛡️ v4.2 المرحلة النهائية الموحدة - تُطبق على مخرجات كل المسارات:
+
+    1) 🛡 درع الروابط (الافتراضي: مفعّل):
+       اليوزرات/الهواتف/الروابط → أزرار ارتباط تشعبي قابلة للضغط
+       "@ppppokl"    يصبح زر [للطلب اضغط هنا] → يفتح t.me/ppppokl
+       "0777123456"  يصبح زر [للطلب اضغط هنا] → يفتح wa.me/967777123456
+       "t.me/xxxx"   يصبح زر [للطلب اضغط هنا] → يفتح الرابط نفسه
+       ✅ الضغط يعمل 100% (كيان TextUrl رسمي)
+       ✅ اليوزر/الرقم/الرابط يختفي نصاً → بوتات الحماية لا تلتقطه
+       ✅ الأسعار والتواريخ القصيرة تبقى نصاً عادياً (فلترة ذكية)
+
+    2) ✍️ تقوية العرض (اختياري): غامق/تحته خط - تنسيق مقصود أنيق
+
+    يُرجع: (النص النهائي, كيانات Telethon أو None)
+    """
+    if not content or use_html:
+        return content, None
+
+    entities = []
+    if get_setting('link_guard_enabled', 'on') == 'on':
+        try:
+            from link_guard import apply_link_guard, build_telethon_entities, DEFAULT_ANCHOR
+            anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
+            cc = get_setting('link_guard_country_code', '967')
+            content, link_ents = apply_link_guard(content, anchor=anchor, country_code=cc)
+            ents = build_telethon_entities(link_ents)
+            if ents:
+                entities.extend(ents)
+                logger.info(f"🛡 درع الروابط: {len(ents)} زر ارتباط تشعبي")
+        except Exception as e:
+            logger.debug(f"🛡 link_guard error: {e}")
+
+    # ✍️ تقوية العرض (غامق/تحته خط) فوق النص النهائي
+    style_ents = build_style_entities(content)
+    if style_ents:
+        entities.extend(style_ents)
+
+    return content, (entities or None)
+
+
+def prepare_content_for_sending(raw_content, group_id=None):
+    """
+    تجهيز المحتوى قبل الإرسال - الواجهة الموحدة v4.2
+    (نفس المعالجة بالضبط للنشر العادي والسريع والمجدول والشبحي)
+
+    الخطوات:
+    1. النواة: Spintax + Ghost Encoding + وضع الإرسال + التشفيرات
+    2. 🛡 درع الروابط: يوزرات/هواتف/روابط → أزرار ارتباط تشعبي
+    3. ✍️ تقوية العرض: غامق/تحته خط (اختياري)
+
+    🛡️ القاعدة الذهبية: النص الظاهر = نص المستخدم + أزرار التواصل فقط
+
+    يُرجع: (content, use_html, entities)
+        entities: قائمة كيانات Telethon (ارتباط تشعبي + تنسيق) أو None
+    """
+    content, use_html = _prepare_content_core(raw_content, group_id)
+    content, entities = _finalize_message(content, use_html)
+    return content, use_html, entities
 
 
 def build_style_entities(text):
@@ -4374,11 +4440,13 @@ def get_join_history(limit=30):
 # ═══════════════════════════════════════════════
 #  إرسال رسالة لمجموعة
 # ═══════════════════════════════════════════════
-async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False):
-    """إرسال رسالة لمجموعة مع دعم HTML للروابط المخفية"""
+async def send_message_to_group(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False, fmt_entities=None):
+    """إرسال رسالة لمجموعة مع دعم HTML للروابط المخفية + كيانات الارتباط التشعبي (v4.2)"""
     parse_mode = 'html' if use_html else None
-    # ✍️ تقوية العرض (غامق/تحته خط) - كيانات عرض فقط لا تعدل الأحرف
-    fmt_entities = None if use_html else build_style_entities(encrypted_content)
+    # 🛡️ v4.2: كيانات درع الروابط + تقوية العرض تأتي من prepare_content_for_sending
+    # (لو لم تُمرر - توافق خلفي - نحسب تقوية العرض فقط)
+    if fmt_entities is None and not use_html:
+        fmt_entities = build_style_entities(encrypted_content)
     try:
         if msg_type == 'text':
             await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
@@ -4468,6 +4536,7 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
             try:
                 new_content = None
                 use_html = False
+                new_ents = None
 
                 # الخيار 1: استخدام الإعلان التالي (أقوى ضد البوتات)
                 if all_messages and len(all_messages) > 1:
@@ -4477,12 +4546,12 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                         chosen = random.choice(other_msgs)
                         raw_content = chosen[1]
                         if raw_content:
-                            new_content, use_html = prepare_content_for_sending(raw_content, group_id)
+                            new_content, use_html, new_ents = prepare_content_for_sending(raw_content, group_id)
                             logger.info(f"👻 شبح: استبدال بإعلان مختلف مكوّد في {group_id}")
 
                 # الخيار 2: نفس الإعلان بتكويد جديد (نمط مختلف مضمون)
                 if not new_content and original_raw_content:
-                    new_content, use_html = prepare_content_for_sending(original_raw_content, group_id)
+                    new_content, use_html, new_ents = prepare_content_for_sending(original_raw_content, group_id)
                     logger.info(f"👻 شبح: إعادة تكويد نفس الإعلان بنمط مختلف في {group_id}")
 
                 # الخيار 3: نقطة فقط (fallback أخير - القاعدة الذهبية: لا نصوص وهمية)
@@ -4491,7 +4560,9 @@ async def ghost_post_worker(client, group_id, msg_id, original_content, lifetime
                     logger.info(f"👻 شبح: استبدال بنقطة محايدة في {group_id}")
 
                 parse_mode = 'html' if use_html else None
-                await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
+                # 🛡️ v4.2: تمرير كيانات درع الروابط حتى تبقى الأزرار قابلة للضغط بعد التعديل
+                await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode,
+                                          formatting_entities=new_ents if not use_html else None)
             except Exception as e:
                 logger.debug(f"👻 شبح: فشل التعديل ({e})")
     except Exception as e:
@@ -4515,6 +4586,7 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
         try:
             new_content = None
             use_html = False
+            new_ents = None
 
             # 🛡️ v3.0: يستخدم المسار الموحد prepare_content_for_sending
             # استخدام الإعلان التالي أو نفس الإعلان بتكويد مختلف
@@ -4524,14 +4596,15 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
                     chosen = random.choice(other_msgs)
                     raw = chosen[1]
                     if raw:
-                        new_content, use_html = prepare_content_for_sending(raw, group_id)
+                        new_content, use_html, new_ents = prepare_content_for_sending(raw, group_id)
             elif original_raw_content:
-                new_content, use_html = prepare_content_for_sending(original_raw_content, group_id)
+                new_content, use_html, new_ents = prepare_content_for_sending(original_raw_content, group_id)
 
             if not new_content:
                 # القاعدة الذهبية: لا نصوص وهمية أبداً - نقطة فقط
                 new_content = '.'
                 use_html = False
+                new_ents = None
             
             # 🆕 استخدام edit_hide لإخفاء علامة "معدّل"
             try:
@@ -4542,13 +4615,16 @@ async def ghost_swarm_worker(client, group_id, msg_id, original_content, stages=
                         peer=int(group_id),
                         id=msg_id,
                         message=new_content,
-                        no_webpage=True
+                        no_webpage=True,
+                        entities=new_ents if not use_html else None
                     ))
                 else:
-                    await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
+                    await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode,
+                                              formatting_entities=new_ents if not use_html else None)
             except:
                 parse_mode = 'html' if use_html else None
-                await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode)
+                await client.edit_message(int(group_id), msg_id, new_content, parse_mode=parse_mode,
+                                          formatting_entities=new_ents if not use_html else None)
             
             logger.info(f"🐝 Swarm مرحلة {stage+1}/{stages} في {group_id}")
         except Exception as e:
@@ -4628,10 +4704,11 @@ async def fast_post_to_all_groups(messages):
                 # 🛡️ v3.0: Spintax يُحل داخل prepare_content_for_sending موحداً
                 use_html = False
                 if content:
-                    # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
-                    encrypted_content, use_html = prepare_content_for_sending(content, gid)
+                    # 🆕 نظام التشفير الموحد + 🛡 درع الروابط v4.2 (يُرجع كيانات الأزرار)
+                    encrypted_content, use_html, fmt_ents = prepare_content_for_sending(content, gid)
                 else:
                     encrypted_content = ""
+                    fmt_ents = None
 
                 try:
                     # 🆕 استخدام Human Delay بدل التأخير الثابت
@@ -4643,7 +4720,7 @@ async def fast_post_to_all_groups(messages):
                         break
                     
                     # إرسال الرسالة
-                    sent_msg = await _send_and_get_message(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                    sent_msg = await _send_and_get_message(client, gid, encrypted_content, msg_type, media_path, media_data, use_html, fmt_entities=fmt_ents)
                     success_count += 1
                     log_posting(acc_id, int(gid), msg_id, 'success')
                     logger.info(f"⚡ سريع ✅ {gname[:30]} (حساب {acc_id}) ({success_count}/{total_posts})")
@@ -4696,11 +4773,12 @@ async def fast_post_to_all_groups(messages):
 
     return success_count, fail_count, total_posts
 
-async def _send_and_get_message(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False):
-    """إرسال رسالة وإرجاع الرسالة المرسلة (للنشر الشبحي)"""
+async def _send_and_get_message(client, group_id, encrypted_content, msg_type, media_path, media_data, use_html=False, fmt_entities=None):
+    """إرسال رسالة وإرجاع الرسالة المرسلة (للنشر الشبحي) + كيانات v4.2"""
     parse_mode = 'html' if use_html else None
-    # ✍️ تقوية العرض (غامق/تحته خط) - كيانات عرض فقط لا تعدل الأحرف
-    fmt_entities = None if use_html else build_style_entities(encrypted_content)
+    # 🛡️ v4.2: كيانات درع الروابط + تقوية العرض تأتي من prepare_content_for_sending
+    if fmt_entities is None and not use_html:
+        fmt_entities = build_style_entities(encrypted_content)
     try:
         if msg_type == 'text':
             return await client.send_message(int(group_id), encrypted_content, parse_mode=parse_mode, formatting_entities=fmt_entities)
@@ -4783,10 +4861,11 @@ async def post_to_all_groups(message):
 
             use_html = False
             if content:
-                # 🆕 نظام التشفير الموحد (يدعم التشفير الخارق)
-                encrypted_content, use_html = prepare_content_for_sending(content, gid)
+                # 🆕 نظام التشفير الموحد + 🛡 درع الروابط v4.2 (يُرجع كيانات الأزرار)
+                encrypted_content, use_html, fmt_ents = prepare_content_for_sending(content, gid)
             else:
                 encrypted_content = ""
+                fmt_ents = None
 
             try:
                 if use_jitter:
@@ -4800,7 +4879,7 @@ async def post_to_all_groups(message):
                     await asyncio.sleep(1)
                 if not is_posting_active:
                     break
-                await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html, fmt_entities=fmt_ents)
                 success_count += 1
                 log_posting(acc_id, int(gid), msg_id, 'success')
                 logger.info(f"✅ [{msg_type}] {gname[:30]} (حساب {acc_id})")
@@ -4811,7 +4890,7 @@ async def post_to_all_groups(message):
                     await asyncio.sleep(wait_time + 1)
                     if not is_posting_active:
                         break
-                    await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html)
+                    await send_message_to_group(client, gid, encrypted_content, msg_type, media_path, media_data, use_html, fmt_entities=fmt_ents)
                     success_count += 1
                     log_posting(acc_id, int(gid), msg_id, 'success (retry after flood)')
                 except Exception as retry_e:
@@ -5005,6 +5084,8 @@ def get_main_menu():
     send_mode = get_setting('send_mode', 'normal')
     mode_info = SEND_MODES.get(send_mode, SEND_MODES['normal'])
     mode_btn = f"{mode_info['icon']} {mode_info['name']}"
+    # 🛡 درع الروابط
+    lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
     return [
         # ── النشر ──
         [Button.inline("🚀 بدء النشر", b"start_posting"),
@@ -5022,6 +5103,8 @@ def get_main_menu():
          Button.inline(f"{ft_icon} {ft_name}", b"fancy_text_menu")],
         [Button.inline("🛡️ حماية متقدمة", b"advanced_enc_settings"),
          Button.inline("🧪 اختبار التشفير", b"enc_test")],
+        [Button.inline(f"🛡 درع الروابط {lg_status}", b"link_guard_menu"),
+         Button.inline("✍️ تقوية العرض", b"style_boost_menu")],
         # ── الانضمام التلقائي (شغال دائماً - فقط إيقاف وتقارير) ──
         *([[Button.inline("⏹ إيقاف الانضمام", b"stop_joining")]] if is_joining else []),
         [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports"),
@@ -5057,15 +5140,64 @@ def get_adaptive_menu():
     # ✍️ تقوية العرض
     style_boost = get_setting('text_style_boost', 'off')
     style_labels = {'off': 'عادي', 'bold': 'غامق', 'underline': 'تحته خط', 'both': 'غامق + خط'}
+    # 🛡 درع الروابط
+    lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
     return [
         [Button.inline(f"🔬 تفعيل المحرك {ao_status}", b"toggle_adaptive"),
          Button.inline(f"{profile_emoji} القوة: {profile}", b"adaptive_profile")],
         [Button.inline("📊 حالة الطبقات", b"adaptive_layers"),
          Button.inline("🧪 اختبار المحرك", b"adaptive_test")],
+        [Button.inline(f"🛡 درع الروابط {lg_status}", b"link_guard_menu")],
         [Button.inline(f"✍️ تقوية العرض: {style_labels.get(style_boost, 'عادي')}", b"style_boost_menu")],
         [Button.inline("ℹ️ معلومات المحرك", b"adaptive_info")],
         [Button.inline("🔙 رجوع", b"back")],
     ]
+
+
+def get_link_guard_menu():
+    """🛡 قائمة درع الروابط v4.2 - الارتباط التشعبي الذكي"""
+    from link_guard import ANCHOR_PRESETS, DEFAULT_ANCHOR
+    lg_status = "✅ مفعّل" if get_setting('link_guard_enabled', 'on') == 'on' else "❌ معطل"
+    anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
+    cc = get_setting('link_guard_country_code', '967')
+    return [
+        [Button.inline(f"🛡 تفعيل الدرع: {lg_status}", b"toggle_link_guard")],
+        [Button.inline(f"💬 نص الزر: {anchor[:20]}", b"lg_anchor_menu")],
+        [Button.inline(f"🌍 كود الدولة للهواتف: {cc}", b"lg_cc_menu")],
+        [Button.inline("🧪 اختبار الدرع (معاينة تفاعلية)", b"lg_test")],
+        [Button.inline("🔙 رجوع", b"adaptive_menu")],
+    ]
+
+
+def get_lg_anchor_menu():
+    """قائمة اختيار نص زر الارتباط"""
+    from link_guard import ANCHOR_PRESETS, DEFAULT_ANCHOR
+    current = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
+    buttons = []
+    for i, preset in enumerate(ANCHOR_PRESETS):
+        marker = " ✅" if preset == current else ""
+        buttons.append([Button.inline(f"💬 {preset}{marker}", f"lg_anchor_{i}".encode())])
+    buttons.append([Button.inline("✍️ كتابة نص مخصص", b"lg_anchor_custom")])
+    buttons.append([Button.inline("🔙 رجوع", b"link_guard_menu")])
+    return buttons
+
+
+def get_lg_cc_menu():
+    """قائمة كود الدولة لأرقام الهواتف (wa.me)"""
+    from link_guard import COUNTRY_PRESETS
+    current = get_setting('link_guard_country_code', '967')
+    buttons = []
+    row = []
+    for code, name in COUNTRY_PRESETS:
+        marker = " ✅" if code == current else ""
+        row.append(Button.inline(f"{name} {code}{marker}", f"lg_cc_{code}".encode()))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([Button.inline("🔙 رجوع", b"link_guard_menu")])
+    return buttons
 
 def get_scheduling_menu():
     pending = len(get_pending_scheduled_posts())
@@ -5156,11 +5288,11 @@ async def main():
             "• 📝 normal - النص كما هو تماماً\n"
             "• 🔄 spintax - حل {خيار1|خيار2} التي تكتبها أنت\n"
             "• 🫥 stego - نصك ظاهر 100% + بصمة خفية فريدة لكل رسالة\n\n"
-            "👻 **Ghost Encoding v4.1 - التكويد الحديث:**\n"
+            "👻 **Ghost Encoding v4.2 - التكويد الحديث:**\n"
             "• رسم كلماتك يبقى كما هو 100% في كل الأجهزة (بدون أشكال عرض!)\n"
             "• تجزئة خفية لكل كلمة - بوتات الحماية لا تطابق شيئاً\n"
-            "• 🎯 درع اليوزرات والأرقام والروابط: @يوزر + الهواتف + الروابط\n"
-            "  تُكوَّد بحروف غير مرئية → البوتات لا تكتشفها أبداً\n"
+            "• 🛡 درع الروابط: يوزرك ورقمك ورابطك يتحول لزر (للطلب اضغط هنا)\n"
+            "  قابل للضغط يفتح تيليجرام/وتساب - والبوتات لا ترى شيئاً\n"
             "• ✍️ تقوية العرض (غامق/تحته خط) من قائمة المحرك\n\n"
             "🐝 **أنظمة متقدمة:**\n"
             "• ⏱️ Human Delay | ⚖️ Load Balancer\n\n"
@@ -5271,22 +5403,33 @@ async def main():
             return
         # 🛡️ المعاينة الحقيقية: نفس المسار الموحد المستخدم فعلياً في النشر
         # (القديم كان يستخدم خط أنابيب قديم لا يعكس ما يُنشر!)
-        real_output, use_html = prepare_content_for_sending(text)
+        real_output, use_html, real_ents = prepare_content_for_sending(text)
         profile = get_setting('adaptive_obfuscation_profile', 'medium')
         ao_on = get_setting('adaptive_obfuscation_enabled', 'on') == 'on'
         send_mode = get_setting('send_mode', 'normal')
-        shield_note = "🎯 درع اليوزرات والأرقام والروابط: مفعّل\n" if ao_on else ""
+        lg_on = get_setting('link_guard_enabled', 'on') == 'on'
+        lg_count = sum(1 for e in (real_ents or [])
+                       if type(e).__name__ == 'MessageEntityTextUrl')
+        shield_note = ("🎯 درع الروابط: مفعّل"
+                       + (f" ({lg_count} زر ارتباط تشعبي)" if lg_count else "") + "\n") if lg_on else ""
         style_boost = get_setting('text_style_boost', 'off')
         style_note = f"✍️ تقوية العرض: {style_boost}\n" if style_boost != 'off' else ""
         await event.respond(
             f"📝 **النص الأصلي:**\n{text}\n\n"
-            f"👻 **كما سيُنشر فعلياً** (Ghost Encoding v4.1، مستوى {profile}):\n{real_output}\n\n"
             f"📊 **الحالة:**\n"
             f"• 👻 Ghost Encoding: {'✅ مفعّل' if ao_on else '❌ معطل'} (مستوى {profile})\n"
             f"{shield_note}{style_note}"
             f"• 🎛 وضع الإرسال: {send_mode}\n"
             f"💡 النص يبدو متطابقاً بصرياً 100% - الفرق فقط في الأحرف غير المرئية\n"
-            f"   التي تكسر مطابقة بوتات الحماية وتخفي يوزراتك وأرقامك وروابطك!\n\n"
+            f"   التي تكسر مطابقة بوتات الحماية، ويوزراتك وأرقامك أصبحت أزراراً\n"
+            f"   ارتباط تشعبي قابلة للضغط لا يراها البوتات!\n\n"
+            f"👇 **هذه نسخة طبق الأصل مما سيُنشر - جرب الضغط على الأزرار:**",
+            parse_mode='md'
+        )
+        # 🛡️ v4.2: الرسالة الثانية = نسخة مطابقة 100% للمنشور (بنفس الكيانات
+        # والإزاحات الأصلية) - اليوزر/الهاتف يظهران كأزرار قابلة للضغط فعلياً
+        await event.respond(real_output, formatting_entities=real_ents)
+        await event.respond(
             f"جرّب أيضاً: /encrypt_test <text> لعرض كل المستويات الأربعة"
         )
 
@@ -5803,17 +5946,20 @@ async def main():
             await event.edit(f"⚡ **مستوى القوة تغيّر**\n\n{descriptions[new_profile]}", buttons=get_adaptive_menu())
 
         elif data == 'adaptive_layers':
-            layers_info = "👻 **قنوات Ghost Encoding v4.1**\n\n"
+            layers_info = "👻 **قنوات Ghost Encoding v4.2**\n\n"
             layers_ar = {
                 'ghost_vs_channel': '1️⃣ قناة VS الشفافة (240 حرف خفي حديث)',
                 'cf_boundary': '2️⃣ قناة الحدود الآمنة (مواضع محسوبة)',
                 'keyword_boost': '3️⃣ تعزيز الكلمات المفتاحية',
                 'salt': '4️⃣ بصمة الأشباح (فريدة لكل رسالة)',
-                'sensitive_shield': '🎯 درع اليوزرات والأرقام والروابط (v4.1)',
+                'sensitive_shield': '🎯 حقن خفي داخل اليوزرات (احتياطي - درع الروابط أفضل)',
                 'arabic_forms': '⛔ أشكال العرض (معطلة - كانت تغير الرسم)',
                 'nfd': '⛔ NFD (معطلة - كانت تفكك الحروف)',
                 'tag_chars': '⛔ Tag Characters (معطلة - كانت تخفي الحروف)',
             }
+            lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
+            layers_info += f"🛡 درع الروابط (أزرار ارتباط تشعبي): {lg_status}\n"
+            layers_info += "   مفعّل = يوزراتك وأرقامك أزرار قابلة للضغط\n"
             for key, name in layers_ar.items():
                 status = "✅" if adaptive_engine.get_layer_status(key) else "❌"
                 layers_info += f"  {status} {name}\n"
@@ -5868,16 +6014,135 @@ async def main():
                     "🔍 **معاينة حية** (نص مكوَّد فعلياً كما سيُنشر في المجموعات):\n",
                     buttons=[[Button.inline("🔙 رجوع", b"adaptive_menu")]]
                 )
-                # معاينة حية: نص حقيقي مكوَّد + تنسيق العرض المختار
+                # معاينة حية: المسار الكامل v4.2 (Ghost + درع الروابط + التنسيق)
                 sample = "✅اعذار طبية تطبيق صحتي\n✅مرافق @ppppokl اتصل 0555123456"
-                encoded, _ = adaptive_engine.obfuscate(sample)
-                ents = build_style_entities(encoded)
+                encoded, _, ents = prepare_content_for_sending(sample)
                 try:
                     await event.respond(encoded, formatting_entities=ents)
                 except Exception:
                     await event.respond(sample)
             else:
                 await event.answer("خيار غير معروف", alert=True)
+
+        # ═══════════════════════════════════════════════════════════
+        #  🛡 درع الروابط v4.2 - الارتباط التشعبي الذكي (يوزر/هاتف/رابط → زر)
+        # ═══════════════════════════════════════════════════════════
+
+        elif data == 'link_guard_menu':
+            from link_guard import DEFAULT_ANCHOR
+            anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
+            cc = get_setting('link_guard_country_code', '967')
+            lg_status = "✅ مفعّل" if get_setting('link_guard_enabled', 'on') == 'on' else "❌ معطل"
+            await event.edit(
+                "🛡 **درع الروابط - الارتباط التشعبي الذكي v4.2**\n\n"
+                "📌 **المشكلة التي يحلها:**\n"
+                "• الحروف الخفية داخل @اليوزر كانت تكسر الضغط عليه\n"
+                "• بوتات الحماية تتتبع اليوزرات والأرقام والروابط\n\n"
+                "✨ **الحل:** يحوّل الدرع تلقائياً:\n"
+                f"• @اليوزر → زر [{anchor[:15]}] يفتح t.me/اليوزر\n"
+                f"• رقم الهاتف/وتس → زر [{anchor[:15]}] يفتح wa.me (كود الدولة {cc})\n"
+                f"• الرابط → زر [{anchor[:15]}] يفتح الرابط\n\n"
+                "✅ الضغط يعمل 100% (كيان رسمي في تيليجرام)\n"
+                "✅ اليوزر/الرقم/الرابط يختفي نصاً → البوتات لا تلتقط شيئاً\n"
+                "✅ الأسعار والتواريخ القصيرة تبقى نصاً (فلترة ذكية)\n"
+                "✅ باقي النص يبقى مشفراً بـ Ghost Encoding كالمعتاد",
+                buttons=get_link_guard_menu()
+            )
+
+        elif data == 'toggle_link_guard':
+            current = get_setting('link_guard_enabled', 'on')
+            new_val = 'off' if current == 'on' else 'on'
+            set_setting('link_guard_enabled', new_val)
+            status = "مفعّل ✅" if new_val == 'on' else "معطل ❌"
+            await event.answer(f"درع الروابط: {status}")
+            await event.edit(
+                f"🛡 **درع الروابط: {status}**\n\n"
+                + ("✅ اليوزرات/الهواتف/الروابط ستتحول لأزرار ارتباط تشعبي قابلة للضغط\n"
+                   "   في كل الرسائل المنشورة (فورية وسريعة ومجدولة وشبحية)"
+                   if new_val == 'on' else
+                   "⚠️ عادت المعالجة لوضع v4.1: حقن أحرف خفية داخل اليوزر\n"
+                   "   (مخفي من البوتات لكن الضغط على اليوزر لن يعمل!)"),
+                buttons=get_link_guard_menu()
+            )
+
+        elif data == 'lg_anchor_menu':
+            await event.edit(
+                "💬 **نص زر الارتباط التشعبي**\n\n"
+                "هذا النص سيحل محل @اليوزر/رقم الهاتف/الرابط في الإعلان\n"
+                "وعند ضغطه ينقل القارئ للوجهة (تيليجرام/واتساب/الرابط)\n\n"
+                "⚠️ لا تستخدم روابط أو أرقاماً في النص نفسه",
+                buttons=get_lg_anchor_menu()
+            )
+
+        elif data == 'lg_anchor_custom':
+            await event.edit(
+                "✍️ **أرسل نص الزر المخصص الآن**\n\n"
+                "مثال: `اطلب الآن مجاناً`\n\n"
+                "⚠️ نص قصير وواضح - بدون روابط أو أرقام\n"
+                "/cancel للإلغاء"
+            )
+            set_setting('awaiting_lg_anchor', 'true')
+
+        elif data.startswith('lg_anchor_'):
+            try:
+                idx = int(data.replace('lg_anchor_', '', 1))
+                from link_guard import ANCHOR_PRESETS
+                if 0 <= idx < len(ANCHOR_PRESETS):
+                    set_setting('link_guard_anchor', ANCHOR_PRESETS[idx])
+                    await event.answer(f"✅ نص الزر: {ANCHOR_PRESETS[idx]}")
+                    await event.edit(
+                        f"✅ **تم ضبط نص الزر:** {ANCHOR_PRESETS[idx]}",
+                        buttons=get_lg_anchor_menu()
+                    )
+            except ValueError:
+                pass
+
+        elif data == 'lg_cc_menu':
+            await event.edit(
+                "🌍 **كود الدولة لأرقام الهواتف**\n\n"
+                "عند تحويل رقم هاتف محلي (مثل 0777123456) لزر وتساب،\n"
+                "يُستخدم هذا الكود لبناء الرابط الدولي wa.me\n\n"
+                "اختر بلدك:",
+                buttons=get_lg_cc_menu()
+            )
+
+        elif data.startswith('lg_cc_'):
+            code = data.replace('lg_cc_', '', 1)
+            if code.isdigit() and 1 <= len(code) <= 4:
+                set_setting('link_guard_country_code', code)
+                await event.answer(f"كود الدولة: {code}")
+                await event.edit(
+                    f"✅ **تم ضبط كود الدولة: +{code}**\n\n"
+                    "أرقام الهواتف المحلية ستفتح واتساب بالصيغة الدولية الصحيحة",
+                    buttons=get_lg_cc_menu()
+                )
+
+        elif data == 'lg_test':
+            from link_guard import DEFAULT_ANCHOR, analyze as lg_analyze
+            anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
+            cc = get_setting('link_guard_country_code', '967')
+            # مثال المستخدم الفعلي + رقم هاتف
+            sample = ("✅اعذار طبية تطبيق صحتي\n"
+                      "✅يوم /يومين /اسبوع\n"
+                      "✅تقرير طبي\n"
+                      "✅مرافق @ppppokl اتصل 0777123456")
+            targets = lg_analyze(sample, country_code=cc)
+            msg = "🧪 **اختبار درع الروابط**\n\n📝 **الإعلان الأصلي:**\n"
+            msg += sample + "\n\n🔄 **التحويلات:**\n"
+            for tok, kind, url in targets:
+                kind_ar = {'mention': '👤 يوزر', 'phone': '📱 هاتف/وتس', 'url': '🔗 رابط'}.get(kind, kind)
+                msg += f"• {kind_ar} `{tok[:20]}` → الزر يفتح: `{url[:40]}`\n"
+            if not targets:
+                msg += "• لم يُعثر على يوزرات أو أرقام أو روابط في النص\n"
+            msg += ("\n👇 **هذه نسخة مطابقة لما سيُنشر - اضغط على الزر وسترى أنه يعمل:**")
+            await event.edit(msg, parse_mode='md',
+                             buttons=[[Button.inline("🔙 رجوع", b"link_guard_menu")]])
+            # النسخة الحية: نفس مسار النشر بالضبط (Ghost + الدرع + كيانات الأزرار)
+            out, _, ents = prepare_content_for_sending(sample)
+            try:
+                await event.respond(out, formatting_entities=ents)
+            except Exception:
+                await event.respond(out)
 
         # ═══════════════════════════════════════════════════════════
         #  ✨ Fancy Text - محرك الأنماط النصية الخارق (26 نمط)
@@ -6348,6 +6613,7 @@ async def main():
                        'awaiting_msg_interval', 'awaiting_join_interval',
                        'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
                        'awaiting_schedule', 'awaiting_schedule_delete',
+                       'awaiting_lg_anchor',
                        'awaiting_kashida_intensity', 'awaiting_swarm_stages',
                        'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max']:
                 set_setting(key, '')
@@ -6617,6 +6883,34 @@ async def main():
                 await event.respond("❌ أرسل رقماً صحيحاً", buttons=get_main_menu())
             return
 
+        # 🛡 v4.2: نص زر الارتباط التشعبي المخصص
+        if get_setting('awaiting_lg_anchor') == 'true':
+            set_setting('awaiting_lg_anchor', '')
+            custom = event.raw_text.strip()
+            if not custom or custom.startswith('/'):
+                await event.respond("❌ تم إلغاء ضبط النص", buttons=get_main_menu())
+                return
+            # حماية: النص يجب ألا يحوي روابط أو يوزرات (تصادم مع الدرع نفسه)
+            if re.search(r'https?://|t\.me/|wa\.me/|www\.|@[a-zA-Z0-9_]{4,}', custom):
+                await event.respond(
+                    "❌ لا يمكن استخدام روابط أو يوزرات كنص للزر\n\n"
+                    "⚠️ لو كان النص يحوي يوزراً أو رابطاً فسيحوله الدرع مجدداً ويدخل في حلقة!\n"
+                    "أعد المحاولة بنص عربي عادي مثل: للطلب اضغط هنا",
+                    buttons=get_main_menu())
+                return
+            if len(custom) > 40:
+                custom = custom[:40]
+            from link_guard import ANCHOR_PRESETS
+            set_setting('link_guard_anchor', custom)
+            if custom not in ANCHOR_PRESETS:
+                ANCHOR_PRESETS.append(custom)
+            await event.respond(
+                f"✅ **تم ضبط نص الزر:** {custom}\n\n"
+                "كل يوزر/هاتف/رابط في إعلاناتك سيظهر بهذا النص\n"
+                "والضغط عليه ينقل القارئ للوجهة الصحيحة",
+                buttons=get_main_menu())
+            return
+
         # 🆕 كثافة الكشيدة
         if get_setting('awaiting_kashida_intensity') == 'true':
             set_setting('awaiting_kashida_intensity', '')
@@ -6863,7 +7157,9 @@ async def main():
             'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_slow_join',
             'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_msg_interval',
             'awaiting_join_interval', 'awaiting_fast_delay', 'awaiting_add_blacklist',
-            'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete'
+            'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete',
+            'awaiting_lg_anchor', 'awaiting_kashida_intensity', 'awaiting_swarm_stages',
+            'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max'
         ])
         if not any_awaiting and user_clients and not is_joining_active:
             auto_detected_links = extract_telegram_links(event.raw_text)
