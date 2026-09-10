@@ -224,7 +224,18 @@ async def send_with_backoff(client, chat_id, message, max_retries=5, **kwargs):
 # ═══════════════════════════════════════════════
 #  قاعدة البيانات
 # ═══════════════════════════════════════════════
-DB_PATH = os.environ.get('DB_PATH', 'bot_database.db')
+# ☁️ v4.3: قرص دائم إذا توفر (Render paid disk) - يحل مشكلة ضياع الجلسات جذرياً
+if os.environ.get('DB_PATH'):
+    DB_PATH = os.environ['DB_PATH']
+elif os.path.isdir('/var/data'):
+    try:
+        with open('/var/data/.write_test', 'w') as _t:
+            _t.write('ok')
+        DB_PATH = '/var/data/bot_database.db'
+    except Exception:
+        DB_PATH = 'bot_database.db'
+else:
+    DB_PATH = 'bot_database.db'
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -396,6 +407,14 @@ def set_setting(key, value):
     c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
     conn.close()
+
+def vault_mark_dirty():
+    """☁️ v4.3: تعليم الحاجة لنسخة سحابية جديدة بعد تغيير في الحسابات/الرسائل"""
+    try:
+        import session_vault
+        session_vault.mark_dirty()
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════
 #  Blacklist helper functions
@@ -741,11 +760,10 @@ def _prepare_content_core(raw_content, group_id=None):
     if get_setting('adaptive_obfuscation_enabled', 'on') == 'on':
         profile = get_setting('adaptive_obfuscation_profile', 'medium')
         adaptive_engine.set_profile(profile)
-        # 🛡️ v4.2: لو درع الروابط مفعّل نترك اليوزرات/الهواتف/الروابط نظيفة
-        # (سيحوّلها درع الروابط لأزرار ارتباط تشعبي قابلة للضغط -
-        #  الحرف الخفي داخل @username يكسر كشف mention في تيليجرام!)
-        lg_on = get_setting('link_guard_enabled', 'on') == 'on'
-        result, info = adaptive_engine.obfuscate(raw_content, cloak_sensitive=not lg_on)
+        # 🛡️ v4.3: الرموز الحساسة (@يوزر/هاتف/رابط) لا تُحقن بأحرف خفية أبداً
+        # الحرف الخفي داخل @username يكسر كشف mention → "اليوزر ما ينضغط"
+        # الإخفاء يتم فقط عبر أزرار ارتباط تشعبي بأهداف يحددها المستخدم يدوياً
+        result, info = adaptive_engine.obfuscate(raw_content, cloak_sensitive=False)
         logger.info(f"👻 Ghost Encoding v4.2: {info['layers']} (profile={profile})")
 
         # 🫥 الخطوة 2.5: وضع الإرسال فوق التكويد الشبحي
@@ -821,16 +839,34 @@ def _finalize_message(content, use_html):
     entities = []
     if get_setting('link_guard_enabled', 'on') == 'on':
         try:
-            from link_guard import apply_link_guard, build_telethon_entities, DEFAULT_ANCHOR
+            from link_guard import (apply_link_guard, build_telethon_entities,
+                                    parse_targets, DEFAULT_ANCHOR)
             anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
             cc = get_setting('link_guard_country_code', '967')
-            content, link_ents = apply_link_guard(content, anchor=anchor, country_code=cc)
-            ents = build_telethon_entities(link_ents)
-            if ents:
-                entities.extend(ents)
-                logger.info(f"🛡 درع الروابط: {len(ents)} زر ارتباط تشعبي")
+            # 🎯 v4.3: الوضع اليدوي الصرف - المستخدم وحده يحدد أهداف الارتباط
+            # لا أهداف؟ → لا يُستبدل ولا يُضاف أي شيء من البوت إطلاقاً
+            targets = parse_targets(get_setting('link_guard_targets', ''), cc)
+            if targets:
+                content, link_ents = apply_link_guard(content, anchor=anchor,
+                                                      country_code=cc, targets=targets)
+                ents = build_telethon_entities(link_ents)
+                if ents:
+                    entities.extend(ents)
+                    logger.info(f"🛡 درع الروابط: {len(ents)} زر ارتباط تشعبي (أهداف المستخدم)")
+            else:
+                logger.debug("🛡 درع الروابط: لا أهداف محددة من المستخدم → لا إضافات")
         except Exception as e:
             logger.debug(f"🛡 link_guard error: {e}")
+
+    # 👤 v4.3: كيان Mention صريح لكل يوزر متبقٍ في النص
+    # (الحل الجذري لـ "اليوزر ما ينضغط" - الضغط مضمون حتى مع أحرف خفية مجاورة)
+    try:
+        from link_guard import find_clean_mentions, build_mention_entities
+        m_ents = build_mention_entities(find_clean_mentions(content))
+        if m_ents:
+            entities.extend(m_ents)
+    except Exception:
+        pass
 
     # ✍️ تقوية العرض (غامق/تحته خط) فوق النص النهائي
     style_ents = build_style_entities(content)
@@ -5155,18 +5191,37 @@ def get_adaptive_menu():
 
 
 def get_link_guard_menu():
-    """🛡 قائمة درع الروابط v4.2 - الارتباط التشعبي الذكي"""
-    from link_guard import ANCHOR_PRESETS, DEFAULT_ANCHOR
+    """🛡 قائمة درع الروابط v4.3 - الارتباط التشعبي بأهداف المستخدم اليدوية"""
+    from link_guard import DEFAULT_ANCHOR, parse_targets
     lg_status = "✅ مفعّل" if get_setting('link_guard_enabled', 'on') == 'on' else "❌ معطل"
     anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
     cc = get_setting('link_guard_country_code', '967')
+    n_targets = len(parse_targets(get_setting('link_guard_targets', ''), cc))
     return [
         [Button.inline(f"🛡 تفعيل الدرع: {lg_status}", b"toggle_link_guard")],
+        [Button.inline(f"🎯 أهداف الارتباط ({n_targets})", b"lg_targets_menu")],
         [Button.inline(f"💬 نص الزر: {anchor[:20]}", b"lg_anchor_menu")],
         [Button.inline(f"🌍 كود الدولة للهواتف: {cc}", b"lg_cc_menu")],
         [Button.inline("🧪 اختبار الدرع (معاينة تفاعلية)", b"lg_test")],
         [Button.inline("🔙 رجوع", b"adaptive_menu")],
     ]
+
+
+def get_lg_targets_menu():
+    """🎯 قائمة أهداف الارتباط - المستخدم وحده يحددها (v4.3)"""
+    from link_guard import parse_targets
+    cc = get_setting('link_guard_country_code', '967')
+    targets = parse_targets(get_setting('link_guard_targets', ''), cc)
+    buttons = []
+    if not targets:
+        buttons.append([Button.inline("➕ إضافة هدف (يوزر/هاتف/رابط)", b"lg_target_add")])
+    else:
+        for i, t in enumerate(targets):
+            buttons.append([Button.inline(f"🗑 {t['label'][:35]}", f"lg_target_del_{i}".encode())])
+        buttons.append([Button.inline("➕ إضافة هدف جديد", b"lg_target_add")])
+        buttons.append([Button.inline("🗑 مسح كل الأهداف", b"lg_target_clear")])
+    buttons.append([Button.inline("🔙 رجوع", b"link_guard_menu")])
+    return buttons
 
 
 def get_lg_anchor_menu():
@@ -5263,7 +5318,21 @@ async def main():
     asyncio.create_task(keep_alive_ping())
     logger.info("🔄 نظام الإبقاء على البوت نشطاً يعمل")
     init_db()
+    # ☁️ v4.3: استعادة الجلسات والحسابات تلقائياً بعد كل تحديث/إعادة نشر
+    try:
+        import session_vault as _sv
+        _restored, _vmsg = await asyncio.to_thread(_sv.restore_if_empty)
+        logger.info(f"☁️ الخزنة السحابية: {_vmsg}")
+    except Exception as _ve:
+        logger.warning(f"☁️ الخزنة السحابية غير متاحة: {_ve}")
     await restore_sessions()
+    # ☁️ v4.3: النسخ السحابي التلقائي بعد أي تغيير (كل 5 دقائق)
+    try:
+        import session_vault as _sv
+        asyncio.create_task(_sv.vault_sweeper(300))
+        logger.info("☁️ النسخ السحابي التلقائي يعمل (يُفعّل عند وجود تغييرات)")
+    except Exception:
+        pass
     bot = TelegramClient('bot_session', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
     logger.info("🤖 البوت يعمل - مع الجدولة المتقدمة والنشر السريع")
@@ -5291,9 +5360,11 @@ async def main():
             "👻 **Ghost Encoding v4.2 - التكويد الحديث:**\n"
             "• رسم كلماتك يبقى كما هو 100% في كل الأجهزة (بدون أشكال عرض!)\n"
             "• تجزئة خفية لكل كلمة - بوتات الحماية لا تطابق شيئاً\n"
-            "• 🛡 درع الروابط: يوزرك ورقمك ورابطك يتحول لزر (للطلب اضغط هنا)\n"
-            "  قابل للضغط يفتح تيليجرام/وتساب - والبوتات لا ترى شيئاً\n"
+            "• 🛡 درع الروابط: حدد أنت يوزرك/رقمك/رابطك → يتحول لزر (للطلب اضغط هنا)\n"
+            "  قابل للضغط يفتح تيليجرام/وتساب - وبدون تحديد لا يضيف البوت شيئاً\n"
             "• ✍️ تقوية العرض (غامق/تحته خط) من قائمة المحرك\n\n"
+            "☁️ **حفظ دائم:** حساباتك وجلساتك تُستعاد تلقائياً بعد كل تحديث\n"
+            "(من الخزنة السحابية المشفرة - زر الحفظ في قائمة الحسابات)\n\n"
             "🐝 **أنظمة متقدمة:**\n"
             "• ⏱️ Human Delay | ⚖️ Load Balancer\n\n"
             f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
@@ -5802,13 +5873,69 @@ async def main():
             set_setting('awaiting_del_msg', 'true')
 
         elif data == 'accounts':
-            await event.edit("👥 **إدارة الحسابات**", buttons=[
+            vault_line = ""
+            try:
+                import session_vault as _sv
+                has_tok = bool(_sv.resolve_github_token())
+                last = _sv.get_last_backup_time()
+                vault_line = ("\n\n☁️ **الحفظ السحابي للجلسات:** "
+                              + ("✅ جاهز" if has_tok else "⚠️ أضف GITHUB_TOKEN في إعدادات Render"))
+                if last:
+                    vault_line += f" | آخر نسخة: {last}"
+            except Exception:
+                pass
+            await event.edit(f"👥 **إدارة الحسابات**{vault_line}", buttons=[
                 [Button.inline("➕ إضافة", b"add_acc")],
                 [Button.inline("📋 عرض", b"list_acc")],
                 [Button.inline("🗑 حذف", b"del_acc")],
                 [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                [Button.inline("☁️ حفظ سحابي الآن", b"vault_backup")],
+                [Button.inline("☁️ استعادة من السحابة", b"vault_restore")],
                 [Button.inline("🔙 رجوع", b"back")],
             ])
+        elif data == 'vault_backup':
+            await event.edit("☁️ جاري الحفظ السحابي (حسابات + جلسات + مجموعات + رسائل)...")
+            try:
+                import session_vault as _sv
+                ok, vmsg = await asyncio.to_thread(_sv.export_to_github)
+                if ok:
+                    _sv.clear_dirty()
+                await event.edit(("✅ " if ok else "❌ ") + vmsg,
+                                 buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
+            except Exception as e:
+                await event.edit(f"❌ خطأ في الحفظ السحابي: {str(e)[:200]}",
+                                 buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
+        elif data == 'vault_restore':
+            await event.edit("☁️ جاري السحب والاستعادة من المستودع الخاص...")
+            try:
+                import session_vault as _sv
+                snap, vmsg = await asyncio.to_thread(_sv.import_from_github)
+                if not snap:
+                    snap, vmsg = await asyncio.to_thread(_sv.import_from_local)
+                if not snap:
+                    await event.edit(f"❌ {vmsg}",
+                                     buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
+                    return
+                _sv.restore_snapshot(snap)
+                # إعادة توصيل كل الحسابات من الجلسات المستعادة
+                for _cid, _cl in list(user_clients.items()):
+                    try:
+                        await _cl.disconnect()
+                    except Exception:
+                        pass
+                user_clients.clear()
+                await restore_sessions()
+                n_acc = len(snap.get('accounts', []))
+                await event.edit(
+                    f"✅ **تمت الاستعادة بنجاح**\n\n"
+                    f"👥 حسابات: {n_acc} (متصل: {len(user_clients)})\n"
+                    f"📢 مجموعات: {len(snap.get('groups', []))}\n"
+                    f"📝 رسائل: {len(snap.get('messages', []))}\n\n"
+                    f"{vmsg}",
+                    buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
+            except Exception as e:
+                await event.edit(f"❌ خطأ في الاستعادة: {str(e)[:200]}",
+                                 buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
         elif data == 'add_acc':
             await event.edit("➕ أرسل رقم الهاتف (مثال: +966512345678)\n/cancel للإلغاء")
             set_setting('awaiting_phone', 'true')
@@ -6029,22 +6156,21 @@ async def main():
         # ═══════════════════════════════════════════════════════════
 
         elif data == 'link_guard_menu':
-            from link_guard import DEFAULT_ANCHOR
+            from link_guard import DEFAULT_ANCHOR, parse_targets
             anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
             cc = get_setting('link_guard_country_code', '967')
             lg_status = "✅ مفعّل" if get_setting('link_guard_enabled', 'on') == 'on' else "❌ معطل"
+            n_targets = len(parse_targets(get_setting('link_guard_targets', ''), cc))
             await event.edit(
-                "🛡 **درع الروابط - الارتباط التشعبي الذكي v4.2**\n\n"
-                "📌 **المشكلة التي يحلها:**\n"
-                "• الحروف الخفية داخل @اليوزر كانت تكسر الضغط عليه\n"
-                "• بوتات الحماية تتتبع اليوزرات والأرقام والروابط\n\n"
-                "✨ **الحل:** يحوّل الدرع تلقائياً:\n"
-                f"• @اليوزر → زر [{anchor[:15]}] يفتح t.me/اليوزر\n"
-                f"• رقم الهاتف/وتس → زر [{anchor[:15]}] يفتح wa.me (كود الدولة {cc})\n"
-                f"• الرابط → زر [{anchor[:15]}] يفتح الرابط\n\n"
+                "🛡 **درع الروابط - الارتباط التشعبي v4.3**\n\n"
+                "🎯 **الوضع اليدوي - أنت وحدك من يحدد:**\n"
+                f"• أضفت {n_targets} هدف (يوزر/هاتف/رابط)\n"
+                f"• كل إعلان يحتوي أحد أهدافك → يتحول لزر [{anchor[:15]}]\n"
+                "• الإعلان بلا أهدافك → يُنشر كما هو بلا أي إضافات\n"
+                "• لم تحدد شيئاً؟ → البوت لا يضيف أي يوزر أو رقم من عنده\n\n"
                 "✅ الضغط يعمل 100% (كيان رسمي في تيليجرام)\n"
-                "✅ اليوزر/الرقم/الرابط يختفي نصاً → البوتات لا تلتقط شيئاً\n"
-                "✅ الأسعار والتواريخ القصيرة تبقى نصاً (فلترة ذكية)\n"
+                "✅ الهدف المُستبدل يختفي نصاً → البوتات لا تلتقطه\n"
+                "✅ اليوزرات المتبقية في النص تبقى قابلة للضغط (كيان Mention صريح)\n"
                 "✅ باقي النص يبقى مشفراً بـ Ghost Encoding كالمعتاد",
                 buttons=get_link_guard_menu()
             )
@@ -6057,12 +6183,77 @@ async def main():
             await event.answer(f"درع الروابط: {status}")
             await event.edit(
                 f"🛡 **درع الروابط: {status}**\n\n"
-                + ("✅ اليوزرات/الهواتف/الروابط ستتحول لأزرار ارتباط تشعبي قابلة للضغط\n"
-                   "   في كل الرسائل المنشورة (فورية وسريعة ومجدولة وشبحية)"
+                + ("🎯 أهدافك المحددة فقط تتحول لأزرار ارتباط تشعبي قابلة للضغط\n"
+                   "الإعلانات بلا أهدافك تُنشر كما هي بلا أي إضافات"
                    if new_val == 'on' else
-                   "⚠️ عادت المعالجة لوضع v4.1: حقن أحرف خفية داخل اليوزر\n"
-                   "   (مخفي من البوتات لكن الضغط على اليوزر لن يعمل!)"),
+                   "⚠️ الدرع معطل: لن يتحول أي يوزر أو رقم لزر ارتباط\n"
+                   "(اليوزرات تبقى ظاهرة وقابلة للضغط كنص عادي)"),
                 buttons=get_link_guard_menu()
+            )
+
+        elif data == 'lg_targets_menu':
+            from link_guard import parse_targets, targets_summary
+            cc = get_setting('link_guard_country_code', '967')
+            targets = parse_targets(get_setting('link_guard_targets', ''), cc)
+            if targets:
+                body = targets_summary(targets)
+                tip = ("💡 اضغط على أي هدف لحذفه\n"
+                       "📌 فقط الأهداف أعلاه تتحول لأزرار في إعلاناتك\n"
+                       "ما لم تضفه أنت لا يضيفه البوت أبداً")
+            else:
+                body = "(لا أهداف بعد)"
+                tip = ("⚠️ لا أهداف = لا يُضاف أي ارتباط تشعبي في إعلاناتك\n"
+                       "والإعلانات تنشر كما هي - اليوزرات تبقى قابلة للضغط\n\n"
+                       "أمثلة مقبولة:\n"
+                       "• @ppppokl أو t.me/ppppokl\n"
+                       "• 0777123456 أو +967777123456\n"
+                       "• https://wa.me/967777123456 أو أي رابط")
+            await event.edit(
+                f"🎯 **أهداف الارتباط التشعبي ({len(targets)})**\n\n"
+                f"{body}\n\n{tip}",
+                buttons=get_lg_targets_menu()
+            )
+
+        elif data == 'lg_target_add':
+            await event.edit(
+                "🎯 **أرسل الهدف الآن** (يوزر أو رقم أو رابط)\n\n"
+                "أمثلة:\n"
+                "• `@ppppokl` أو `t.me/ppppokl`\n"
+                "• `0777123456` أو `+967777123456`\n"
+                "• `https://wa.me/967777123456`\n\n"
+                "📌 الهدف يُستبدل في الإعلان بزر الارتباط الذي يفتح وجهته\n"
+                "/cancel للإلغاء",
+                parse_mode='md'
+            )
+            set_setting('awaiting_lg_target_add', 'true')
+
+        elif data.startswith('lg_target_del_'):
+            try:
+                idx = int(data.replace('lg_target_del_', '', 1))
+                from link_guard import parse_targets
+                cc = get_setting('link_guard_country_code', '967')
+                targets = parse_targets(get_setting('link_guard_targets', ''), cc)
+                if 0 <= idx < len(targets):
+                    removed = targets.pop(idx)
+                    keep = [t['raw'] for t in targets]
+                    set_setting('link_guard_targets', '\n'.join(keep))
+                    await event.answer(f"حُذف: {removed['label'][:25]}")
+                    await event.edit(
+                        f"✅ **حُذف الهدف:** {removed['label']}\n\n"
+                        "لن يتحول بعد الآن لزر ارتباط",
+                        buttons=get_lg_targets_menu()
+                    )
+            except ValueError:
+                pass
+
+        elif data == 'lg_target_clear':
+            set_setting('link_guard_targets', '')
+            await event.answer("تم مسح كل الأهداف")
+            await event.edit(
+                "🗑 **تم مسح كل الأهداف**\n\n"
+                "الآن لن يُضاف أي ارتباط تشعبي في أي إعلان\n"
+                "والبوت لن يضيف أي يوزر أو رقم من عنده أبداً",
+                buttons=get_lg_targets_menu()
             )
 
         elif data == 'lg_anchor_menu':
@@ -6118,23 +6309,41 @@ async def main():
                 )
 
         elif data == 'lg_test':
-            from link_guard import DEFAULT_ANCHOR, analyze as lg_analyze
+            from link_guard import DEFAULT_ANCHOR, analyze as lg_analyze, parse_targets
             anchor = get_setting('link_guard_anchor', DEFAULT_ANCHOR) or DEFAULT_ANCHOR
             cc = get_setting('link_guard_country_code', '967')
-            # مثال المستخدم الفعلي + رقم هاتف
-            sample = ("✅اعذار طبية تطبيق صحتي\n"
-                      "✅يوم /يومين /اسبوع\n"
-                      "✅تقرير طبي\n"
-                      "✅مرافق @ppppokl اتصل 0777123456")
-            targets = lg_analyze(sample, country_code=cc)
-            msg = "🧪 **اختبار درع الروابط**\n\n📝 **الإعلان الأصلي:**\n"
-            msg += sample + "\n\n🔄 **التحويلات:**\n"
-            for tok, kind, url in targets:
-                kind_ar = {'mention': '👤 يوزر', 'phone': '📱 هاتف/وتس', 'url': '🔗 رابط'}.get(kind, kind)
-                msg += f"• {kind_ar} `{tok[:20]}` → الزر يفتح: `{url[:40]}`\n"
+            targets = parse_targets(get_setting('link_guard_targets', ''), cc)
             if not targets:
-                msg += "• لم يُعثر على يوزرات أو أرقام أو روابط في النص\n"
-            msg += ("\n👇 **هذه نسخة مطابقة لما سيُنشر - اضغط على الزر وسترى أنه يعمل:**")
+                msg = ("🧪 **اختبار درع الروابط**\n\n"
+                       "⚠️ **لا توجد أهداف محددة منك بعد!**\n\n"
+                       "الوضع الحالي: البوت **لا يضيف أي يوزر أو رقم أو رابط من عنده**\n"
+                       "إعلاناتك تُنشر كما هي - واليوزرات داخلها تبقى قابلة للضغط\n\n"
+                       "🎯 أضف أهدافك أولاً من زر (🎯 أهداف الارتباط)")
+                await event.edit(msg,
+                                 buttons=[[Button.inline("🎯 إضافة هدف الآن", b"lg_target_add")],
+                                          [Button.inline("🔙 رجوع", b"link_guard_menu")]])
+                return
+            # الإعلان الحقيقي: أحدث رسالة محفوظة (نصك أنت وليس نصوص تجريبية)
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT content FROM messages WHERE content IS NOT NULL AND content != '' ORDER BY id DESC LIMIT 1")
+            row = c.fetchone()
+            conn.close()
+            if not row or not (row[0] or '').strip():
+                await event.edit(
+                    "🧪 لا توجد رسالة محفوظة للاختبار\nاحفظ إعلانك أولاً من (📝 إضافة رسالة)",
+                    buttons=[[Button.inline("🔙 رجوع", b"link_guard_menu")]])
+                return
+            sample = row[0]
+            hits = lg_analyze(sample, country_code=cc, targets=targets)
+            msg = f"🧪 **اختبار درع الروابط على إعلانك المحفوظ**\n\n📝 **الإعلان:**\n{sample[:600]}\n\n🔄 **التحويلات (أهدافك فقط):**\n"
+            if hits:
+                for tok, kind, url in hits:
+                    kind_ar = {'mention': '👤 يوزر', 'phone': '📱 هاتف/وتس', 'url': '🔗 رابط'}.get(kind, kind)
+                    msg += f"• {kind_ar} `{tok[:20]}` → الزر يفتح: `{url[:40]}`\n"
+            else:
+                msg += "• إعلانك لا يحتوي أي هدف من أهدافك المحددة → سيُنشر كما هو بلا إضافات ✅\n"
+            msg += "\n👇 **نسخة حية مطابقة لما سيُنشر - جرب الضغط:**"
             await event.edit(msg, parse_mode='md',
                              buttons=[[Button.inline("🔙 رجوع", b"link_guard_menu")]])
             # النسخة الحية: نفس مسار النشر بالضبط (Ghost + الدرع + كيانات الأزرار)
@@ -6613,7 +6822,7 @@ async def main():
                        'awaiting_msg_interval', 'awaiting_join_interval',
                        'awaiting_fast_delay', 'awaiting_add_blacklist', 'awaiting_del_blacklist',
                        'awaiting_schedule', 'awaiting_schedule_delete',
-                       'awaiting_lg_anchor',
+                       'awaiting_lg_anchor', 'awaiting_lg_target_add',
                        'awaiting_kashida_intensity', 'awaiting_swarm_stages',
                        'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max']:
                 set_setting(key, '')
@@ -6679,6 +6888,7 @@ async def main():
                 user_clients[acc_id] = session_data["client"]
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
+                vault_mark_dirty()
                 await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except SessionPasswordNeededError:
                 set_setting('awaiting_password', 'true')
@@ -6717,6 +6927,7 @@ async def main():
                 user_clients[acc_id] = session_data["client"]
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
+                vault_mark_dirty()
                 await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except Exception as e:
                 error_msg = str(e)[:300]
@@ -6906,8 +7117,48 @@ async def main():
                 ANCHOR_PRESETS.append(custom)
             await event.respond(
                 f"✅ **تم ضبط نص الزر:** {custom}\n\n"
-                "كل يوزر/هاتف/رابط في إعلاناتك سيظهر بهذا النص\n"
-                "والضغط عليه ينقل القارئ للوجهة الصحيحة",
+                "كل هدف من أهدافك المحددة سيظهر في الإعلان بهذا النص\n"
+                "والضغط عليه ينقل القارئ للوجهة التي حددتها",
+                buttons=get_main_menu())
+            return
+
+        # 🎯 v4.3: إضافة هدف ارتباط تشعبي (المستخدم وحده المصدر - لا اكتشاف تلقائي)
+        if get_setting('awaiting_lg_target_add') == 'true':
+            set_setting('awaiting_lg_target_add', '')
+            raw = (event.raw_text or '').strip()
+            if not raw or raw.startswith('/'):
+                await event.respond("❌ تم إلغاء الإضافة", buttons=get_main_menu())
+                return
+            try:
+                from link_guard import normalize_target_input
+                cc = get_setting('link_guard_country_code', '967')
+                t = normalize_target_input(raw, cc)
+            except Exception:
+                t = None
+            if not t:
+                await event.respond(
+                    "❌ الهدف غير صالح!\n\n"
+                    "أمثلة صحيحة:\n"
+                    "• @ppppokl أو ppppokl أو t.me/ppppokl\n"
+                    "• 0777123456 أو +967777123456\n"
+                    "• https://wa.me/967777123456 أو أي رابط\n\n"
+                    "أعد الإرسال أو /cancel",
+                    buttons=get_main_menu())
+                set_setting('awaiting_lg_target_add', 'true')
+                return
+            # منع التكرار
+            current = get_setting('link_guard_targets', '') or ''
+            parts = [p.strip() for p in re.split(r'[\n,،;]+', current) if p.strip()]
+            if any(p.lstrip('@').lower() == raw.lstrip('@').lower() for p in parts):
+                await event.respond(f"⚠️ هذا الهدف مضاف مسبقاً:\n{t['label']}", buttons=get_main_menu())
+                return
+            parts.append(t['raw'])
+            set_setting('link_guard_targets', '\n'.join(parts))
+            await event.respond(
+                f"✅ **تمت إضافة الهدف:**\n{t['label']}\n\n"
+                f"🔗 وجهة الضغط: {t['url']}\n\n"
+                "📌 كل إعلان يحتوي هذا الهدف سيظهر فيه زر ارتباط تشعبي\n"
+                "والإعلانات التي لا تحتويه تُنشر كما هي بلا أي إضافات",
                 buttons=get_main_menu())
             return
 
@@ -7107,6 +7358,7 @@ async def main():
             conn.commit()
             msg_id = c.lastrowid
             conn.close()
+            vault_mark_dirty()  # ☁️ الرسائل الجديدة تدخل النسخة السحابية التالية
             types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
             await event.respond(
                 f"✅ **تم حفظ الرسالة #{msg_id}!**\n\n"
@@ -7158,7 +7410,7 @@ async def main():
             'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_msg_interval',
             'awaiting_join_interval', 'awaiting_fast_delay', 'awaiting_add_blacklist',
             'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete',
-            'awaiting_lg_anchor', 'awaiting_kashida_intensity', 'awaiting_swarm_stages',
+            'awaiting_lg_anchor', 'awaiting_lg_target_add', 'awaiting_kashida_intensity', 'awaiting_swarm_stages',
             'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max'
         ])
         if not any_awaiting and user_clients and not is_joining_active:
@@ -7219,6 +7471,7 @@ async def main():
                 c.execute('DELETE FROM accounts WHERE id=?', (acc_id,))
                 conn.commit()
                 conn.close()
+                vault_mark_dirty()
                 await event.respond("✅ تم الحذف", buttons=get_main_menu())
             except:
                 await event.respond("❌ رقم غير صالح", buttons=get_main_menu())
