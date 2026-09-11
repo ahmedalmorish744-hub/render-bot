@@ -3933,6 +3933,14 @@ async def get_all_accounts():
 #  نظام الانضمام التلقائي المتقدم - Anti-Ban
 # ═══════════════════════════════════════════════
 
+# 🧹 v4.4: كل المحارف غير المرئية التي تلتصق بالروابط المنسوخة من إعلانات مشفرة
+# (ZW + bidi + Variation Selectors + Tag chars + Soft hyphen + BOM ...)
+# سبب رئيسي لفشل الانضمام: الروابط تصل ملوثة فلا يتعرف عليها الـ regex → تجاهل صامت
+_LINK_INVISIBLE_RE = re.compile(
+    '[\u00ad\u061c\u180b-\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f'
+    '\ufe00-\ufe0f\ufeff\U0001d173-\U0001d17a\U000e0000-\U000e0fff]')
+
+
 def extract_telegram_links(text):
     """استخراج جميع أنواع روابط تيليجرام من النص
     يدعم:
@@ -3940,21 +3948,24 @@ def extract_telegram_links(text):
     - https://t.me/joinchat/XXXXX
     - https://t.me/+XXXXX
     - http://t.me/...
+    - https://telegram.me/... (يُطبَّع إلى t.me)
     - @username
     - t.me/channel_name (بدون https)
     - روابط دعوة خاصة طويلة
     - روابط مسبوقة بأرقام أو رموز مثل: 1-https://t.me/... أو *t.me/...
+    - روابط ملوثة بأحرف خفية (منسوخة من إعلانات مشفرة) - تُنظف أولاً
     """
     links = set()
-    
-    # تنظيف المحارف غير المرئية من النص
-    text = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', text)
-    
+
+    # 🧹 v4.4: تنظيف شامل لكل المحارف غير المرئية قبل المطابقة
+    text = _LINK_INVISIBLE_RE.sub('', text or '')
+
     # 1. روابط t.me كاملة (https و http) - البحث المباشر بالأنماط
-    pattern_invite = r'https?://t\.me/(?:joinchat/)?\+[a-zA-Z0-9_\-]+'
-    pattern_public = r'https?://t\.me/[a-zA-Z][a-zA-Z0-9_]{4,}'
-    pattern_joinchat = r'https?://t\.me/joinchat/[a-zA-Z0-9_\-]+'
-    
+    #    (استثناء joinchat/ من النمط العام - كان يُلتقط "t.me/joinchat" كقناة وهمية!)
+    pattern_invite = r'https?://(?:t\.me|telegram\.me)/(?:joinchat/)?\+[a-zA-Z0-9_\-]+'
+    pattern_public = r'https?://(?:t\.me|telegram\.me)/(?!joinchat/)[a-zA-Z][a-zA-Z0-9_]{4,}'
+    pattern_joinchat = r'https?://(?:t\.me|telegram\.me)/joinchat/[a-zA-Z0-9_\-]+'
+
     for p in [pattern_invite, pattern_public, pattern_joinchat]:
         found = re.findall(p, text)
         links.update(found)
@@ -3966,13 +3977,13 @@ def extract_telegram_links(text):
     
     # 3. البحث عن t.me/ في أي مكان بالنص (حتى لو كان مسبوقاً برموز)
     # هذا يلتقط: t.me/xxx, 1-t.me/xxx, *t.me/xxx, -t.me/xxx إلخ
-    tme_pattern = r'(?:^|[\s\-_*•●▶►▷→↳\d\.\)]+)(t\.me/[^\s\-_*•●▶►▷→]+)'
+    tme_pattern = r'(?:^|[\s\-_*•●▶►▷→↳\d\.\)]+)((?:t\.me|telegram\.me)/[^\s\-_*•●▶►▷→]+)'
     for match in re.finditer(tme_pattern, text):
         found_part = match.group(1)
         # التأكد من أنها ليست جزءاً من رابط https:// موجود بالفعل
         if not re.search(r'https?://' + re.escape(found_part), text):
             full_link = f'https://{found_part}'
-            if re.match(r'https?://t\.me/', full_link):
+            if re.match(r'https?://(?:t\.me|telegram\.me)/', full_link):
                 path = full_link.split('t.me/')[-1].split('?')[0]
                 if path.startswith('+') or path.startswith('joinchat/'):
                     links.add(full_link)
@@ -4000,9 +4011,9 @@ def extract_telegram_links(text):
                 username = word[1:]
                 if len(username) >= 5 and username[0].isalpha():
                     links.add(f'https://t.me/{username}')
-            elif 't.me/' in word:
-                # استخراج جزء t.me/ من الكلمة (حتى لو كانت مسبوقة برموز)
-                tme_match = re.search(r'(t\.me/.+)', word)
+            elif 't.me/' in word or 'telegram.me/' in word:
+                # استخراج جزء t.me/ أو telegram.me/ من الكلمة (حتى لو كانت مسبوقة برموز)
+                tme_match = re.search(r'((?:t\.me|telegram\.me)/.+)', word)
                 if tme_match:
                     tme_part = tme_match.group(1)
                     if not tme_part.startswith('http'):
@@ -4010,23 +4021,28 @@ def extract_telegram_links(text):
                     else:
                         full_link = tme_part
                     # التأكد من صحة الرابط
-                    if re.match(r'https?://t\.me/', full_link):
+                    if re.match(r'https?://(?:t\.me|telegram\.me)/', full_link):
                         path = full_link.split('t.me/')[-1].split('?')[0]
                         if path.startswith('+') or path.startswith('joinchat/'):
                             links.add(full_link)
                         elif len(path) >= 5 and path[0].isalpha():
                             links.add(full_link)
     
-    # 5. تنظيف الروابط النهائية - إزالة أي محارف متبقية غير مرئية
+    # 5. تنظيف الروابط النهائية - إزالة أي محارف متبقية غير مرئية + تطبيع الدومين
     final_links = []
     for link in links:
-        link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)
+        link = _LINK_INVISIBLE_RE.sub('', link)
         link = link.strip()
-        if link and 't.me/' in link:
+        if link and re.search(r'(?:t\.me|telegram\.me)/', link):
             if not link.startswith('http'):
                 link = 'https://' + link
-            final_links.append(link)
-    
+            # توحيد telegram.me → t.me
+            link = re.sub(r'^https?://telegram\.me/', 'https://t.me/', link)
+            # إزالة علامات ترقيم لاصقة بنهاية الرابط
+            link = link.rstrip('.,،!؟:;)»"\'…-')
+            if re.match(r'https?://t\.me/', link):
+                final_links.append(link)
+
     return list(set(final_links))
 
 
@@ -4117,15 +4133,17 @@ async def auto_join_links(links, progress_callback=None):
     - تبديل تلقائي عند FloodWait
     - طابور: الروابط تُحفظ وتُعالج بالترتيب
     """
-    global is_joining_active, join_cancelled, join_queue
+    global is_joining_active, join_cancelled, join_queue, _join_reasons
     
     if is_joining_active:
         # إضافة الروابط للطابور بدلاً من رفضها
         join_queue.extend(links)
+        save_join_queue()  # 💾 v4.4
         return 0, 0, 0, f"📋 تم إضافة {len(links)} رابط للطابور (سيتم الانضمام بعد الانتهاء من الروابط الحالية)"
     
     is_joining_active = True
     join_cancelled = False
+    _join_reasons = {}  # 📊 تصفير أسباب الدفعة الجديدة
     
     if not user_clients:
         is_joining_active = False
@@ -4173,6 +4191,7 @@ async def auto_join_links(links, progress_callback=None):
                 remaining = clean_links[i-1:]
                 if remaining:
                     join_queue.extend(remaining)
+                    save_join_queue()  # 💾 v4.4
                     logger.info(f"📋 تم إضافة {len(remaining)} رابط متبقي للطابور بعد الإلغاء")
                 is_joining_active = False
                 # معالجة الطابور
@@ -4213,6 +4232,7 @@ async def auto_join_links(links, progress_callback=None):
                     remaining = clean_links[i-1:]
                     if remaining:
                         join_queue.extend(remaining)
+                        save_join_queue()  # 💾 v4.4
                     is_joining_active = False
                     return success_count, failed_count, skipped_count, f"⏹ تم الإلغاء بعد {i-1} رابط - الباقي في الطابور"
             
@@ -4391,6 +4411,12 @@ async def auto_join_links(links, progress_callback=None):
         
         is_joining_active = False
         
+        # 📊 v4.4: تقرير أسباب الفشل بدل رقم غامض
+        reasons_txt = ""
+        if _join_reasons:
+            reason_lines = [f"• {k}: {v}" for k, v in sorted(_join_reasons.items(), key=lambda kv: -kv[1])[:5]]
+            reasons_txt = "\n\n📝 أسباب الفشل:\n" + "\n".join(reason_lines)
+        
         result_msg = (
             f"✅ **اكتمل الانضمام**\n\n"
             f"📊 الإجمالي: {total_links} رابط\n"
@@ -4398,6 +4424,7 @@ async def auto_join_links(links, progress_callback=None):
             f"⏭ تخطي (منضم): {skipped_count}\n"
             f"❌ فشل: {failed_count}\n"
             f"📈 نسبة النجاح: {(success_count / max(total_links, 1)) * 100:.1f}%"
+            f"{reasons_txt}"
         )
         
         # معالجة الطابور بعد الانتهاء
@@ -4424,6 +4451,7 @@ async def process_join_queue(original_callback=None):
     # أخذ الروابط من الطابور
     queued_links = join_queue.copy()
     join_queue = []
+    save_join_queue()  # 💾 v4.4: مزامنة الطابور الفارغ مع قاعدة البيانات
     
     logger.info(f"📋 معالجة طابور {len(queued_links)} رابط")
     
@@ -4436,6 +4464,49 @@ async def process_join_queue(original_callback=None):
     
     await auto_join_links(queued_links, progress_callback=queue_callback)
 
+def save_join_queue():
+    """💾 v4.4: حفظ طابور الانضمام في قاعدة البيانات - ينجو من إعادة التشغيل والتحديث
+    (كان الطابور في الذاكرة فقط - كل إعادة نشر على Render تمحوه وتضيع الروابط!)"""
+    try:
+        set_setting('join_queue', json.dumps(list(join_queue)))
+    except Exception as e:
+        logger.debug(f"💾 حفظ طابور الانضمام فشل: {e}")
+
+
+def load_join_queue():
+    """📋 v4.4: استرجاع طابور الانضمام المحفوظ عند الإقلاع"""
+    global join_queue
+    try:
+        raw = get_setting('join_queue', '')
+        if raw:
+            links = json.loads(raw)
+            if isinstance(links, list):
+                join_queue = [str(l).strip() for l in links if str(l).strip()]
+                if join_queue:
+                    logger.info(f"📋 استُرجع {len(join_queue)} رابط من الطابور المحفوظ")
+    except Exception as e:
+        logger.debug(f"📋 استرجاع الطابور فشل: {e}")
+
+
+# 📊 v4.4: تتبع أسباب نتائج الدفعة الحالية (لتقرير واضح بدل "فشل: N" غامض)
+_join_reasons = {}
+
+
+def _reason_label(status):
+    """تحويل حالة السجل إلى سبب مقروء للعربية"""
+    status = str(status)
+    if status.startswith('failed:expired_invite'): return 'رابط دعوة منتهي الصلاحية'
+    if status.startswith('failed:invalid_invite'): return 'رابط دعوة غير صالح'
+    if status.startswith('failed:private'): return 'قناة/مجموعة خاصة'
+    if status.startswith('failed:invalid_channel'): return 'قناة غير صالحة'
+    if status.startswith('failed:empty'): return 'رابط غير مكتمل'
+    if status.startswith('failed_retry'): return 'فشل بعد تبديل الحساب'
+    if status.startswith('failed_after_wait'): return 'فشل بعد انتظار FloodWait'
+    if status.startswith('flood_wait'): return 'FloodWait (حماية تليجرام)'
+    if status.startswith('failed'): return 'فشل عام'
+    return status
+
+
 def save_join_history(link, group_id, group_name, status, joined_by):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -4443,6 +4514,14 @@ def save_join_history(link, group_id, group_name, status, joined_by):
                  VALUES (?, ?, ?, ?, ?, ?)''', (link, group_id, group_name, status, joined_by, datetime.now()))
     conn.commit()
     conn.close()
+    # 📊 تتبع أسباب الفشل لتقرير نهاية الدفعة
+    try:
+        s = str(status)
+        if s.startswith(('failed', 'flood_wait')):
+            label = _reason_label(s)
+            _join_reasons[label] = _join_reasons.get(label, 0) + 1
+    except Exception:
+        pass
 
 def add_group_to_db(group_id, group_name):
     conn = sqlite3.connect(DB_PATH)
@@ -5276,11 +5355,15 @@ def get_join_settings_menu():
     join_interval = get_setting('join_interval', '30')
     queue_count = len(join_queue)
     queue_info = f" ({queue_count} في الطابور)" if queue_count > 0 else ""
-    return [
+    rows = [
         [Button.inline(f"⏱ الفاصل بين الروابط ({join_interval}ث)", b"set_join_interval")],
         [Button.inline(f"📋 الطابور{queue_info}", b"view_join_queue")],
-        [Button.inline("🔙 رجوع", b"back")],
     ]
+    # 🚀 v4.4: زر معالجة فورية للطابور بدل انتظار دفعة جديدة
+    if queue_count > 0:
+        rows.append([Button.inline("🚀 معالجة الطابور الآن", b"process_queue_now")])
+    rows.append([Button.inline("🔙 رجوع", b"back")])
+    return rows
 
 def get_settings_menu():
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
@@ -5318,6 +5401,20 @@ async def main():
     asyncio.create_task(keep_alive_ping())
     logger.info("🔄 نظام الإبقاء على البوت نشطاً يعمل")
     init_db()
+    # 🧹 v4.4: تنظيف أعلام الانتظار العالقة عند الإقلاع
+    # (علم قديم عالق في القاعدة كان يمنع الانضمام التلقائي للأبد بصمت - أعلام الانتظار
+    #  حالات واجهة مؤقتة ولا معنى لبقائها بعد إعادة تشغيل)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE settings SET value='' WHERE key LIKE 'awaiting_%'")
+        conn.commit()
+        conn.close()
+        logger.info("🧹 تم تنظيف أعلام الانتظار عند الإقلاع")
+    except Exception as _sw:
+        logger.debug(f"🧹 تنظيف الأعلام: {_sw}")
+    # 📋 v4.4: استرجاع طابور الانضمام المحفوظ من قاعدة البيانات
+    load_join_queue()
     # ☁️ v4.3: استعادة الجلسات والحسابات تلقائياً بعد كل تحديث/إعادة نشر
     try:
         import session_vault as _sv
@@ -5326,6 +5423,10 @@ async def main():
     except Exception as _ve:
         logger.warning(f"☁️ الخزنة السحابية غير متاحة: {_ve}")
     await restore_sessions()
+    # 📋 v4.4: معالجة الطابور المسترجع تلقائياً إذا وُجدت حسابات متصلة
+    if join_queue and user_clients:
+        logger.info(f"📋 بدء معالجة {len(join_queue)} رابط من الطابور المسترجع")
+        asyncio.create_task(process_join_queue())
     # ☁️ v4.3: النسخ السحابي التلقائي بعد أي تغيير (كل 5 دقائق)
     try:
         import session_vault as _sv
@@ -6802,14 +6903,29 @@ async def main():
         elif data == 'view_join_queue':
             queue_count = len(join_queue)
             if queue_count == 0:
-                await event.edit("📋 **طابور الروابط**\n\n✅ الطابور فارغ\n💡 أرسل روابط أثناء عملية انضمام جارية وستُحفظ في الطابور تلقائياً", buttons=get_join_settings_menu())
+                await event.edit("📋 **طابور الروابط**\n\n✅ الطابور فارغ\n💡 أرسل روابط أثناء عملية انضمام جارية وستُحفظ في الطابور تلقائياً\n💾 الطابور محفوظ في قاعدة البيانات - لا يضيع مع التحديث", buttons=get_join_settings_menu())
             else:
-                text = f"📋 **طابور الروابط**\n\n🔢 عدد الروابط: {queue_count}\n\n"
+                text = f"📋 **طابور الروابط**\n\n🔢 عدد الروابط: {queue_count}\n💾 محفوظ - ينجو من إعادة التشغيل والتحديث\n\n"
                 for idx, link in enumerate(join_queue[:20], 1):
                     text += f"{idx}. {link[:50]}\n"
                 if queue_count > 20:
                     text += f"\n... و{queue_count - 20} رابط آخر"
                 await event.edit(text, buttons=get_join_settings_menu())
+
+        elif data == 'process_queue_now':
+            # 🚀 v4.4: معالجة فورية للطابور بضغطة زر
+            if not join_queue:
+                await event.edit("📋 **الطابور فارغ**", buttons=get_join_settings_menu())
+            elif not user_clients:
+                await event.edit("❌ **لا توجد حسابات متصلة!**\n\nأضف حساباً أولاً ثم عالج الطابور",
+                                 buttons=[[Button.inline("👥 الحسابات", b"accounts")]])
+            elif is_joining_active:
+                await event.edit("⏳ **عملية انضمام جارية بالفعل**\n\nالطابور سيعالج تلقائياً بعد انتهاء الدفعة الحالية",
+                                 buttons=get_join_settings_menu())
+            else:
+                n = len(join_queue)
+                await event.edit(f"🚀 **بدء معالجة {n} رابط من الطابور**...\n\n⏳ جاري الانضمام بالتناوب على الحسابات")
+                asyncio.create_task(process_join_queue())
 
     # معالج الرسائل النصية والوسائط
     @bot.on(events.NewMessage)
@@ -7360,11 +7476,18 @@ async def main():
             conn.close()
             vault_mark_dirty()  # ☁️ الرسائل الجديدة تدخل النسخة السحابية التالية
             types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
+            # 🛠 v4.4: تنبيه إذا كانت الرسالة تحوي روابط (قد يكون المستخدم أراد الانضمام لا الحفظ)
+            saved_links = extract_telegram_links(content or '')
+            link_note = ""
+            if saved_links:
+                link_note = (f"\n\n⚠️ **ملاحظة:** رسالتك تحتوي {len(saved_links)} رابط تيليجرام\n"
+                             "إن كان هدفك **الانضمام** للروابط: أرسلها مباشرة للبوت "
+                             "بدون الضغط على زر إضافة رسالة وسينضم لها فوراً")
             await event.respond(
                 f"✅ **تم حفظ الرسالة #{msg_id}!**\n\n"
                 f"📎 النوع: {types.get(msg_type, msg_type)}\n\n"
                 f"💡 التشويش والتشفير يحافظان على المحتوى كما هو\n"
-                f"التغييرات غير مرئية للعين - فقط الآلات تكتشفها",
+                f"التغييرات غير مرئية للعين - فقط الآلات تكتشفها{link_note}",
                 buttons=get_main_menu()
             )
             return
@@ -7403,20 +7526,45 @@ async def main():
             return
 
         # الروابط - انضمام تلقائي مباشر (إرسال روابط بدون الضغط على زر)
-        # فقط إذا لم يكن هناك أي حالة انتظار مفعلة
+        # 🛠 v4.4: إزالة awaiting_slow_join (علم يتيم بلا معالج كان يعلق في القاعدة
+        #           ويمنع الانضمام التلقائي للأبد بصمت) + لا تجاهل صامت بعد اليوم:
+        #           كل حالة (بلا حسابات / طابور / فشل كشف) تجيب المستخدم برسالة واضحة
         any_awaiting = any(get_setting(k) == 'true' for k in [
             'awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
-            'awaiting_auto_join', 'awaiting_join_limit', 'awaiting_slow_join',
+            'awaiting_auto_join', 'awaiting_join_limit',
             'awaiting_del_msg', 'awaiting_del_acc', 'awaiting_msg_interval',
             'awaiting_join_interval', 'awaiting_fast_delay', 'awaiting_add_blacklist',
             'awaiting_del_blacklist', 'awaiting_schedule', 'awaiting_schedule_delete',
             'awaiting_lg_anchor', 'awaiting_lg_target_add', 'awaiting_kashida_intensity', 'awaiting_swarm_stages',
             'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max'
         ])
-        if not any_awaiting and user_clients and not is_joining_active:
-            auto_detected_links = extract_telegram_links(event.raw_text)
-            # إذا كانت الرسالة تحتوي على رابط تيليجرام واحد أو أكثر - انضمام تلقائي فوري
-            if len(auto_detected_links) >= 1:
+        if not any_awaiting:
+            auto_detected_links = extract_telegram_links(event.raw_text or '')
+
+            if auto_detected_links:
+                # لا حسابات متصلة → رسالة واضحة (كانت تجاهلاً صامتاً تاماً!)
+                if not user_clients:
+                    await event.respond(
+                        "❌ **لا توجد حسابات متصلة!**\n\n"
+                        f"📡 تم اكتشاف {len(auto_detected_links)} رابط لكن لا يوجد حساب ينضم بها\n"
+                        "👥 أضف حساباً أولاً ثم أعد إرسال الروابط وسينضم لها فوراً",
+                        buttons=[[Button.inline("👥 الحسابات", b"accounts")]]
+                    )
+                    return
+
+                # عملية انضمام جارية → الطابور (💾 محفوظ في قاعدة البيانات الآن)
+                if is_joining_active:
+                    join_queue.extend(auto_detected_links)
+                    save_join_queue()
+                    await event.respond(
+                        f"📋 **تم إضافة {len(auto_detected_links)} رابط للطابور**\n\n"
+                        f"⏳ عملية انضمام جارية - سيتم الانضمام تلقائياً بعد انتهاء الدفعة الحالية\n"
+                        f"📋 إجمالي الطابور: {len(join_queue)} رابط\n"
+                        "💾 الطابور محفوظ - لن يضيع حتى لو تحدّث البوت"
+                    )
+                    return
+
+                # انضمام فوري
                 progress_msg = await event.respond(
                     f"🚀 **انضمام تلقائي**\n\n"
                     f"📡 تم اكتشاف {len(auto_detected_links)} رابط\n"
@@ -7429,21 +7577,28 @@ async def main():
                         await progress_msg.edit(text)
                     except:
                         pass
-                
+
                 success, failed, skipped, result_msg = await auto_join_links(auto_detected_links, progress_callback=update_progress2)
                 try:
                     await progress_msg.edit(result_msg, buttons=get_main_menu())
                 except:
                     await event.respond(result_msg, buttons=get_main_menu())
                 return
-        
-        # إذا كانت هناك روابط لكن عملية انضمام جارية بالفعل - أضفها للطابور
-        if not any_awaiting and is_joining_active:
-            auto_detected_links = extract_telegram_links(event.raw_text)
-            if len(auto_detected_links) >= 1:
-                join_queue.extend(auto_detected_links)
-                await event.respond(f"📋 **تم إضافة {len(auto_detected_links)} رابط للطابور**\n\n⏳ عملية انضمام جارية - سيتم الانضمام للروابط تلقائياً بعد الانتهاء\n📋 إجمالي الطابور: {len(join_queue)} رابط")
-                return
+            else:
+                # 🛠 v4.4: النص يحتوي ما يشبه روابط لكن لم يُتعرف على شيء - تفسير + حل
+                low_text = (event.raw_text or '').lower()
+                if 't.me' in low_text or 'telegram.me' in low_text:
+                    await event.respond(
+                        "⚠️ **رسالتك تحتوي ما يشبه روابط تيليجرام لكن لم أتعرّف على روابط صالحة**\n\n"
+                        "💡 السبب غالباً: أحرف خفية ملتصقة بالروابط (نسختها من إعلان مشفر)\n"
+                        "أو أن الرابط ناقص - تأكد من إرسال الرابط كاملاً\n\n"
+                        "✅ الصيغ المقبولة:\n"
+                        "• https://t.me/username\n"
+                        "• https://t.me/+AbCdEf (رابط خاص)\n"
+                        "• https://t.me/joinchat/AbCdEf\n"
+                        "• @username (كل رابط في سطر منفصل)"
+                    )
+                    return
 
         if get_setting('awaiting_del_msg') == 'true':
             set_setting('awaiting_del_msg', '')
