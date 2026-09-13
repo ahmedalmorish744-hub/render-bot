@@ -860,6 +860,15 @@ def _finalize_message(content, use_html):
 
     # 👤 v4.3: كيان Mention صريح لكل يوزر متبقٍ في النص
     # (الحل الجذري لـ "اليوزر ما ينضغط" - الضغط مضمون حتى مع أحرف خفية مجاورة)
+    # 📱 v4.5 درع الهواتف المتبقية أولاً: كل رقم هاتف لم يتحول لزر
+    # (لعدم تحديد المستخدم هدفاً) يُحقن بين أرقامه VS خفية → regex
+    # بوتات الحماية تفشل في التقاطه والعين ترى الرقم كما هو بالضبط.
+    # لا يضاف أي رقم من عند البوت - حماية لما كتبه المستخدم فقط.
+    try:
+        from adaptive_obfuscation import cloak_phone_tokens
+        content = cloak_phone_tokens(content)
+    except Exception:
+        pass
     try:
         from link_guard import find_clean_mentions, build_mention_entities
         m_ents = build_mention_entities(find_clean_mentions(content))
@@ -924,6 +933,110 @@ def build_style_entities(text):
     except Exception as e:
         logger.debug(f"⚠️ build_style_entities: {e}")
         return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🧪 v4.5 اختبار النشر - قبل/بعد التكويد (عين المستخدم + عين البوت)
+# ═══════════════════════════════════════════════════════════════
+
+_last_publish_test = {}
+
+_INVISIBLE_RANGES = (
+    (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F),
+    (0xFE00, 0xFE0F), (0x180B, 0x180E), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+_INVISIBLE_SINGLES = (0xFEFF, 0x061C)
+
+
+def _is_invisible_cp(cp: int) -> bool:
+    if cp in _INVISIBLE_SINGLES:
+        return True
+    return any(lo <= cp <= hi for lo, hi in _INVISIBLE_RANGES)
+
+
+def visualize_invisibles(text: str, mark: str = '◌') -> str:
+    """🤖 إظهار كل حرف خفي كـ ◌ — هذه هي العين التي تراها أدوات
+    بوتات الحماية عندما تفحص النص الخام (المستخدم لا يرى شيئاً)"""
+    if not text:
+        return text
+    return ''.join(mark if _is_invisible_cp(ord(ch)) else ch for ch in text)
+
+
+def _bot_regex_findings(text: str):
+    """🚨 محاكاة regex بوتات الحماية - ماذا تلتقط من هذا النص بالضبط؟"""
+    f = []
+    if re.search(r'(?<![\w@.])@[a-zA-Z][a-zA-Z0-9_]{3,31}', text):
+        f.append('👤 يوزر @ ظاهر نظيفاً ← بوت الحماية يلتقطه')
+    if re.search(r'(?:https?://|t\.me/|wa\.me/|telegram\.me/|www\.)\S+', text):
+        f.append('🔗 رابط ظاهر نظيفاً ← بوت الحماية يلتقطه')
+    if re.search(r'(?<![\w@./])\+?\d[\d\s\-]{5,16}\d(?![\w@./])', text):
+        f.append('📱 رقم هاتف ظاهر نظيفاً ← بوت الحماية يلتقطه')
+    return f
+
+
+def build_publish_test_report(raw: str, encoded: str, ents) -> str:
+    """تقرير اختبار النشر الكامل: قبل/بعد + عين المستخدم + عين البوت"""
+    inv_count = sum(1 for ch in encoded if _is_invisible_cp(ord(ch)))
+    vs_count = sum(1 for ch in encoded if 0xE0100 <= ord(ch) <= 0xE01EF)
+    cf_count = inv_count - vs_count
+    ratio = inv_count / max(len(encoded), 1)
+
+    # الكلمات المفتاحية: كاملة في الأصل → هل انكسرت في المكوَّد؟
+    try:
+        from adaptive_obfuscation import AD_KEYWORDS as _ADK
+    except Exception:
+        _ADK = ['اشترك', 'قناة', 'عرض', 'تواصل', 'واتساب', 'سعر', 'اعذار']
+    kw_total = sum(1 for kw in _ADK if kw in raw)
+    kw_matched = sum(1 for kw in _ADK if kw in raw and kw in encoded)
+
+    # كيانات العرض
+    from collections import Counter
+    ent_counts = Counter()
+    if ents:
+        for e in ents:
+            ent_counts[type(e).__name__] += 1
+
+    # ثغرات regex: قبل التكويد مقابل بعد التكويد
+    raw_findings = _bot_regex_findings(raw)
+    enc_findings = _bot_regex_findings(encoded)
+
+    msg = "🧪 **اختبار النشر - قبل/بعد التكويد**\n\n"
+    msg += "📄 **قبل التكويد (نصك الأصلي كما حفظته):**\n"
+    msg += f"{raw[:700]}{'…' if len(raw) > 700 else ''}\n\n"
+    msg += "📊 **نتيجة التكويد:**\n"
+    msg += f"• 🔤 أحرف خفية محقونة: **{inv_count}** (نسبة {ratio:.0%} من النص)\n"
+    msg += f"• 🧬 القنوات: {vs_count} حرف VS حديث + {cf_count} حرف حدودي\n"
+    if kw_total:
+        if kw_matched == 0:
+            msg += f"• 🎯 الكلمات المفتاحية: **كلها مجزأة** ({kw_total}/{kw_total}) ← لا مطابقة تامة ✅\n"
+        else:
+            msg += f"• 🎯 الكلمات المفتاحية: {kw_total - kw_matched}/{kw_total} مجزأة، {kw_matched} ما زالت كاملة ⚠️\n"
+    if ent_counts:
+        parts = []
+        if ent_counts.get('MessageEntityMention'):
+            parts.append(f"{ent_counts['MessageEntityMention']} منشن قابل للضغط")
+        if ent_counts.get('MessageEntityTextUrl'):
+            parts.append(f"{ent_counts['MessageEntityTextUrl']} زر ارتباط تشعبي")
+        if ent_counts.get('MessageEntityBold'):
+            parts.append("غامق")
+        if ent_counts.get('MessageEntityUnderline'):
+            parts.append("تحته خط")
+        msg += f"• 🧩 كيانات العرض: {'، '.join(parts)}\n"
+    msg += "\n🚨 **ما تلتقطه بوتات الحماية (محاكاة regex):**\n"
+    if not raw_findings:
+        msg += "• نصك لا يحتوي رموزاً حساسة أصلاً ✅\n"
+    else:
+        msg += f"• بدون التكويد كانت ستُلتقط: **{len(raw_findings)}** ثغرة\n"
+        if not enc_findings:
+            msg += "• بعد التكويد: **لا شيء يُلتقط** - كل الرموز المحقونة تفشل في regex ✅\n"
+        else:
+            for f in enc_findings:
+                msg += f"• {f}\n"
+            msg += "\n💡 **الحل:** حدد هذا الرمز هدفاً في درع الروابط ليُستبدل بزر مخفي لا تراه البوتات إطلاقاً\n"
+    msg += "\n👤 النص بعد التكويد يبدو لعين المستخدم **مطابقاً 100%** لنصك الأصلي\n"
+    msg += "👇 اضغط الأزرار لتراهما بعينيك"
+    return msg
 
 
 def _apply_html_links(original_text, encrypted_text):
@@ -5217,7 +5330,7 @@ def get_main_menu():
         [Button.inline(f"✨ أنماط النص {ft_status}", b"fancy_text_menu"),
          Button.inline(f"{ft_icon} {ft_name}", b"fancy_text_menu")],
         [Button.inline("🛡️ حماية متقدمة", b"advanced_enc_settings"),
-         Button.inline("🧪 اختبار التشفير", b"enc_test")],
+         Button.inline("🧪 اختبار النشر (قبل/بعد)", b"enc_test")],
         [Button.inline(f"🛡 درع الروابط {lg_status}", b"link_guard_menu"),
          Button.inline("✍️ تقوية العرض", b"style_boost_menu")],
         # ── الانضمام التلقائي (شغال دائماً - فقط إيقاف وتقارير) ──
@@ -6095,19 +6208,67 @@ async def main():
             await event.answer(f"التشفير: {'مفعل' if new_val == 'on' else 'معطل'}")
             await event.edit("⚙️ الإعدادات", buttons=get_settings_menu())
         elif data == 'enc_test':
-            sample = "اشترك في قناتنا https://t.me/example عروض حصرية! اتصل: 0555123456"
-            from hyper_encryption import HyperEncryptionEngine as _HEE, char_analysis as _ca
-            msg = f"🧪 **اختبار HyperEncryption - 4 مستويات**\n\n📝 **النص الأصلي:**\n{sample}\n\n"
-            for level in ['light', 'medium', 'aggressive', 'insane']:
-                eng = _HEE(settings_getter=lambda k, d, _lvl=level: _lvl if k == 'encryption_strength' else ('on' if k == 'encryption' else get_setting(k, d)))
-                enc = eng.encrypt(sample, group_id=-1001234567890, strength=level)
-                counts = _ca(enc)
-                invisible = sum(v for k, v in counts.items() if k != 'visible')
-                emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}[level]
-                active_n = len(_HEE.STRENGTH_LEVELS[level])
-                msg += f"{emoji} **{level.upper()}** ({active_n} طبقة، {len(enc)} حرف، {invisible} غير مرئي):\n{enc}\n\n"
-            msg += "💡 كل النصوص تبدو متطابقة بصرياً مع الأصل!\n\nاختر مستوى القوة من زر 'قوة التشفير' في القائمة الرئيسية."
-            await event.edit(msg, buttons=[[Button.inline("🔙 رجوع", b"back")]])
+            # 🧪 v4.5 اختبار النشر - إعلانك الحقيقي قبل/بعد التكويد
+            # (عين المستخدم 👤 + عين بوتات الحماية 🤖) - لا نصوص تجريبية
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT content FROM messages WHERE content IS NOT NULL AND content != '' ORDER BY id DESC LIMIT 1")
+            row = c.fetchone()
+            conn.close()
+            if not row or not (row[0] or '').strip():
+                await event.edit(
+                    "🧪 **اختبار النشر**\n\n"
+                    "❌ لا توجد رسالة محفوظة بعد.\n\n"
+                    "📝 أضف إعلانك أولاً من زر **📝 الرسائل** ثم ارجع هنا — سترى:\n"
+                    "• إعلانك قبل التكويد وبعده\n"
+                    "• 👤 النص الذي يراه المستخدم\n"
+                    "• 🤖 النص الذي تراه بوتات الحماية",
+                    buttons=[[Button.inline("📝 الرسائل", b"messages")],
+                             [Button.inline("🔙 رجوع", b"back")]])
+                return
+            raw = row[0]
+            encoded, use_html, ents = prepare_content_for_sending(raw)
+            _last_publish_test.clear()
+            _last_publish_test.update(raw=raw, encoded=encoded, ents=ents)
+            report = build_publish_test_report(raw, encoded, ents)
+            await event.edit(report, parse_mode='md', buttons=[
+                [Button.inline("👤 النص الذي يراه المستخدم", b"test_user_view"),
+                 Button.inline("🤖 النص الذي تراه البوتات", b"test_bot_view")],
+                [Button.inline("🎯 إخفاء اليوزر/الرابط كزر", b"link_guard_menu")],
+                [Button.inline("🔙 رجوع", b"back")],
+            ])
+
+        elif data == 'test_user_view':
+            # 👤 معاينة حية: النص المكوَّد كما يظهر للمستخدم تماماً
+            # (بنفس كيانات النشر: منشن قابل للضغط + أزرار ارتباط)
+            t = _last_publish_test.get('encoded')
+            if not t:
+                await event.answer("اضغط اختبار النشر أولاً", alert=True)
+                return
+            await event.answer()
+            ents = _last_publish_test.get('ents')
+            try:
+                await event.respond("👤👇 هذا ما يراه المستخدم بعد التكويد (جرب الضغط على اليوزر):")
+            except Exception:
+                pass
+            try:
+                await event.respond(t[:4000], parse_mode=None, formatting_entities=ents)
+            except Exception:
+                await event.respond(t[:4000], parse_mode=None)
+
+        elif data == 'test_bot_view':
+            # 🤖 معاينة: النص الخام بعين بوتات الحماية
+            # كل حرف خفي يُعرض ◌ — هذا ما تبحث فيه أدوات الفحص فعلياً
+            t = _last_publish_test.get('encoded')
+            if not t:
+                await event.answer("اضغط اختبار النشر أولاً", alert=True)
+                return
+            await event.answer()
+            inv_count = sum(1 for ch in t if _is_invisible_cp(ord(ch)))
+            viz = visualize_invisibles(t)
+            body = (f"🤖👇 هذا ما تراه بوتات الحماية (كل ◌ = حرف خفي مخفي عن البشر)\n"
+                    f"إجمالي الأحرف الخفية: {inv_count}\n\n{viz[:3800]}")
+            await event.respond(body[:4000], parse_mode=None)
 
         # ═══════════════════════════════════════════════════════════
         #  🔬 Adaptive Obfuscation Engine - محرك التشويش التكيفي

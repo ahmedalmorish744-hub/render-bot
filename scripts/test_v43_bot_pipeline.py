@@ -62,7 +62,12 @@ if mention_ents:
 bot.set_setting('link_guard_targets', '@ppppokl')
 out2, _, ents2 = bot.prepare_content_for_sending(ad)
 check("مع هدف: اليوزر اختفى نصاً", 'ppppokl' not in out2)
-check("مع هدف: الهاتف بقي كما هو (لم يحدده المستخدم)", '0777123456' in out2)
+# v4.5: الهاتف الذي لم يحدده المستخدم يبقى ظاهراً للعين لكن مُقنَّعاً
+# بأحرف VS خفية (درع الهواتف المتبقية) - يظهر كرقم ولا يلتقطه regex
+import re as _re
+_vs_stripped = _re.sub('[' + _re.escape(chr(0xE0100)) + '-' + _re.escape(chr(0xE01EF)) + ']', '', out2)
+_phone_cloaked = ('0777123456' not in out2 and '0777123456' in _vs_stripped)
+check("مع هدف: الهاتف ظاهر للعين لكن مُقنَّع عن regex (v4.5)", _phone_cloaked)
 text_ents = [e for e in (ents2 or []) if type(e).__name__ == 'MessageEntityTextUrl']
 check("مع هدف: زر TextUrl واحد", len(text_ents) == 1,
       str([type(e).__name__ for e in (ents2 or [])]))

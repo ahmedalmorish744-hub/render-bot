@@ -255,6 +255,71 @@ def cloak_sensitive_tokens(text: str, density: float = 0.55) -> str:
     return ''.join(result)
 
 
+# 📱 v4.5 نمط الهاتف المستقل - لدرع الهواتف المتبقية بعد درع الروابط
+_PHONE_TOKEN_RE = re.compile(
+    r'(?<![\w@./])(?:\+?\d[\d\s\-]{5,16}\d)(?![\w@./])')
+
+
+def cloak_phone_tokens(text: str, density: float = 0.45) -> str:
+    """
+    📱 درع الهواتف المتبقية (v4.5) - يخفي أرقام الهواتف عن regex البوتات
+
+    لماذا؟ (البلاغ الحقيقي: "البوتات الحماية تمسكه وتعثر عليه")
+    - v4.3 جعلت الرموز الحساسة تمر نظيفة ليعمل درع الروابط (الأزرار)
+    - لكن حين لا يحدد المستخدم أهداف ارتباط، يبقى الرقم نظيفاً
+      مكشوفاً تماماً لـ regex بوتات الحماية!
+
+    الحل: بعد درع الروابط، كل رقم هاتف لم يتحول لزر يُحقن بين أرقامه
+    أحرف VS خفية (E0100-E01EF فئتها Mn شفافة الاتصال):
+    ✅ العين ترى 0552948177 كما هو بالضبط (VS غير مرئية)
+    ✅ regex الهواتف تفشل (حرف غير رقمي بين الأرقام يكسر المطابقة)
+    ✅ لا يضاف أي رقم أو محتوى جديد - حماية لما كتبه المستخدم فقط
+    ✅ الهواتف المحوّلة لأزرار (أهداف المستخدم) لا تمر من هنا أصلاً
+
+    Args:
+        text: النص النهائي (بعد درع الروابط)
+        density: كثافة الحقن بين الأرقام
+    """
+    if not text or density <= 0:
+        return text
+
+    result = []
+    last = 0
+    for m in _PHONE_TOKEN_RE.finditer(text):
+        token = m.group(0)
+        digits = sum(1 for ch in token if ch.isdigit())
+        # فلترة: هاتف حقيقي (7+ رقم) - الأسعار والتواريخ القصيرة تبقى نصاً
+        if digits < 7:
+            continue
+        result.append(text[last:m.start()])
+        # مواضع الحقن: بين رقمين فقط (ليس قبل/بعد الرمز)
+        digit_positions = [i for i, ch in enumerate(token) if ch.isdigit()]
+        inner_gaps = [i for i in digit_positions
+                      if i + 1 < len(token) and token[i + 1].isdigit()]
+        # 🎯 ضمان (v4.5): حرفان خفيان مضمونان على الأقل + لا فجوة 3 أرقام
+        # متتالية بلا حقن - الحقن الاحتمالي وحده قد يترك الرقم نظيفاً!
+        chosen = set()
+        if inner_gaps:
+            chosen.update(random.sample(inner_gaps, min(2, len(inner_gaps))))
+        for g in inner_gaps:
+            if g % 3 == 1:
+                chosen.add(g)
+        prev_digit = False
+        for i, ch in enumerate(token):
+            cur_digit = ch.isdigit()
+            if cur_digit and prev_digit:
+                if i in chosen:
+                    # 🎯 الفجوات المضمونة تُحقن دائماً (بلا احتمالية!)
+                    result.append(random.choice(VS_POOL))
+                elif random.random() < density:
+                    result.append(random.choice(VS_POOL))
+            result.append(ch)
+            prev_digit = cur_digit
+        last = m.end()
+    result.append(text[last:])
+    return ''.join(result)
+
+
 # ═══════════════════════════════════════════════════════════════
 # 🔬 أدوات قواعد الاتصال العربي (قلب الحفاظ على رسم الكلمات)
 # ═══════════════════════════════════════════════════════════════
@@ -540,19 +605,40 @@ smart_zw_distribute = shield_invisible_distribute
 
 def add_anti_similarity_salt(text: str) -> str:
     """
-    بصمة VS فريدة في نهاية كل رسالة (8-14 حرف خفي)
+    بصمة VS فريدة لكل رسالة (8-14 حرف خفي) - v4.5 موضع محسوب
 
     ✅ يكسر كشف الرسائل المكررة (dedup) والهاش المتطابق
     ✅ كل رسالة في كل مجموعة لها بصمة مختلفة عشوائياً
     ✅ يستخدم قناة VS فقط → لا يتعارض مع أبجدية بصمة stego
-    ✅ في نهاية الرسالة → صفر تأثير على النص أو رسمه
-    ✅ الطول يتناسب مع طول الرسالة (حتى لا ترتفع نسبة الخفي
-       في الرسائل القصيرة فوق رادار الكشف الإحصائي)
+    ✅ الطول يتناسب مع طول الرسالة
+
+    🆕 v4.5 - إصلاح جذري: البصمة لم تعد تُلصق بنهاية الرسالة!
+       السبب: عندما تنتهي الرسالة برمز حساس (@يوزر/رابط/هاتف) كانت
+       الأحرف الخفية تتكدس بعده مباشرة (‏@ppppokl◌◌◌◌◌◌) فيكسر ذلك:
+       1) قابلية النقر على المنشن (تلوث موضع النهاية)
+       2) الحماية نفسها - البوتات تنظف الأحرف الختامية بنمط واحد
+       الحل: زرع البصمة عند حد كلمة في النصف الثاني من النص،
+       بعيداً عن الرموز الحساسة (لا داخلها ولا ملاصقة لها).
     """
     if not text:
         return text
     salt_len = min(random.randint(8, 14), max(4, len(text) // 10))
     salt = ''.join(random.choice(VS_POOL) for _ in range(salt_len))
+
+    # نقاط الزرع الآمنة: بداية كلمة بعد مسافة (حد كلمة) في النصف الثاني
+    candidates = [m.start() for m in re.finditer(r'(?<=\s)(?=\S)', text)
+                  if m.start() >= len(text) * 0.5]
+    # استبعاد ما يلامس الرموز الحساسة (قبلها أو بعدها بحرف واحد)
+    if candidates:
+        spans = find_sensitive_spans(text)
+        bad = set()
+        for s, e in spans:
+            bad.update(range(max(0, s - 1), min(len(text), e + 1)))
+        candidates = [p for p in candidates if p not in bad]
+    if candidates:
+        p = random.choice(candidates)
+        return text[:p] + salt + text[p:]
+    # نص قصير/كلمة واحدة: النهاية فقط (لا رمز حساس طويل ملاصق غالباً)
     return text + salt
 
 # ═══════════════════════════════════════════════════════════════
