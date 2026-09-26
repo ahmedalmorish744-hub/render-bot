@@ -6141,6 +6141,56 @@ async def main():
             f"• 📅 منشورات مجدولة معلقة: {pending_sched}"
         )
 
+    @bot.on(events.NewMessage(pattern='/debug'))
+    async def debug_handler(event):
+        """🩺 أمر تشخيص - يعرض حالة تدفق إضافة الحساب الداخلية"""
+        set_current_user(event.sender_id)
+        try:
+            # معلومات المستخدم
+            uid = event.sender_id
+            is_banned = multiuser.is_banned(DB_PATH, uid)
+            is_adm = is_admin(uid)
+            # حالة الأعلام
+            ap = get_setting('awaiting_phone')
+            ac = get_setting('awaiting_code')
+            apw = get_setting('awaiting_password')
+            pp = get_setting('_pending_phone')
+            ph = get_setting('_pending_code_hash')
+            # الجلسات المؤقتة
+            ts_exists = uid in temp_sessions
+            ts_keys = list(temp_sessions.keys())[:5]
+            # الحسابات
+            my_accs = get_accounts_for_current(DB_PATH)
+            connected = sum(1 for a in my_accs if a in user_clients)
+            # سياق المستخدم
+            ctx_user = get_current_user()
+            await event.respond(
+                f"🩺 **تشخيص تدفق إضافة الحساب**\n\n"
+                f"👤 **معلوماتك:**\n"
+                f"• user_id: `{uid}`\n"
+                f"• محظور: {'نعم 🚫' if is_banned else 'لا ✅'}\n"
+                f"• أدمن: {'نعم 🛡️' if is_adm else 'لا'}\n"
+                f"• CURRENT_USER context: `{ctx_user}`\n\n"
+                f"📍 **أعلام الحالة (لك):**\n"
+                f"• awaiting_phone: `{ap or ''}`\n"
+                f"• awaiting_code: `{ac or ''}`\n"
+                f"• awaiting_password: `{apw or ''}`\n"
+                f"• _pending_phone: `{pp or ''}`\n"
+                f"• _pending_code_hash: `{(ph or '')[:20]}{'...' if ph and len(ph) > 20 else ''}`\n\n"
+                f"🔄 **الجلسة المؤقتة:**\n"
+                f"• موجودة لك: {'✅ نعم' if ts_exists else '❌ لا'}\n"
+                f"• كل الجلسات: `{ts_keys}`\n\n"
+                f"👥 **حساباتك:**\n"
+                f"• في قاعدة البيانات: {len(my_accs)}\n"
+                f"• متصلة: {connected}\n\n"
+                f"💡 **لاستكشاف المشكلة:**\n"
+                f"1. لو awaiting_phone=true ولم يظهر شيء → اضغط /cancel ثم أعد المحاولة\n"
+                f"2. لو الجلسة المؤقتة غير موجودة بعد إرسال الرقم → البوت أُعيد تشغيله\n"
+                f"3. لو الحساب غير مضاف بعد الكود → تحقق من السجلات في لوحة Render"
+            )
+        except Exception as e:
+            await event.respond(f"❌ خطأ في التشخيص: {str(e)[:200]}")
+
     @bot.on(events.NewMessage(pattern='/test'))
     async def test_handler(event):
         set_current_user(event.sender_id)
@@ -7937,14 +7987,28 @@ async def main():
         # ═══════════════════════════════════════════
 
         # إضافة حساب - رقم الهاتف
+        # 🛡 v5.4: مسار مضمون — لا حماية، لا حظر، أي مستخدم يضيف أي حساب
         if get_setting('awaiting_phone') == 'true':
             set_setting('awaiting_phone', '')
             logger.info(f"📞 awaiting_phone triggered: user={event.sender_id}, raw_text={event.raw_text!r}")
             phone = event.raw_text.strip()
-            # تنظيف الرقم: إزالة المسافات والشرطات والأقواس
-            phone_clean = re.sub(r'[\s\-\(\)]', '', phone)
+            # تنظيف الرقم: إزالة المسافات والشرطات والأقواس + تحويل الأرقام العربية/الفارسية
+            ar_digits = '٠١٢٣٤٥٦٧٨٩'
+            fa_digits = '۰۱۲۳۴۵۶۷۸۹'
+            for i, d in enumerate(ar_digits):
+                phone = phone.replace(d, str(i))
+            for i, d in enumerate(fa_digits):
+                phone = phone.replace(d, str(i))
+            phone_clean = re.sub(r'[\s\-\(\)\.]', '', phone)
+            # إزالة أي شيء ليس رقماً أو +
+            phone_clean = re.sub(r'[^0-9+]', '', phone_clean)
             if not re.match(r'^\+?\d{8,15}$', phone_clean):
-                await event.respond("❌ رقم غير صالح! مثال: +966512345678\nأعد الإرسال أو /cancel")
+                await event.respond(
+                    f"❌ الرقم غير صالح: `{phone_clean or phone}`\n\n"
+                    f"💡 مثال صحيح: `+966512345678` — أرسل الرقم مع رمز الدولة (+966 للسعودية، +967 لليمن...)",
+                    buttons=[[Button.inline("🔁 إعادة المحاولة", b"add_acc")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
                 set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
                 return
             # 🔧 v5.2: ضمان + في البداية (تيليجرام يتطلب E.164)
@@ -7966,6 +8030,7 @@ async def main():
                 # ثم نظيف session في sign_in إذا الجلسة المؤقتة ضاعت
                 set_setting('_pending_code_hash', result.phone_code_hash)
                 set_setting('awaiting_code', 'true')
+                logger.info(f"✅ send_code_request succeeded for user {event.sender_id}, phone={phone_clean}, hash={result.phone_code_hash[:20]}...")
                 await event.respond(
                     f"📩 **تم إرسال الرمز إلى {phone_clean}**\n\n"
                     f"⏳ الرمز صالح لمدة ~5 دقائق\n\n"
@@ -7973,22 +8038,42 @@ async def main():
                     f"⚠️ لا تضغط أي زر — فقط اكتب الرمز وأرسله",
                 )
             except FloodWaitError as e:
-                await event.respond(f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية. انتظر ثم حاول مرة أخرى.")
-                set_setting('awaiting_phone', 'true')
+                await event.respond(
+                    f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية.\n\n"
+                    f"⏰ بعد الانتظار، اضغط الزر لإعادة المحاولة:",
+                    buttons=[[Button.inline("🔁 إعادة المحاولة", b"add_acc")]]
+                )
             except Exception as e:
                 error_msg = str(e)[:300]
+                logger.error(f"❌ send_code_request failed for user {event.sender_id}: {error_msg}", exc_info=True)
                 # 🔍 معالجة محددة لأخطاء شائعة
                 err_str = str(e).lower()
-                if 'phonenumber_invalid' in err_str or 'phone_number_invalid' in err_str:
+                if 'phonenumber_invalid' in err_str or 'phone_number_invalid' in err_str or 'not registered' in err_str:
                     await event.respond(
-                        f"❌ الرقم غير مسجل في تيليجرام: {phone_clean}\n\n💡 تأكد من الرقم ثم أعد المحاولة.",
-                        buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")]]
+                        f"❌ الرقم غير مسجل في تيليجرام: `{phone_clean}`\n\n"
+                        f"💡 تأكد من الرقم — يجب أن يكون مسجلاً في تيليجرام",
+                        buttons=[[Button.inline("🔁 إعادة المحاولة", b"add_acc")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                elif 'phonenumberbanned' in err_str or 'banned' in err_str:
+                    await event.respond(
+                        f"🚫 الرقم محظور من تيليجرام: `{phone_clean}`\n\n"
+                        f"💡 هذا الرقم محظور من استخدام تيليجرام — جرب رقماً آخر",
+                        buttons=[[Button.inline("➕ رقم آخر", b"add_acc")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
                     )
                 elif 'flood' in err_str:
-                    await event.respond(f"⏸ تيليجرام رفض بسبب كثرة الطلبات. انتظر قليلاً ثم أعد المحاولة.")
-                    set_setting('awaiting_phone', 'true')
+                    await event.respond(
+                        f"⏸ تيليجرام رفض بسبب كثرة الطلبات.\n\n💡 انتظر دقيقتين ثم اضغط الزر:",
+                        buttons=[[Button.inline("🔁 إعادة المحاولة", b"add_acc")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
                 else:
-                    await event.respond(f"❌ خطأ: {error_msg}\n\n💡 جرب مرة أخرى أو /cancel")
+                    await event.respond(
+                        f"❌ خطأ: `{error_msg}`\n\n💡 اضغط الزر لإعادة المحاولة أو /cancel",
+                        buttons=[[Button.inline("🔁 إعادة المحاولة", b"add_acc")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
                     set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
             return
 
@@ -8121,8 +8206,13 @@ async def main():
                 logger.info(f"✅ insert_account: acc_id={acc_id}")
                 user_clients[acc_id] = session_data["client"]
                 user_clients_owner[acc_id] = get_current_user()
-                group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
-                logger.info(f"✅ fetch_all_groups_for_account: {group_count} groups")
+                # 🛡 v5.4: جلب القروبات في try مستقل — لو فشل، الحساب يُضاف رغم ذلك
+                try:
+                    group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+                    logger.info(f"✅ fetch_all_groups_for_account: {group_count} groups")
+                except Exception as fe:
+                    logger.warning(f"⚠️ fetch_all_groups_for_account failed (account added anyway): {fe}")
+                    group_count = 0
                 del temp_sessions[event.sender_id]
                 # تنظيف الإعدادات المؤقتة
                 set_setting('_pending_phone', '')
