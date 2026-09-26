@@ -3,3 +3,9 @@
 *.session-journal
 __pycache__/
 media/
+
+# 🗑️ v6.0: لا ترفع نسخ الخزنة للمستودع (تمنع استعادة البيانات القديمة)
+last_vault_backup.bin
+*.session
+*.session-journal
+bot_database.db
