@@ -4095,6 +4095,50 @@ async def fetch_all_groups_for_account(acc_id, client):
         logger.error(f"❌ فشل استيراد المجموعات: {e}")
     return count
 
+
+async def _silent_import_all_groups(acc_id, client):
+    """📥 v5.1: استيراد كل القروبات صامتاً - يُرجع (new_count, total_dialogs)
+    صامت = لا يُنشر أي شيء في القروبات، فقط يمسح الحوارات ويحفظها في DB.
+    يلتقط: المجموعات، القنوات، megagroups، وكل أنواع chats الجماعية."""
+    new_count = 0
+    total_dialogs = 0
+    owner_id = user_clients_owner.get(acc_id, get_current_user())
+    try:
+        # iter_dialogs يرجع كل الحوارات (تلقائي pagination)
+        async for dialog in client.iter_dialogs():
+            total_dialogs += 1
+            try:
+                # نأخذ كل من: المجموعات، القنوات، megagroups، basic groups
+                # نتخطى المحادثات الخاصة (User) والمحادثات السرية
+                is_grp = dialog.is_group
+                is_chn = dialog.is_channel
+                if not (is_grp or is_chn):
+                    continue
+                group_id = dialog.id
+                group_name = (dialog.name or "بدون اسم")[:100]
+                member_count = getattr(dialog.entity, 'participants_count', 0) or 0
+                username = getattr(dialog.entity, 'username', None)
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                # INSERT OR IGNORE على (group_id, owner_id) - القروب الواحد يُسجّل مرة واحدة لكل مستخدم
+                # لو القروب موجود مسبقاً (مجموعة مشتركة بين حسابين) لن يتكرر
+                c.execute('''SELECT 1 FROM groups WHERE group_id=? AND owner_id=?''', (group_id, owner_id))
+                if not c.fetchone():
+                    c.execute('''INSERT INTO groups (group_id, group_name, username, member_count, added_by, owner_id)
+                                 VALUES (?, ?, ?, ?, ?, ?)''',
+                              (group_id, group_name, username, member_count,
+                               f"account_{acc_id}", owner_id))
+                    new_count += 1
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                logger.debug(f"⚠️ تخطي حوار في حساب {acc_id}: {e}")
+                continue
+        logger.info(f"📥 استيراد صامت: {new_count} قروب جديد من {total_dialogs} حوار (acc={acc_id}, owner={owner_id})")
+    except Exception as e:
+        logger.error(f"❌ فشل الاستيراد الصامت للحساب {acc_id}: {e}")
+    return new_count, total_dialogs
+
 async def get_account_groups(client, acc_id=None):
     """جلب كل المجموعات/القنوات ديناميكياً - مفلترة حسب owner_id"""
     groups = []
@@ -6333,7 +6377,7 @@ async def main():
                 [Button.inline("➕ إضافة", b"add_acc")],
                 [Button.inline("📋 عرض", b"list_acc")],
                 [Button.inline("🗑 حذف", b"del_acc")],
-                [Button.inline("🔄 تحديث المجموعات", b"refresh_groups")],
+                [Button.inline("📥 استيراد كل القروبات (صامت)", b"refresh_groups")],
                 [Button.inline("☁️ حفظ سحابي الآن", b"vault_backup")],
                 [Button.inline("☁️ استعادة من السحابة", b"vault_restore")],
                 [Button.inline("🔙 رجوع", b"back")],
@@ -6404,12 +6448,112 @@ async def main():
             set_setting('awaiting_del_acc', 'true')
 
         elif data == 'refresh_groups':
-            await event.edit("🔄 جاري تحديث المجموعات...")
-            total = 0
-            for acc_id, client in user_clients.items():
-                count = await fetch_all_groups_for_account(acc_id, client)
-                total += count
-            await event.edit(f"✅ تم تحديث {total} مجموعة", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+            # 📥 v5.1: استيراد كل القروبات صامتاً (فقط حسابات المستخدم الحالي)
+            uid = get_current_user()
+            my_acc_ids = set(get_accounts_for_current(DB_PATH))
+            my_clients = {aid: cl for aid, cl in user_clients.items() if aid in my_acc_ids}
+            if not my_clients:
+                await event.edit(
+                    "❌ لا توجد حسابات نشطة لك.\n\nأضف حساباً أولاً ثم اضغط هذا الزر لاستيراد كل قروباته.",
+                    buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
+                             [Button.inline("🔙 رجوع", b"accounts")]]
+                )
+                return
+            await event.edit(
+                f"📥 **جاري استيراد كل القروبات...**\n\n"
+                f"👥 حساباتك النشطة: {len(my_clients)}\n"
+                f"⏳ صامت - لن يُنشر أي شيء في القروبات"
+            )
+            total_dialogs = 0
+            new_groups = 0
+            for acc_id, client in list(my_clients.items()):
+                try:
+                    added, dialogs = await _silent_import_all_groups(acc_id, client)
+                    total_dialogs += dialogs
+                    new_groups += added
+                except Exception as e:
+                    logger.error(f"❌ فشل استيراد القروبات للحساب {acc_id}: {e}")
+            # العد الكلي للقروبات لهذا المستخدم
+            final_count = count_groups_for_current(DB_PATH)
+            await event.edit(
+                f"✅ **تم استيراد كل القروبات**\n\n"
+                f"👥 الحسابات: {len(my_clients)}\n"
+                f"💬 الحوارات الممسوحة: {total_dialogs}\n"
+                f"🆕 قروبات جديدة: {new_groups}\n"
+                f"📢 إجمالي قروباتك: {final_count}\n\n"
+                f"🤫 العملية صامتة - لم يُنشر أي شيء في القروبات",
+                buttons=[[Button.inline("🔙 رجوع", b"accounts")]]
+            )
+
+        elif data == 'resend_code':
+            # 🔄 v5.1: إعادة إرسال الرمز تلقائياً باستخدام الرقم المخزن
+            stored_phone = get_setting('_pending_phone')
+            if not stored_phone:
+                await event.edit(
+                    "❌ لا يوجد رقم محفوظ لإعادة الإرسال.\n\nاضغط إضافة حساب وأرسل رقمك من جديد.",
+                    buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
+                             [Button.inline("🔙 رجوع", b"accounts")]]
+                )
+                return
+            # تنظيف أي جلسة مؤقتة قديمة
+            old_session = temp_sessions.get(event.sender_id)
+            if old_session:
+                try:
+                    await old_session["client"].disconnect()
+                except Exception:
+                    pass
+                del temp_sessions[event.sender_id]
+            try:
+                await event.edit(f"🔄 جاري إرسال رمز جديد إلى `{stored_phone}`...")
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+                await client.connect()
+                result = await client.send_code_request(stored_phone)
+                temp_sessions[event.sender_id] = {
+                    "phone": stored_phone,
+                    "client": client,
+                    "phone_code_hash": result.phone_code_hash
+                }
+                set_setting('awaiting_code', 'true')
+                await event.edit(
+                    f"✅ **تم إرسال رمز جديد إلى** `{stored_phone}`\n\n"
+                    f"⏳ الرمز صالح لمدة ~5 دقائق\n"
+                    f"💡 أرسل الرمز الآن:",
+                    buttons=[[Button.inline("🔄 إعادة الإرسال مرة أخرى", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
+            except FloodWaitError as e:
+                await event.edit(
+                    f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية قبل إعادة الإرسال.\n"
+                    f"انتظر ثم اضغط الزر مرة أخرى.",
+                    buttons=[[Button.inline("🔄 إعادة المحاولة", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.edit(
+                    f"❌ خطأ في إعادة إرسال الرمز: {error_msg}\n\n"
+                    f"💡 أرسل رقمك من جديد:",
+                    buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
+                             [Button.inline("🔙 رجوع", b"accounts")]]
+                )
+                set_setting('awaiting_phone', 'true')
+
+        elif data == 'cancel_add_acc':
+            # 🛑 إلغاء عملية إضافة الحساب وتنظيف الحالة
+            for key in ['awaiting_phone', 'awaiting_code', 'awaiting_password', '_pending_phone']:
+                set_setting(key, '')
+            old_session = temp_sessions.get(event.sender_id)
+            if old_session:
+                try:
+                    await old_session["client"].disconnect()
+                except Exception:
+                    pass
+                del temp_sessions[event.sender_id]
+            await event.edit(
+                "✅ تم إلغاء عملية إضافة الحساب.",
+                buttons=[[Button.inline("🔙 الحسابات", b"accounts")],
+                         [Button.inline("🏠 الرئيسية", b"back")]]
+            )
 
         elif data == 'settings':
             obf_status = get_setting('obfuscation_enabled', 'on')
@@ -7573,7 +7717,8 @@ async def main():
                        'awaiting_schedule', 'awaiting_schedule_delete',
                        'awaiting_lg_anchor', 'awaiting_lg_target_add',
                        'awaiting_kashida_intensity', 'awaiting_swarm_stages',
-                       'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max']:
+                       'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max',
+                       '_pending_phone']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -7608,8 +7753,20 @@ async def main():
                     "client": client,
                     "phone_code_hash": result.phone_code_hash
                 }
+                # 🛡 v5.1: نحفظ الرقم في الإعدادات أيضاً ليُستخدم لإعادة الإرسال
+                # لو ضاعت الجلسة المؤقتة (إعادة تشغيل البوت) أو انتهت صلاحية الكود
+                set_setting('_pending_phone', phone_clean)
                 set_setting('awaiting_code', 'true')
-                await event.respond(f"📩 تم إرسال الرمز إلى {phone_clean}\nأرسل الرمز:")
+                await event.respond(
+                    f"📩 **تم إرسال الرمز إلى {phone_clean}**\n\n"
+                    f"⏳ الرمز صالح لمدة ~5 دقائق فقط\n"
+                    f"💡 أرسل الرمز الآن أو اضغط /cancel للإلغاء\n\n"
+                    f"🔄 لو انتهى الرمز، اضغط:  🔄 إعادة إرسال الرمز",
+                    buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")]]
+                )
+            except FloodWaitError as e:
+                await event.respond(f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية. انتظر ثم حاول مرة أخرى.")
+                set_setting('awaiting_phone', 'true')
             except Exception as e:
                 error_msg = str(e)[:300]
                 await event.respond(f"❌ خطأ: {error_msg}\n\n💡 جرب مرة أخرى أو /cancel")
@@ -7622,6 +7779,17 @@ async def main():
             code = event.raw_text.strip()
             session_data = temp_sessions.get(event.sender_id)
             if not session_data:
+                # الجلسة المؤقتة ضاعت (إعادة تشغيل البوت) - نحاول استرجاع الرقم من الإعدادات
+                stored_phone = get_setting('_pending_phone')
+                if stored_phone:
+                    await event.respond(
+                        "❌ انتهت الجلسة المؤقتة (البوت أُعيد تشغيله).\n\n"
+                        f"📞 الرقم المحفوظ: `{stored_phone}`\n\n"
+                        "اضغط الزر أدناه لإعادة إرسال رمز جديد تلقائياً:",
+                        buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                    return
                 await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
                 return
             try:
@@ -7632,21 +7800,40 @@ async def main():
                 user_clients_owner[acc_id] = get_current_user()
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
+                set_setting('_pending_phone', '')  # تنظيف
                 vault_mark_dirty()
                 await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except SessionPasswordNeededError:
                 set_setting('awaiting_password', 'true')
                 await event.respond("🔐 الحساب محمي بكلمة مرور\nأرسل كلمة المرور:")
             except PhoneCodeInvalidError:
-                await event.respond("❌ رمز غير صحيح! أعد الإرسال:")
+                await event.respond(
+                    "❌ رمز غير صحيح!\n\nأعد الإرسال أو اضغط الزر لإعادة إرسال رمز جديد:",
+                    buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
                 set_setting('awaiting_code', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
             except PhoneCodeExpiredError:
-                await event.respond("❌ انتهت صلاحية الرمز! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+                # الكود انتهت صلاحيته — نعرض زر إعادة الإرسال بدل застав المستخدم يبدأ من جديد
+                await event.respond(
+                    "⌛ **انتهت صلاحية الرمز** (يصلح لمدة ~5 دقائق فقط).\n\n"
+                    "💡 اضغط الزر أدناه لإرسال رمز جديد تلقائياً لنفس الرقم:",
+                    buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
             except FloodWaitError as e:
-                await event.respond(f"⏸ انتظر {e.seconds} ثانية ثم حاول مرة أخرى")
+                await event.respond(
+                    f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية.\n\n"
+                    f"بعد الانتظار، اضغط الزر لإعادة إرسال الرمز:",
+                    buttons=[[Button.inline("🔄 إعادة الإرسال بعد الانتظار", b"resend_code")]]
+                )
             except Exception as e:
                 error_msg = str(e)[:300]
-                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel")
+                await event.respond(
+                    f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو اضغط الزر لإعادة الإرسال:",
+                    buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
                 set_setting('awaiting_code', 'true')
             return
 
@@ -7656,7 +7843,17 @@ async def main():
             password = event.raw_text.strip()
             session_data = temp_sessions.get(event.sender_id)
             if not session_data:
-                await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
+                stored_phone = get_setting('_pending_phone')
+                if stored_phone:
+                    await event.respond(
+                        "❌ انتهت الجلسة المؤقتة (البوت أُعيد تشغيله).\n\n"
+                        f"📞 الرقم المحفوظ: `{stored_phone}`\n\n"
+                        "اضغط الزر لإعادة إرسال رمز جديد ثم أدخل كلمة المرور:",
+                        buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                else:
+                    await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
                 return
             try:
                 await session_data["client"].sign_in(password=password)
@@ -7666,11 +7863,20 @@ async def main():
                 user_clients_owner[acc_id] = get_current_user()
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
+                set_setting('_pending_phone', '')  # تنظيف
                 vault_mark_dirty()
                 await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
+            except FloodWaitError as e:
+                await event.respond(
+                    f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية.\n\nانتظر ثم أعد إرسال كلمة المرور:"
+                )
+                set_setting('awaiting_password', 'true')
             except Exception as e:
                 error_msg = str(e)[:300]
-                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel")
+                await event.respond(
+                    f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو /cancel",
+                    buttons=[[Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
                 set_setting('awaiting_password', 'true')
             return
 
