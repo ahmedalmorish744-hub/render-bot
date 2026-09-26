@@ -7773,6 +7773,8 @@ async def main():
     @bot.on(events.NewMessage)
     async def message_handler(event):
         set_current_user(event.sender_id)
+        # 📝 v5.3.1: سجل كل رسالة واردة (يساعد على تشخيص عدم الوصول)
+        logger.info(f"📩 message_handler: user={event.sender_id}, chat={event.chat_id}, text={event.raw_text[:50] if event.raw_text else ''!r}")
         try:
             _s = await event.get_sender()
             multiuser.register_user(DB_PATH, event.sender_id,
@@ -7812,6 +7814,7 @@ async def main():
         # إضافة حساب - رقم الهاتف
         if get_setting('awaiting_phone') == 'true':
             set_setting('awaiting_phone', '')
+            logger.info(f"📞 awaiting_phone triggered: user={event.sender_id}, raw_text={event.raw_text!r}")
             phone = event.raw_text.strip()
             # تنظيف الرقم: إزالة المسافات والشرطات والأقواس
             phone_clean = re.sub(r'[\s\-\(\)]', '', phone)
