@@ -184,29 +184,53 @@ def register_user(db_path: str, telegram_id: int, username: str = '',
 
 
 def is_banned(db_path: str, telegram_id: int) -> bool:
-    """هل المستخدم محظور؟"""
+    """هل المستخدم محظور؟ 🛡️ متسامح مع خطأ."""
     tid = int(telegram_id)
     if tid in ENV_ADMIN_IDS:
         return False  # الأدمن لا يُحظر
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute('SELECT is_banned FROM users WHERE telegram_id=?', (tid,))
-    row = c.fetchone()
-    conn.close()
-    return bool(row and row[0])
+    try:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")
+        if not c.fetchone():
+            conn.close()
+            return False
+        c.execute('SELECT is_banned FROM users WHERE telegram_id=?', (tid,))
+        row = c.fetchone()
+        conn.close()
+        return bool(row and row[0])
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
 
 
 def is_user_admin(db_path: str, telegram_id: int) -> bool:
-    """هل المستخدم أدمن؟ (بيئة أو جدول)"""
+    """هل المستخدم أدمن؟ (بيئة أو جدول).
+    🛡️ v5.3.3: متسامح مع خطأ - يرجع True/False بدل رفع exception لو الجدول غير جاهز."""
     tid = int(telegram_id)
     if tid in ENV_ADMIN_IDS:
         return True
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute('SELECT is_admin FROM users WHERE telegram_id=?', (tid,))
-    row = c.fetchone()
-    conn.close()
-    return bool(row and row[0])
+    try:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        # تحقق من وجود جدول users
+        c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")
+        if not c.fetchone():
+            conn.close()
+            return False
+        c.execute('SELECT is_admin FROM users WHERE telegram_id=?', (tid,))
+        row = c.fetchone()
+        conn.close()
+        return bool(row and row[0])
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
 
 
 def set_banned(db_path: str, telegram_id: int, banned: bool) -> None:

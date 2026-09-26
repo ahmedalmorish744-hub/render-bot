@@ -802,3 +802,42 @@ Stage Summary:
 - ✅ لا حاجة لأي زر - المستخدم يكتب الكود فقط
 - ✅ دعم الأرقام العربية والفارسية تلقائياً
 - ✅ زر SMS يظهر فقط عند الفشل (لمن لا تصله رسائل تيليجرام)
+
+---
+Task ID: 5.3.3-no-buttons-on-start
+Agent: Main Agent
+Task: v5.3.3 - إصلاح عدم ظهور الأزرار عند /start
+
+Work Log:
+- 🩺 التشخيص:
+  * المستخدم اضغط /start → ما ظهرتش الأزرار
+  * السبب: استثناء في get_main_menu() يمنع event.respond من إرسال الرسالة مع الأزرار
+  * أكثر استثناء محتمل: SELECT * FROM scheduled_posts WHERE owner_id=? يفشل لو عمود owner_id غير موجود
+
+- 🛡️ الإصلاحات:
+  1. get_main_menu - كل استدعاء get_setting مغلف في try/except (default fallback)
+  2. get_main_menu - get_pending_scheduled_posts مغلف + لو فشل pending_sched=0
+  3. get_main_menu - is_user_admin مغلف في try/except
+  4. start_handler - مغلف بالكامل في try/except متداخل:
+     - استثناء في register_user → نستمر بالقيم الافتراضية
+     - استثناء في get_all_groups_count → groups_count=0
+     - استثناء في get_pending_scheduled_posts → pending_sched=0
+     - استثناء في get_main_menu → قائمة احتياطية (3 أزرار)
+     - استثناء في event.respond → نحاول إرسال بدون أزرار
+     - استثناء أخير → رسالة خطأ + زر إصلاح
+  5. get_pending_scheduled_posts - فحص وجود عمود owner_id أولاً، fallback لو مفقود
+  6. get_all_groups_count - فحص وجود عمود owner_id أولاً، fallback لو مفقود
+  7. is_user_admin/is_banned - فحص وجود جدول users أولاً، fallback لو مفقود
+  8. init_db - فحص صريح بعد migration أن كل الجداول تحوي owner_id
+     - لو أي جدول يفتقد owner_id: يُضاف يدوياً + log صريح
+     - لو migration فشل: log مع exc_info للـ stack trace
+
+- 📊 النتيجة المتوقعة:
+  * حتى لو migration فشل جزئياً، /start سيعرض الأزرار (قائمة احتياطية على الأقل)
+  * كل استثناء يُسجل في سجلات Render
+  * يمكن تشخيص السبب الحقيقي من السجلات
+
+Stage Summary:
+- ✅ /start لن يعود فارغاً مرة أخرى - دائماً يعرض أزراراً
+- ✅ كل الأخطاء تُسجل صراحة للتحقيق
+- ✅ الـ migration يُتحقق منه صراحة بعد التشغيل

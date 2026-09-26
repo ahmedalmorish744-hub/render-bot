@@ -423,8 +423,28 @@ def init_db():
         fb = ADMIN_IDS[0] if ADMIN_IDS else 0
         multiuser.migrate_to_multiuser(DB_PATH, fallback_owner=fb)
         logger.info(f"👥 نظام تعدد المستخدمين جاهز (المالك الافتراضي: {fb})")
+        # 🩺 v5.3.3: تحقق صريح من وجود owner_id في كل الجداول
+        verify_conn = sqlite3.connect(DB_PATH)
+        verify_c = verify_conn.cursor()
+        for table in ['accounts', 'groups', 'messages', 'scheduled_posts', 'posting_history', 'join_history', 'blacklist', 'settings']:
+            try:
+                verify_c.execute(f'PRAGMA table_info({table})')
+                cols = [r[1] for r in verify_c.fetchall()]
+                if 'owner_id' not in cols:
+                    logger.error(f"❌ الجدول {table} ليس به عمود owner_id بعد migration!")
+                    # محاولة إضافته يدوياً
+                    try:
+                        verify_c.execute(f'ALTER TABLE {table} ADD COLUMN owner_id INTEGER DEFAULT 0')
+                        verify_conn.commit()
+                        logger.info(f"✅ تمت إضافة owner_id إلى {table} يدوياً")
+                    except Exception as e2:
+                        logger.error(f"❌ فشل إضافة owner_id لـ {table}: {e2}")
+            except Exception as e:
+                logger.warning(f"⚠️ التحقق من {table}: {e}")
+        verify_conn.commit()
+        verify_conn.close()
     except Exception as e:
-        logger.error(f"⚠️ خطأ في migration تعدد المستخدمين: {e}")
+        logger.error(f"⚠️ خطأ في migration تعدد المستخدمين: {e}", exc_info=True)
     logger.info("✅ قاعدة البيانات جاهزة")
 
 def get_setting(key, default=None, owner_id=None):
@@ -542,14 +562,30 @@ def add_scheduled_post(message_id, post_time, repeat_type='once', repeat_interva
     return sched_id
 
 def get_pending_scheduled_posts():
-    """Pending posts for current user only (per-user isolation)"""
+    """Pending posts for current user only (per-user isolation).
+    🛡️ v5.3.3: gracefully returns [] if the table is missing owner_id column."""
     uid = get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run FROM scheduled_posts WHERE status='pending' AND owner_id=?", (uid,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    try:
+        # تحقق من وجود عمود owner_id
+        c.execute('PRAGMA table_info(scheduled_posts)')
+        cols = [r[1] for r in c.fetchall()]
+        if 'owner_id' not in cols:
+            # لا يوجد owner_id - اقرأ الكل (سيتم migrating لاحقاً)
+            c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run FROM scheduled_posts WHERE status='pending'")
+        else:
+            c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run FROM scheduled_posts WHERE status='pending' AND owner_id=?", (uid,))
+        rows = c.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.warning(f"⚠️ get_pending_scheduled_posts failed (table not ready): {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return []
 
 def get_all_scheduled_posts():
     """All scheduled posts (admins can pass owner_id=0 to see all)"""
@@ -4166,16 +4202,35 @@ async def get_account_groups(client, acc_id=None):
     return groups
 
 async def get_all_groups_count():
-    """عدد قروبات المستخدم الحالي فقط (للعزل) - الأدمن يرى الكل"""
+    """عدد قروبات المستخدم الحالي فقط (للعزل) - الأدمن يرى الكل.
+    🛡️ v5.3.3: متسامح مع خطأ — يرجع 0 لو عمود owner_id غير موجود."""
     uid = get_current_user()
-    if is_admin(uid):
+    try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM groups")
+        c.execute('PRAGMA table_info(groups)')
+        cols = [r[1] for r in c.fetchall()]
+        if 'owner_id' not in cols:
+            c.execute("SELECT COUNT(*) FROM groups")
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        if is_admin(uid):
+            c.execute("SELECT COUNT(*) FROM groups")
+            count = c.fetchone()[0]
+            conn.close()
+            return count
+        c.execute("SELECT COUNT(*) FROM groups WHERE owner_id=?", (uid,))
         count = c.fetchone()[0]
         conn.close()
         return count
-    return count_groups_for_current(DB_PATH)
+    except Exception as e:
+        logger.warning(f"⚠️ get_all_groups_count failed: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return 0
 
 async def get_all_messages_count():
     uid = get_current_user()
@@ -5469,28 +5524,56 @@ def clean_database_keep_accounts():
 #  القوائم والأزرار
 # ═══════════════════════════════════════════════
 def get_main_menu(user_id=None):
-    """القائمة الرئيسية المبسطة - 13 زر أساسي + زر الأدمن إن وُجد"""
-    ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
-    ao_profile = get_setting('adaptive_obfuscation_profile', 'medium')
+    """القائمة الرئيسية المبسطة - 13 زر أساسي + زر الأدمن إن وُجد.
+    🛡️ v5.3.3: كل الأعداد/الحالات تُقرأ بأمان - أي خطأ في القراءة يستخدم القيمة الافتراضية."""
+    try:
+        ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
+    except Exception:
+        ao_status = "✅"
+    try:
+        ao_profile = get_setting('adaptive_obfuscation_profile', 'medium') or 'medium'
+    except Exception:
+        ao_profile = 'medium'
     profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(ao_profile, '🟡')
-    ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
-    ft_style = get_setting('fancy_text_style', 'strikethrough')
+    try:
+        ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
+    except Exception:
+        ft_status = "✅"
+    try:
+        ft_style = get_setting('fancy_text_style', 'strikethrough') or 'strikethrough'
+    except Exception:
+        ft_style = 'strikethrough'
     ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
     ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
-    pending_sched = len(get_pending_scheduled_posts())
+    # 🛡️ قراءة pending_sched بأمان
+    try:
+        pending_sched = len(get_pending_scheduled_posts())
+    except Exception as e:
+        logger.warning(f"⚠️ get_pending_scheduled_posts failed: {e}")
+        pending_sched = 0
     queue_count = len(join_queue)
     queue_info = f" ({queue_count})" if queue_count > 0 else ""
     is_joining = is_joining_active
     # 🫥 وضع الإرسال الحالي
-    send_mode = get_setting('send_mode', 'normal')
+    try:
+        send_mode = get_setting('send_mode', 'normal') or 'normal'
+    except Exception:
+        send_mode = 'normal'
     mode_info = SEND_MODES.get(send_mode, SEND_MODES['normal'])
     mode_btn = f"{mode_info['icon']} {mode_info['name']}"
     # 🛡 درع الروابط
-    lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
-    # 👥 الأدمن
-    if user_id is None:
-        user_id = get_current_user()
-    is_adm = user_id is not None and multiuser.is_user_admin(DB_PATH, user_id)
+    try:
+        lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
+    except Exception:
+        lg_status = "✅"
+    # 👥 الأدمن - بـ try/except لتفادي أي خطأ في multiuser.is_user_admin
+    try:
+        if user_id is None:
+            user_id = get_current_user()
+        is_adm = bool(user_id) and multiuser.is_user_admin(DB_PATH, user_id)
+    except Exception as e:
+        logger.warning(f"⚠️ is_user_admin failed: {e}")
+        is_adm = False
     menu = [
         # ── النشر ──
         [Button.inline("🚀 بدء النشر", b"start_posting"),
@@ -5739,46 +5822,88 @@ async def main():
     @bot.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
         # 👥 v5.0: أي مستخدم يمكنه استخدام البوت (تسجيل تلقائي)
-        set_current_user(event.sender_id)
-        sender = await event.get_sender()
-        uname = getattr(sender, 'username', '') or ''
-        fname = getattr(sender, 'first_name', '') or ''
-        lname = getattr(sender, 'last_name', '') or ''
-        multiuser.register_user(DB_PATH, event.sender_id, uname, fname, lname)
-        if multiuser.is_banned(DB_PATH, event.sender_id):
-            await event.respond("🚫 **تم حظر حسابك من استخدام هذا البوت**\n\nتواصل مع الأدمن لإلغاء الحظر.")
-            return
-        groups_count = await get_all_groups_count()
-        message_interval = get_setting('message_interval', '3')
-        fast_delay = get_setting('fast_post_delay', '3')
-        pending_sched = len(get_pending_scheduled_posts())
-        admin_badge = "🛡️ **أدمن**\n\n" if is_admin(event.sender_id) else ""
-        await event.respond(
-            f"🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
-            f"{admin_badge}"
-            f"👤 أهلاً {fname or uname or event.sender_id}!\n\n"
-            "🛡 **قاعدة ذهبية:** البوت يرسل رسالتك **كما كتبتها بالضبط**\n"
-            "مع تطبيق تشفيرات وتكويدات غير مرئية فقط!\n\n"
-            "🎛 **أوضاع الإرسال:**\n"
-            "• 📝 normal - النص كما هو تماماً\n"
-            "• 🔄 spintax - حل {خيار1|خيار2} التي تكتبها أنت\n"
-            "• 🫥 stego - نصك ظاهر 100% + بصمة خفية فريدة لكل رسالة\n\n"
-            "👻 **Ghost Encoding v4.2 - التكويد الحديث:**\n"
-            "• رسم كلماتك يبقى كما هو 100% في كل الأجهزة (بدون أشكال عرض!)\n"
-            "• تجزئة خفية لكل كلمة - بوتات الحماية لا تطابق شيئاً\n"
-            "• 🛡 درع الروابط: حدد أنت يوزرك/رقمك/رابطك → يتحول لزر (للطلب اضغط هنا)\n"
-            "  قابل للضغط يفتح تيليجرام/وتساب - وبدون تحديد لا يضيف البوت شيئاً\n"
-            "• ✍️ تقوية العرض (غامق/تحته خط) من قائمة المحرك\n\n"
-            "👥 **عزل كامل:** حساباتك وقروباتك وإعداداتك خاصة بك فقط\n"
-            "☁️ **حفظ دائم:** حساباتك وجلساتك تُستعاد تلقائياً بعد كل تحديث\n\n"
-            "🐝 **أنظمة متقدمة:**\n"
-            "• ⏱️ Human Delay | ⚖️ Load Balancer\n\n"
-            f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
-            f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولاتك: {pending_sched}\n\n"
-            f"📢 قروباتك: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n\n"
-            "🧪 جرب: /set_mode | /get_mode",
-            buttons=get_main_menu(event.sender_id)
-        )
+        try:
+            set_current_user(event.sender_id)
+            sender = await event.get_sender()
+            uname = getattr(sender, 'username', '') or ''
+            fname = getattr(sender, 'first_name', '') or ''
+            lname = getattr(sender, 'last_name', '') or ''
+            multiuser.register_user(DB_PATH, event.sender_id, uname, fname, lname)
+            logger.info(f"🚀 /start from user {event.sender_id} ({uname or fname})")
+        except Exception as e:
+            logger.error(f"❌ /start register_user error: {e}")
+            set_current_user(event.sender_id)
+            fname = ''
+            uname = ''
+        try:
+            if multiuser.is_banned(DB_PATH, event.sender_id):
+                await event.respond("🚫 **تم حظر حسابك من استخدام هذا البوت**\n\nتواصل مع الأدمن لإلغاء الحظر.")
+                return
+            try:
+                groups_count = await get_all_groups_count()
+            except Exception as e:
+                logger.warning(f"⚠️ get_all_groups_count failed: {e}")
+                groups_count = 0
+            try:
+                message_interval = get_setting('message_interval', '3') or '3'
+            except Exception:
+                message_interval = '3'
+            try:
+                fast_delay = get_setting('fast_post_delay', '3') or '3'
+            except Exception:
+                fast_delay = '3'
+            try:
+                pending_sched = len(get_pending_scheduled_posts())
+            except Exception as e:
+                logger.warning(f"⚠️ get_pending_scheduled_posts failed: {e}")
+                pending_sched = 0
+            try:
+                admin_badge = "🛡️ **أدمن**\n\n" if is_admin(event.sender_id) else ""
+            except Exception:
+                admin_badge = ""
+            # 🛡️ v5.3.3: قائمة محمية بأمان
+            try:
+                menu_buttons = get_main_menu(event.sender_id)
+            except Exception as e:
+                logger.error(f"❌ get_main_menu failed: {e}")
+                # قائمة احتياطية بسيطة
+                menu_buttons = [
+                    [Button.inline("📝 الرسائل", b"messages"),
+                     Button.inline("👥 الحسابات", b"accounts")],
+                    [Button.inline("⚙️ الإعدادات", b"settings")],
+                ]
+            try:
+                await event.respond(
+                    f"🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
+                    f"{admin_badge}"
+                    f"👤 أهلاً {fname or uname or event.sender_id}!\n\n"
+                    "🛡 **قاعدة ذهبية:** البوت يرسل رسالتك **كما كتبتها بالضبط**\n"
+                    "مع تطبيق تشفيرات وتكويدات غير مرئية فقط!\n\n"
+                    "👥 **عزل كامل:** حساباتك وقروباتك وإعداداتك خاصة بك فقط\n"
+                    "☁️ **حفظ دائم:** حساباتك وجلساتك تُستعاد تلقائياً\n\n"
+                    f"📢 قروباتك: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n"
+                    f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولاتك: {pending_sched}\n\n"
+                    "🧪 جرب: /set_mode | /get_mode",
+                    buttons=menu_buttons
+                )
+            except Exception as e:
+                logger.error(f"❌ start_handler respond failed: {e}")
+                # المحاولة الأخيرة بدون أزرار
+                try:
+                    await event.respond(
+                        f"🛡 **بوت النشر الخارق 2026**\n\n👤 أهلاً {fname or event.sender_id}!"
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"❌ start_handler top-level error: {e}", exc_info=True)
+            try:
+                await event.respond(
+                    "❌ حدث خطأ داخلي في البوت. جرّب /start مرة أخرى.",
+                    buttons=[[Button.inline("📝 الرسائل", b"messages")]]
+                )
+            except Exception:
+                pass
 
     async def auto_posting_loop():
         global is_posting_active
