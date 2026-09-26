@@ -7867,6 +7867,9 @@ async def main():
         # إضافة حساب - رمز التحقق
         if get_setting('awaiting_code') == 'true':
             set_setting('awaiting_code', '')
+            logger.info(f"📥 awaiting_code triggered: user={event.sender_id}, raw_text={event.raw_text!r}")
+            # 👤 رسالة فورية للمستخدم - يعرف أن البوت استلم الكود
+            processing_msg = await event.respond("⏳ **جاري التحقق من الرمز...**")
             # 🔧 v5.3: تنظيف شامل للكود — تحويل الأرقام العربية/الفارسية إلى لاتينية + نزيل كل ما ليس رقم
             raw_code = event.raw_text.strip()
             # تحويل الأرقام العربية (٠-٩) والفارسية (۰-۹) إلى أرقام لاتينية
@@ -7976,20 +7979,32 @@ async def main():
 
             try:
                 # 🔐 v5.3: محاولة sign_in — لو فشلت لأي سبب يتعلق بالكود، نرسل رمز جديد تلقائياً
+                logger.info(f"🔑 sign_in attempt: user={event.sender_id}, phone={session_data['phone']}, code={code}, hash={session_data['phone_code_hash'][:20]}...")
                 await session_data["client"].sign_in(
                     session_data["phone"], code,
                     phone_code_hash=session_data["phone_code_hash"]
                 )
+                logger.info(f"✅ sign_in succeeded for user {event.sender_id}")
                 me = await session_data["client"].get_me()
-                acc_id = mu_insert_account(DB_PATH, session_data["client"].session.save(), me.phone, 'active')
+                logger.info(f"✅ get_me succeeded: phone={me.phone}, id={me.id}")
+                session_str = session_data["client"].session.save()
+                logger.info(f"✅ session.save() returned {len(session_str)} chars")
+                acc_id = mu_insert_account(DB_PATH, session_str, me.phone, 'active')
+                logger.info(f"✅ insert_account: acc_id={acc_id}")
                 user_clients[acc_id] = session_data["client"]
                 user_clients_owner[acc_id] = get_current_user()
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
+                logger.info(f"✅ fetch_all_groups_for_account: {group_count} groups")
                 del temp_sessions[event.sender_id]
                 # تنظيف الإعدادات المؤقتة
                 set_setting('_pending_phone', '')
                 set_setting('_pending_code_hash', '')
                 vault_mark_dirty()
+                # حذف رسالة "جاري التحقق"
+                try:
+                    await processing_msg.delete()
+                except Exception:
+                    pass
                 await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except SessionPasswordNeededError:
                 set_setting('awaiting_password', 'true')
