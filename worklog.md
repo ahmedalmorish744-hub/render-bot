@@ -692,3 +692,54 @@ Stage Summary:
 - ✅ المستخدمون الآن يقدرون يضيفو حساباتهم عادي - لو الكود انتهى، يضغطون زر إعادة الإرسال
 - ✅ زر استيراد القروبات صامت ويجلب كل القروبات (لا نشر، لا إظهار)
 - ✅ العزل التام محفوظ: كل مستخدم يرى فقط حساباته/قروباته
+
+---
+Task ID: 5.2-PRIMARY-KEY-fix
+Agent: Main Agent
+Task: v5.2 - إصلاح الجذر الحقيقي لـ "انتهت صلاحية الرمز" رغم الكود صحيح
+
+Work Log:
+- 🩺 التشخيص الجذري:
+  * جدول settings كان PRIMARY KEY (key) فقط (منذ v5.0 migration)
+  * هذا يعني: مستخدمون مختلفون لا يمكنهم امتلاك نفس الإعداد (_pending_phone, fast_post_delay, awaiting_*, ...)
+  * النتيجة: آخر مستخدم يكتب يحذف إعداد الآخر — أو يفشل INSERT بصمت
+  * هذا يفسر: المستخدم يدخل الكود صحيحاً → sign_in يحاول بـ phone_code_hash لكنها ضاعت →
+    يرفع تيليجرام "expired" بدل "invalid" أو يعجز sign_in عن المطابقة
+
+- 🔧 الإصلاح (multiuser.py):
+  * migrate_to_multiuser الآن يعيد بناء جدول settings بـ composite PRIMARY KEY ("owner_id", "key")
+  * يحفظ كل الأعمدة + البيانات القديمة (rename → create → copy → drop)
+  * إزالة "PRIMARY KEY" المضمّن في column type (مثل "TEXT PRIMARY KEY")
+  * إنشاء INDEX احتياطي لو تعذّر إعادة البناء
+
+- 🔧 get_setting/set_setting (bot.py):
+  * get_setting الآن يقرأ scoped أولاً، ثم fallback إلى owner_id=0 (إعداد عام)
+  * لا fallback عام (FROM settings WHERE key=?) يمنع تسريب إعدادات مستخدم آخر
+  * set_setting يكتب دائماً (owner_id, key) - DELETE + INSERT
+
+- 📞 تدفق إضافة الحساب (bot.py):
+  * تنظيف شامل للكود: نزيل المسافات/الشرطات/التشكيل العربي
+  * تطبيع +xx في بداية الرقم (تيليجرام يتطلب E.164)
+  * حفظ phone_code_hash في settings أيضاً (يستعيد عبر resend_code)
+  * معالجة مفصّلة لكل أخطاء تيليجرام:
+    - PhoneCodeExpiredError → زر إعادة الإرسال
+    - PhoneCodeInvalidError → زر إعادة الإرسال + تفعيل awaiting_code
+    - FloodWaitError → عرض المدة + زر إعادة المحاولة
+    - Exception عام → تصنيف: expired / invalid / unauthorized / other
+    - PhoneNumberBannedError / phone_number_invalid → رسالة واضحة
+  * زر جديد "📱 إرسال عبر SMS" (force_sms=True) لمن لا تصله رسائل تيليجرام
+  * رسائل أوضح + أزرار منظمة في كل خطوة
+
+- 🧪 اختبار (scripts/test_concurrent_settings.py):
+  * يتحقق من composite PRIMARY KEY = (owner_id, key)
+  * يحاكي مستخدمين متزامنين يضبطون نفس الإعداد
+  * يتحقق من قراءة كل مستخدم لقيمته فقط
+  * يتحقق من fallback إلى owner_id=0 (الإعداد العام)
+  * ✅ كل الاختبارات نجحت
+
+Stage Summary:
+- 🎯 الجذر الحقيقي: settings لم تكن معزولة per-user بسبب PRIMARY KEY على (key) فقط
+- ✅ الإصلاح: composite PRIMARY KEY ("owner_id", "key") - كل مستخدم له مساحة إعدادات خاصة
+- ✅ المستخدمون الآن يستطيعون إضافة حساباتهم دون تعارض — كل واحد له _pending_phone و phone_code_hash
+- ✅ زر "📱 إرسال عبر SMS" لمن لا تصله رسائل تيليجرام الداخلية
+- ✅ معالجة شاملة لكل أخطاء sign_in (expired/invalid/flood/unauthorized)

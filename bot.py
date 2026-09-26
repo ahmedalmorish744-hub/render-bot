@@ -429,22 +429,33 @@ def init_db():
 
 def get_setting(key, default=None, owner_id=None):
     """قراءة إعداد - مرتبط بالمستخدم الحالي عبر CURRENT_USER contextvar.
-    إذا مرر owner_id صراحة يقرأ من مستخدم آخر (للأدمن).
-    الإعدادات العامة (server-side) مثل fast_post_delay افتراضياً مشتركة."""
+    إذا مرر owner_id صراحة يقرأ من مستخدم آخر (للأدمن)."""
     oid = owner_id if owner_id is not None else get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # محاولة قراءة owner-scoped أولاً
+    # 🔧 v5.2: تحديد مستخدم صراحةً. لو owner_id=0 (سياق افتراضي) نقرأ الإعداد العام (الأدمن)
+    # لو الجدول يحوي owner_id نقرأ دائماً scoped — لا fallback عام لتسريب البيانات
     try:
-        c.execute('SELECT value FROM settings WHERE key=? AND owner_id=?', (key, oid))
-        row = c.fetchone()
-        if row:
+        c.execute('PRAGMA table_info(settings)')
+        cols = [r[1] for r in c.fetchall()]
+        if 'owner_id' in cols:
+            c.execute('SELECT value FROM settings WHERE key=? AND owner_id=?', (key, oid))
+            row = c.fetchone()
             conn.close()
-            return row[0]
+            if row:
+                return row[0]
+            # 🔧 v5.2: لو لم نجد إعداداً للمستخدم الحالي، نقرأ من owner_id=0 (إعداد عام)
+            if oid != 0:
+                c = conn.cursor()
+                c.execute('SELECT value FROM settings WHERE key=? AND owner_id=0', (key,))
+                row = c.fetchone()
+                conn.close()
+                if row:
+                    return row[0]
+            return default
     except Exception:
-        # الجدول قد لا يحوي owner_id بعد
         pass
-    # fallback: إعداد عام (owner_id=0) أو المفتاح القديم
+    # المسار القديم (قبل migration)
     c.execute('SELECT value FROM settings WHERE key=?', (key,))
     row = c.fetchone()
     conn.close()
@@ -6486,7 +6497,7 @@ async def main():
             )
 
         elif data == 'resend_code':
-            # 🔄 v5.1: إعادة إرسال الرمز تلقائياً باستخدام الرقم المخزن
+            # 🔄 v5.2: إعادة إرسال الرمز تلقائياً + خيار الإرسال عبر SMS
             stored_phone = get_setting('_pending_phone')
             if not stored_phone:
                 await event.edit(
@@ -6513,12 +6524,16 @@ async def main():
                     "client": client,
                     "phone_code_hash": result.phone_code_hash
                 }
+                # 🛡 v5.2: تحديث phone_code_hash في الإعدادات
+                set_setting('_pending_code_hash', result.phone_code_hash)
                 set_setting('awaiting_code', 'true')
                 await event.edit(
                     f"✅ **تم إرسال رمز جديد إلى** `{stored_phone}`\n\n"
                     f"⏳ الرمز صالح لمدة ~5 دقائق\n"
-                    f"💡 أرسل الرمز الآن:",
-                    buttons=[[Button.inline("🔄 إعادة الإرسال مرة أخرى", b"resend_code")],
+                    f"💡 أرسل الرمز كما وصل في تيليجرام (أرقام فقط)\n\n"
+                    f"📱 لو لم يصلك رمز في تيليجرام، اضغط الزر لإرساله عبر SMS:",
+                    buttons=[[Button.inline("📱 إرسال عبر SMS", b"resend_sms")],
+                             [Button.inline("🔄 إعادة الإرسال", b"resend_code")],
                              [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
                 )
             except FloodWaitError as e:
@@ -6530,17 +6545,77 @@ async def main():
                 )
             except Exception as e:
                 error_msg = str(e)[:300]
+                err_str = str(e).lower()
+                if 'flood' in err_str:
+                    await event.edit(
+                        f"⏸ انتظر قليلاً قبل إعادة الإرسال (تيليجرام رفض بسبب كثرة الطلبات).",
+                        buttons=[[Button.inline("🔄 إعادة المحاولة", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                else:
+                    await event.edit(
+                        f"❌ خطأ في إعادة إرسال الرمز: {error_msg}\n\n"
+                        f"💡 أرسل رقمك من جديد:",
+                        buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
+                                 [Button.inline("🔙 رجوع", b"accounts")]]
+                    )
+                    set_setting('awaiting_phone', 'true')
+
+        elif data == 'resend_sms':
+            # 📱 v5.2: إعادة الإرسال عبر SMS (لمن لا تصله رسائل تيليجرام الداخلية)
+            stored_phone = get_setting('_pending_phone')
+            if not stored_phone:
                 await event.edit(
-                    f"❌ خطأ في إعادة إرسال الرمز: {error_msg}\n\n"
-                    f"💡 أرسل رقمك من جديد:",
+                    "❌ لا يوجد رقم محفوظ.",
                     buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")],
                              [Button.inline("🔙 رجوع", b"accounts")]]
                 )
-                set_setting('awaiting_phone', 'true')
+                return
+            old_session = temp_sessions.get(event.sender_id)
+            if old_session:
+                try:
+                    await old_session["client"].disconnect()
+                except Exception:
+                    pass
+                del temp_sessions[event.sender_id]
+            try:
+                await event.edit(f"📱 جاري إرسال الرمز عبر SMS إلى `{stored_phone}`...")
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+                await client.connect()
+                # force_sms=True يجبر تيليجرام على إرسال الكود عبر SMS
+                result = await client.send_code_request(stored_phone, force_sms=True)
+                temp_sessions[event.sender_id] = {
+                    "phone": stored_phone,
+                    "client": client,
+                    "phone_code_hash": result.phone_code_hash
+                }
+                set_setting('_pending_code_hash', result.phone_code_hash)
+                set_setting('awaiting_code', 'true')
+                await event.edit(
+                    f"✅ **تم إرسال الرمز عبر SMS إلى** `{stored_phone}`\n\n"
+                    f"⏳ الرمز صالح لمدة ~5 دقائق\n"
+                    f"💡 أرسل الرمز الذي وصلك في الـ SMS (أرقام فقط):",
+                    buttons=[[Button.inline("🔄 إعادة الإرسال عبر تيليجرام", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
+            except FloodWaitError as e:
+                await event.edit(
+                    f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية.",
+                    buttons=[[Button.inline("🔄 إعادة المحاولة", b"resend_sms")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
+            except Exception as e:
+                error_msg = str(e)[:300]
+                await event.edit(
+                    f"❌ خطأ في إرسال SMS: {error_msg}\n\n"
+                    f"💡 حاول إعادة الإرسال عبر تيليجرام:",
+                    buttons=[[Button.inline("🔄 إعادة الإرسال عبر تيليجرام", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
 
         elif data == 'cancel_add_acc':
             # 🛑 إلغاء عملية إضافة الحساب وتنظيف الحالة
-            for key in ['awaiting_phone', 'awaiting_code', 'awaiting_password', '_pending_phone']:
+            for key in ['awaiting_phone', 'awaiting_code', 'awaiting_password', '_pending_phone', '_pending_code_hash']:
                 set_setting(key, '')
             old_session = temp_sessions.get(event.sender_id)
             if old_session:
@@ -7718,7 +7793,7 @@ async def main():
                        'awaiting_lg_anchor', 'awaiting_lg_target_add',
                        'awaiting_kashida_intensity', 'awaiting_swarm_stages',
                        'awaiting_swarm_interval', 'awaiting_hd_min', 'awaiting_hd_max',
-                       '_pending_phone']:
+                       '_pending_phone', '_pending_code_hash']:
                 set_setting(key, '')
             if event.sender_id in temp_sessions:
                 try:
@@ -7738,12 +7813,15 @@ async def main():
         if get_setting('awaiting_phone') == 'true':
             set_setting('awaiting_phone', '')
             phone = event.raw_text.strip()
-            # تنظيف الرقم: إزالة المسافات والشرطات
+            # تنظيف الرقم: إزالة المسافات والشرطات والأقواس
             phone_clean = re.sub(r'[\s\-\(\)]', '', phone)
             if not re.match(r'^\+?\d{8,15}$', phone_clean):
                 await event.respond("❌ رقم غير صالح! مثال: +966512345678\nأعد الإرسال أو /cancel")
                 set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
                 return
+            # 🔧 v5.2: ضمان + في البداية (تيليجرام يتطلب E.164)
+            if not phone_clean.startswith('+'):
+                phone_clean = '+' + phone_clean
             try:
                 client = TelegramClient(StringSession(), API_ID, API_HASH)
                 await client.connect()
@@ -7756,12 +7834,15 @@ async def main():
                 # 🛡 v5.1: نحفظ الرقم في الإعدادات أيضاً ليُستخدم لإعادة الإرسال
                 # لو ضاعت الجلسة المؤقتة (إعادة تشغيل البوت) أو انتهت صلاحية الكود
                 set_setting('_pending_phone', phone_clean)
+                # 🛡 v5.2: نحفظ phone_code_hash أيضاً حتى لو اُعيد تشغيل البوت
+                # ثم نظيف session في sign_in إذا الجلسة المؤقتة ضاعت
+                set_setting('_pending_code_hash', result.phone_code_hash)
                 set_setting('awaiting_code', 'true')
                 await event.respond(
                     f"📩 **تم إرسال الرمز إلى {phone_clean}**\n\n"
-                    f"⏳ الرمز صالح لمدة ~5 دقائق فقط\n"
-                    f"💡 أرسل الرمز الآن أو اضغط /cancel للإلغاء\n\n"
-                    f"🔄 لو انتهى الرمز، اضغط:  🔄 إعادة إرسال الرمز",
+                    f"⏳ الرمز صالح لمدة ~5 دقائق\n"
+                    f"💡 أرسل الرمز الآن كما وصل تماماً (بدون مسافات أو شرطات)\n"
+                    f"🔄 لو انتهى الرمز، اضغط: 🔄 إعادة إرسال الرمز",
                     buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")]]
                 )
             except FloodWaitError as e:
@@ -7769,23 +7850,49 @@ async def main():
                 set_setting('awaiting_phone', 'true')
             except Exception as e:
                 error_msg = str(e)[:300]
-                await event.respond(f"❌ خطأ: {error_msg}\n\n💡 جرب مرة أخرى أو /cancel")
-                set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
+                # 🔍 معالجة محددة لأخطاء شائعة
+                err_str = str(e).lower()
+                if 'phonenumber_invalid' in err_str or 'phone_number_invalid' in err_str:
+                    await event.respond(
+                        f"❌ الرقم غير مسجل في تيليجرام: {phone_clean}\n\n💡 تأكد من الرقم ثم أعد المحاولة.",
+                        buttons=[[Button.inline("➕ إضافة حساب", b"add_acc")]]
+                    )
+                elif 'flood' in err_str:
+                    await event.respond(f"⏸ تيليجرام رفض بسبب كثرة الطلبات. انتظر قليلاً ثم أعد المحاولة.")
+                    set_setting('awaiting_phone', 'true')
+                else:
+                    await event.respond(f"❌ خطأ: {error_msg}\n\n💡 جرب مرة أخرى أو /cancel")
+                    set_setting('awaiting_phone', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
             return
 
         # إضافة حساب - رمز التحقق
         if get_setting('awaiting_code') == 'true':
             set_setting('awaiting_code', '')
-            code = event.raw_text.strip()
+            # 🔧 v5.2: تنظيف شامل للكود — نزيل أي مسافات/شرطات/أحرف عربية/رموز زائدة
+            raw_code = event.raw_text.strip()
+            code = re.sub(r'[\s\-\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed\.\,\u060c\u066a\u066b\u066c\u066d]', '', raw_code)
+            # إزالة أي حروف غير أرقام
+            code = re.sub(r'[^0-9]', '', code)
+            if not code or len(code) < 4:
+                await event.respond(
+                    f"❌ الرمز غير صحيح!\n\n"
+                    f"📩 الذي أرسلته: `{raw_code}`\n\n"
+                    f"💡 أرسل الرمز كأرقام فقط (مثال: `12345`) — بدون مسافات أو شرطات",
+                    buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                )
+                set_setting('awaiting_code', 'true')
+                return
             session_data = temp_sessions.get(event.sender_id)
             if not session_data:
-                # الجلسة المؤقتة ضاعت (إعادة تشغيل البوت) - نحاول استرجاع الرقم من الإعدادات
+                # الجلسة المؤقتة ضاعت — نحاول بناء جلسة جديدة باستخدام phone_code_hash المحفوظ
                 stored_phone = get_setting('_pending_phone')
+                stored_hash = get_setting('_pending_code_hash')
                 if stored_phone:
                     await event.respond(
-                        "❌ انتهت الجلسة المؤقتة (البوت أُعيد تشغيله).\n\n"
+                        f"❌ انتهت الجلسة المؤقتة (البوت أُعيد تشغيله).\n\n"
                         f"📞 الرقم المحفوظ: `{stored_phone}`\n\n"
-                        "اضغط الزر أدناه لإعادة إرسال رمز جديد تلقائياً:",
+                        f"💡 اضغط الزر لإرسال رمز جديد تلقائياً (الكود الحالي لم يعد صالحاً):",
                         buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
                                  [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
                     )
@@ -7793,48 +7900,81 @@ async def main():
                 await event.respond("❌ انتهت الجلسة! اضغط إضافة حساب مرة أخرى", buttons=get_main_menu())
                 return
             try:
-                await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
+                # 🔐 v5.2: محاولة sign_in - نحاول أولاً بالـ hash الذي وصل من send_code_request
+                await session_data["client"].sign_in(
+                    session_data["phone"], code,
+                    phone_code_hash=session_data["phone_code_hash"]
+                )
                 me = await session_data["client"].get_me()
                 acc_id = mu_insert_account(DB_PATH, session_data["client"].session.save(), me.phone, 'active')
                 user_clients[acc_id] = session_data["client"]
                 user_clients_owner[acc_id] = get_current_user()
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
-                set_setting('_pending_phone', '')  # تنظيف
+                # تنظيف الإعدادات المؤقتة
+                set_setting('_pending_phone', '')
+                set_setting('_pending_code_hash', '')
                 vault_mark_dirty()
                 await event.respond(f"✅ تم إضافة {me.phone}\n📢 {group_count} مجموعة", buttons=get_main_menu())
             except SessionPasswordNeededError:
                 set_setting('awaiting_password', 'true')
                 await event.respond("🔐 الحساب محمي بكلمة مرور\nأرسل كلمة المرور:")
             except PhoneCodeInvalidError:
+                # الرمز خاطئ — عادةً بسبب حرف زائد أو رقم مفقود
                 await event.respond(
-                    "❌ رمز غير صحيح!\n\nأعد الإرسال أو اضغط الزر لإعادة إرسال رمز جديد:",
+                    f"❌ **رمز غير صحيح** (`{code}`)\n\n"
+                    f"💡 تأكد من الرمز كما وصل في تيليجرام\n"
+                    f"📩 أعد إرسال الرمز الصحيح أو اضغط الزر لطلب رمز جديد:",
                     buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
                              [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
                 )
                 set_setting('awaiting_code', 'true')  # إعادة التفعيل للمحاولة مرة أخرى
             except PhoneCodeExpiredError:
-                # الكود انتهت صلاحيته — نعرض زر إعادة الإرسال بدل застав المستخدم يبدأ من جديد
+                # الكود انتهت صلاحيته فعلاً — زر إعادة الإرسال يحلها
                 await event.respond(
-                    "⌛ **انتهت صلاحية الرمز** (يصلح لمدة ~5 دقائق فقط).\n\n"
-                    "💡 اضغط الزر أدناه لإرسال رمز جديد تلقائياً لنفس الرقم:",
+                    "⌛ **انتهت صلاحية الرمز** (صالح ~5 دقائق فقط).\n\n"
+                    "💡 اضغط الزر لإرسال رمز جديد تلقائياً لنفس الرقم:",
                     buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
                              [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
                 )
             except FloodWaitError as e:
                 await event.respond(
                     f"⏸ تيليجرام طلب الانتظار {e.seconds} ثانية.\n\n"
-                    f"بعد الانتظار، اضغط الزر لإعادة إرسال الرمز:",
+                    f"بعد الانتظار، اضغط الزر لإعادة الإرسال:",
                     buttons=[[Button.inline("🔄 إعادة الإرسال بعد الانتظار", b"resend_code")]]
                 )
             except Exception as e:
                 error_msg = str(e)[:300]
-                await event.respond(
-                    f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو اضغط الزر لإعادة الإرسال:",
-                    buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
-                             [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
-                )
-                set_setting('awaiting_code', 'true')
+                err_str = str(e).lower()
+                # 🩺 v5.2: معالجة كل حالات "الكود انتهى/غير صحيح" التي يصنفها تيليجرام بشكل غامض
+                if 'code expired' in err_str or 'phone_code_expired' in err_str or 'expired' in err_str:
+                    await event.respond(
+                        "⌛ **انتهت صلاحية الرمز** (صالح ~5 دقائق فقط).\n\n"
+                        "💡 اضغط الزر لإرسال رمز جديد:",
+                        buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                elif 'code invalid' in err_str or 'phone_code_invalid' in err_str or 'invalid' in err_str:
+                    await event.respond(
+                        f"❌ **رمز غير صحيح**\n\n💡 تأكد من الرمز كما وصل في تيليجرام، أو اضغط الزر لطلب رمز جديد:",
+                        buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                    set_setting('awaiting_code', 'true')
+                elif 'auth' in err_str and 'unauthorized' in err_str:
+                    await event.respond(
+                        "❌ **المفتاح غير مصرّح** — يحدث أحياناً بسبب إعادة تشغيل البوت.\n\n"
+                        "💡 اضغط الزر لإرسال رمز جديد:",
+                        buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                else:
+                    await event.respond(
+                        f"❌ خطأ: {error_msg}\n\n💡 حاول مرة أخرى أو اضغط الزر لإعادة الإرسال:",
+                        buttons=[[Button.inline("🔄 إعادة إرسال الرمز", b"resend_code")],
+                                 [Button.inline("🔙 إلغاء", b"cancel_add_acc")]]
+                    )
+                    set_setting('awaiting_code', 'true')
             return
 
         # إضافة حساب - كلمة المرور

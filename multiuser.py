@@ -12,9 +12,13 @@ multiuser.py - نظام تعدد المستخدمين والإدارة
 كل الدوال thread-safe عبر SQLite connection-per-call.
 """
 import os
+import re
 import sqlite3
+import logging
 from contextvars import ContextVar
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # ─── سياق المستخدم الحالي (يُضبط عند دخول أي handler) ───
 CURRENT_USER: ContextVar[int] = ContextVar('CURRENT_USER', default=0)
@@ -87,20 +91,58 @@ def migrate_to_multiuser(db_path: str, fallback_owner: int = 0) -> None:
                   (fallback_owner, datetime.now().isoformat(), datetime.now().isoformat()))
 
     # 4) settings: نقل من PRIMARY KEY (key) إلى (owner_id, key)
-    #    نهج آمن: إذا لم تكن owner_id موجودة نضيفها، وإلا نتخطى
+    #    🔧 v5.2: ضرورة فصل المفتاح per-user — لو بقي PRIMARY KEY على (key) فقط،
+    #    مستخدمون مختلفون لا يمكنهم امتلاك نفس الإعداد (مثل _pending_phone)،
+    #    ويصير آخر مستخدم يكتب يحذف إعداد الآخر!
     c.execute('PRAGMA table_info(settings)')
     settings_cols = [row[1] for row in c.fetchall()]
     if 'owner_id' not in settings_cols:
-        # نقل البيانات القديمة للمالك الافتراضي
         c.execute('ALTER TABLE settings ADD COLUMN owner_id INTEGER DEFAULT 0')
         if fallback_owner:
             c.execute('UPDATE settings SET owner_id=? WHERE owner_id=0 OR owner_id IS NULL',
                       (fallback_owner,))
-        # ملاحظة: PRIMARY KEY يبقى (key) للتوافق الخلفي - لكن نضيف INDEX على (owner_id, key)
-        try:
-            c.execute('CREATE INDEX IF NOT EXISTS idx_settings_owner_key ON settings (owner_id, key)')
-        except Exception:
-            pass
+
+    # 🔧 v5.2: إعادة بناء الجدول بـ composite PRIMARY KEY (owner_id, key)
+    # بدون هذا، INSERT OR REPLACE على key='fast_post_delay' من مستخدم B
+    # يكتب فوق إعداد مستخدم A.
+    try:
+        c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'")
+        sql_row = c.fetchone()
+        if sql_row:
+            create_sql = sql_row[0] or ''
+            # اكتشاف الجداول القديمة بـ PRIMARY KEY على (key) فقط (وليس على (owner_id, key))
+            # نقبل صياغتين: "PRIMARY KEY (key)" و "key TEXT PRIMARY KEY"
+            needs_rebuild = ('PRIMARY KEY (owner_id, key)' not in create_sql
+                             and 'PRIMARY KEY ("owner_id", "key")' not in create_sql)
+            if needs_rebuild:
+                # جلب كل الأعمدة + أنواعها
+                c.execute('PRAGMA table_info(settings)')
+                cols_info = c.fetchall()
+                col_defs = []
+                col_names = []
+                for r in cols_info:
+                    col_name = r[1]
+                    col_type = r[2] or 'TEXT'
+                    # إزالة أي "PRIMARY KEY" مضمّن في type (مثل "TEXT PRIMARY KEY")
+                    col_type_clean = re.sub(r'\s+PRIMARY\s+KEY', '', col_type, flags=re.IGNORECASE)
+                    col_defs.append(f'"{col_name}" {col_type_clean}')
+                    col_names.append(col_name)
+                # نسخ الجدول إلى جدول مؤقت
+                c.execute('ALTER TABLE settings RENAME TO settings_old_v52')
+                cols_def_str = ', '.join(col_defs)
+                c.execute(f'CREATE TABLE settings ({cols_def_str}, PRIMARY KEY ("owner_id", "key"))')
+                # نسخ البيانات
+                cols_list = ', '.join(f'"{n}"' for n in col_names)
+                c.execute(f'INSERT INTO settings ({cols_list}) SELECT {cols_list} FROM settings_old_v52')
+                c.execute('DROP TABLE settings_old_v52')
+                logger.info("✅ v5.2: settings PRIMARY KEY = (owner_id, key)")
+            else:
+                try:
+                    c.execute('CREATE INDEX IF NOT EXISTS idx_settings_owner_key ON settings (owner_id, key)')
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"⚠️ v5.2: تعذّر إعادة بناء جدول settings ({e}) — قد تحدث تعارضات بين المستخدمين")
 
     conn.commit()
     conn.close()
