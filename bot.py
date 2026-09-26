@@ -51,6 +51,22 @@ from adaptive_obfuscation import AdaptiveObfuscationEngine, adaptive_engine, qui
 # 🫥 محرك الإخفاء المتقدم - Spintax + Zero-Width Stego + Diacritic Stego
 from stego_engine import stego_engine, SEND_MODES
 
+# 👥 نظام تعدد المستخدمين + لوحة الأدمن + العزل التام بين المستخدمين
+import multiuser
+from multiuser import (
+    set_current_user, get_current_user,
+    register_user, is_banned as mu_is_banned, is_user_admin,
+    set_banned as mu_set_banned, set_admin as mu_set_admin,
+    list_all_users, get_user_stats, get_user_accounts, get_user_groups,
+    export_user_groups_txt, migrate_to_multiuser,
+    get_accounts_for_current, get_groups_for_current,
+    count_groups_for_current, count_messages_for_current,
+    insert_account as mu_insert_account, insert_group as mu_insert_group,
+    insert_message as mu_insert_message, delete_account as mu_delete_account,
+    get_messages_for_current, get_message_by_id_for_current,
+    get_all_active_sessions_grouped,
+)
+
 # ═══════════════════════════════════════════════
 #  الإعدادات الأساسية
 # ═══════════════════════════════════════════════
@@ -63,7 +79,16 @@ ADMIN_IDS_RAW = os.environ.get('ADMIN_IDS', os.environ.get('ADMIN_ID', '0'))
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(',') if x.strip().isdigit()]
 
 def is_admin(user_id):
-    return user_id in ADMIN_IDS
+    """أدمن؟ (بيئة + جدول users)"""
+    return multiuser.is_user_admin(DB_PATH, user_id)
+
+def is_user_allowed(user_id):
+    """هل يُسمح للمستخدم باستخدام البوت؟ مسجّل وغير محظور"""
+    if is_admin(user_id):
+        return True
+    if multiuser.is_banned(DB_PATH, user_id):
+        return False
+    return True  # مسجّل تلقائياً عند أول تفاعل
 
 if not ADMIN_IDS:
     logging.error("⚠️ يجب تعيين ADMIN_IDS أو ADMIN_ID في متغيرات البيئة")
@@ -86,6 +111,8 @@ logger = logging.getLogger(__name__)
 #  المتغيرات العامة
 # ═══════════════════════════════════════════════
 user_clients = {}
+# 👥 v5.0: ربط acc_id بـ owner_id لفلترة النشر per-user
+user_clients_owner = {}
 temp_sessions = {}
 is_posting_active = False
 is_joining_active = False  # علم الانضمام التلقائي
@@ -391,19 +418,57 @@ def init_db():
 
     conn.commit()
     conn.close()
+    # 👥 v5.0: migration تعدد المستخدمين + جدول users + owner_id
+    try:
+        fb = ADMIN_IDS[0] if ADMIN_IDS else 0
+        multiuser.migrate_to_multiuser(DB_PATH, fallback_owner=fb)
+        logger.info(f"👥 نظام تعدد المستخدمين جاهز (المالك الافتراضي: {fb})")
+    except Exception as e:
+        logger.error(f"⚠️ خطأ في migration تعدد المستخدمين: {e}")
     logger.info("✅ قاعدة البيانات جاهزة")
 
-def get_setting(key, default=None):
+def get_setting(key, default=None, owner_id=None):
+    """قراءة إعداد - مرتبط بالمستخدم الحالي عبر CURRENT_USER contextvar.
+    إذا مرر owner_id صراحة يقرأ من مستخدم آخر (للأدمن).
+    الإعدادات العامة (server-side) مثل fast_post_delay افتراضياً مشتركة."""
+    oid = owner_id if owner_id is not None else get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # محاولة قراءة owner-scoped أولاً
+    try:
+        c.execute('SELECT value FROM settings WHERE key=? AND owner_id=?', (key, oid))
+        row = c.fetchone()
+        if row:
+            conn.close()
+            return row[0]
+    except Exception:
+        # الجدول قد لا يحوي owner_id بعد
+        pass
+    # fallback: إعداد عام (owner_id=0) أو المفتاح القديم
     c.execute('SELECT value FROM settings WHERE key=?', (key,))
     row = c.fetchone()
     conn.close()
     return row[0] if row else default
 
-def set_setting(key, value):
+def set_setting(key, value, owner_id=None):
+    """كتابة إعداد - مرتبط بالمستخدم الحالي."""
+    oid = owner_id if owner_id is not None else get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # لو الجدول يحوي owner_id، نكتب per-user؛ وإلا نكتب المفتاح القديم
+    try:
+        c.execute('PRAGMA table_info(settings)')
+        cols = [r[1] for r in c.fetchall()]
+        if 'owner_id' in cols:
+            # upsert مركب: احذف أي إدخال مطابق (owner_id, key) ثم أدرج
+            c.execute('DELETE FROM settings WHERE key=? AND owner_id=?', (key, oid))
+            c.execute('INSERT INTO settings (key, value, owner_id) VALUES (?, ?, ?)', (key, value, oid))
+            conn.commit()
+            conn.close()
+            return
+    except Exception:
+        pass
+    # المسار القديم
     c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
     conn.close()
@@ -454,28 +519,45 @@ def is_group_blacklisted(group_id):
 #  Scheduled Posts helper functions (محسنة)
 # ═══════════════════════════════════════════════
 def add_scheduled_post(message_id, post_time, repeat_type='once', repeat_interval=0, post_mode='fast'):
+    uid = get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''INSERT INTO scheduled_posts (message_id, post_time, repeat_type, repeat_interval, post_mode, status, next_run)
-                 VALUES (?, ?, ?, ?, ?, 'pending', ?)''',
-              (message_id, post_time, repeat_type, repeat_interval, post_mode, post_time))
+    c.execute('''INSERT INTO scheduled_posts (message_id, post_time, repeat_type, repeat_interval, post_mode, status, next_run, owner_id)
+                 VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)''',
+              (message_id, post_time, repeat_type, repeat_interval, post_mode, post_time, uid))
     conn.commit()
     sched_id = c.lastrowid
     conn.close()
     return sched_id
 
 def get_pending_scheduled_posts():
+    """Pending posts for current user only (per-user isolation)"""
+    uid = get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run FROM scheduled_posts WHERE status='pending'")
+    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run FROM scheduled_posts WHERE status='pending' AND owner_id=?", (uid,))
     rows = c.fetchall()
     conn.close()
     return rows
 
 def get_all_scheduled_posts():
+    """All scheduled posts (admins can pass owner_id=0 to see all)"""
+    uid = get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, status, last_run, next_run FROM scheduled_posts ORDER BY post_time ASC")
+    if is_admin(uid):
+        c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, status, last_run, next_run, owner_id FROM scheduled_posts ORDER BY post_time ASC")
+    else:
+        c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, status, last_run, next_run, owner_id FROM scheduled_posts WHERE owner_id=? ORDER BY post_time ASC", (uid,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_pending_scheduled_posts_all():
+    """كل المنشورات المجدولة لأجل المستخدمين - لـ schedule_checker الخلفية"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, message_id, post_time, repeat_type, repeat_interval, post_mode, last_run, next_run, owner_id FROM scheduled_posts WHERE status='pending'")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -3956,24 +4038,29 @@ def obfuscate_for_humans(text):
 #  إدارة الحسابات والمجموعات
 # ═══════════════════════════════════════════════
 async def restore_sessions():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, session_string, phone, status FROM accounts WHERE status='active'")
-    accounts = c.fetchall()
-    conn.close()
-    for acc_id, session_str, phone, status in accounts:
-        try:
-            client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
-            await client.connect()
-            if await client.is_user_authorized():
-                user_clients[acc_id] = client
-                logger.info(f"✅ تم استعادة حساب: {phone}")
-                await fetch_all_groups_for_account(acc_id, client)
-            else:
-                logger.warning(f"⚠️ الجلسة منتهية: {phone}")
-                set_account_status(acc_id, 'expired')
-        except Exception as e:
-            logger.error(f"❌ فشل استعادة حساب {phone}: {e}")
+    """استعادة كل الجلسات النشطة لكل المستخدمين (عند الإقلاع)"""
+    grouped = get_all_active_sessions_grouped(DB_PATH)
+    total_restored = 0
+    for owner_id, accounts in grouped.items():
+        for acc_id, session_str, phone in accounts:
+            try:
+                client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
+                await client.connect()
+                if await client.is_user_authorized():
+                    user_clients[acc_id] = client
+                    # ربط acc_id بالمستخدم لاستخدامه في الفلترة لاحقاً
+                    user_clients_owner[acc_id] = owner_id
+                    logger.info(f"✅ تم استعادة حساب: {phone} (owner={owner_id})")
+                    set_current_user(owner_id)
+                    await fetch_all_groups_for_account(acc_id, client)
+                    total_restored += 1
+                else:
+                    logger.warning(f"⚠️ الجلسة منتهية: {phone}")
+                    set_account_status(acc_id, 'expired')
+            except Exception as e:
+                logger.error(f"❌ فشل استعادة حساب {phone}: {e}")
+    logger.info(f"👥 تم استعادة {total_restored} حساب عبر {len(grouped)} مستخدم")
+    return total_restored
 
 def set_account_status(acc_id, status):
     conn = sqlite3.connect(DB_PATH)
@@ -3983,8 +4070,9 @@ def set_account_status(acc_id, status):
     conn.close()
 
 async def fetch_all_groups_for_account(acc_id, client):
-    """جلب كل المجموعات والقنوات من الحساب بدون أي استثناء"""
+    """جلب كل المجموعات والقنوات من الحساب وربطها بـ owner_id الحالي"""
     count = 0
+    owner_id = user_clients_owner.get(acc_id, get_current_user())
     try:
         async for dialog in client.iter_dialogs():
             if dialog.is_group or dialog.is_channel:
@@ -3994,19 +4082,23 @@ async def fetch_all_groups_for_account(acc_id, client):
                 username = getattr(dialog.entity, 'username', None)
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute('''INSERT OR IGNORE INTO groups (group_id, group_name, username, member_count, added_by)
-                             VALUES (?, ?, ?, ?, ?)''', (group_id, group_name[:100], username, member_count, f"account_{acc_id}"))
+                # ربط بالمستخدم صاحب الحساب (owner_id) - حتى لو الـ contextvar تغيّر
+                c.execute('''INSERT OR IGNORE INTO groups (group_id, group_name, username, member_count, added_by, owner_id)
+                             VALUES (?, ?, ?, ?, ?, ?)''',
+                          (group_id, group_name[:100], username, member_count,
+                           f"account_{acc_id}", owner_id))
                 conn.commit()
                 conn.close()
                 count += 1
-        logger.info(f"✅ تم استيراد {count} مجموعة من الحساب {acc_id}")
+        logger.info(f"✅ تم استيراد {count} مجموعة من الحساب {acc_id} (owner={owner_id})")
     except Exception as e:
         logger.error(f"❌ فشل استيراد المجموعات: {e}")
     return count
 
-async def get_account_groups(client):
-    """جلب كل المجموعات/القنوات ديناميكياً بدون أي استثناء"""
+async def get_account_groups(client, acc_id=None):
+    """جلب كل المجموعات/القنوات ديناميكياً - مفلترة حسب owner_id"""
     groups = []
+    owner_id = get_current_user()
     try:
         async for dialog in client.iter_dialogs():
             entity = dialog.entity
@@ -4019,28 +4111,31 @@ async def get_account_groups(client):
     return groups
 
 async def get_all_groups_count():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM groups")
-    count = c.fetchone()[0]
-    conn.close()
-    return count
+    """عدد قروبات المستخدم الحالي فقط (للعزل) - الأدمن يرى الكل"""
+    uid = get_current_user()
+    if is_admin(uid):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM groups")
+        count = c.fetchone()[0]
+        conn.close()
+        return count
+    return count_groups_for_current(DB_PATH)
 
 async def get_all_messages_count():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM messages")
-    count = c.fetchone()[0]
-    conn.close()
-    return count
+    uid = get_current_user()
+    if is_admin(uid):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM messages")
+        count = c.fetchone()[0]
+        conn.close()
+        return count
+    return count_messages_for_current(DB_PATH)
 
 async def get_all_accounts():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id FROM accounts WHERE status='active'")
-    accounts = c.fetchall()
-    conn.close()
-    return [a[0] for a in accounts]
+    """كل حسابات المستخدم الحالي النشطة"""
+    return get_accounts_for_current(DB_PATH)
 
 # ═══════════════════════════════════════════════
 #  نظام الانضمام التلقائي المتقدم - Anti-Ban
@@ -4637,9 +4732,12 @@ def save_join_history(link, group_id, group_name, status, joined_by):
         pass
 
 def add_group_to_db(group_id, group_name):
+    """إضافة قروب مرتبط بالمستخدم الحالي"""
+    uid = get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('INSERT OR IGNORE INTO groups (group_id, group_name) VALUES (?, ?)', (group_id, group_name))
+    c.execute('INSERT OR IGNORE INTO groups (group_id, group_name, owner_id) VALUES (?, ?, ?)',
+              (group_id, group_name, uid))
     conn.commit()
     conn.close()
 
@@ -4882,8 +4980,11 @@ async def fast_post_to_all_groups(messages):
     fail_count = 0
     total_posts = 0
 
-    # حساب إجمالي المجموعات عبر كل الحسابات
-    for acc_id, client in list(user_clients.items()):
+    # حساب إجمالي المجموعات عبر كل الحسابات (للمستخدم الحالي)
+    current_uid = get_current_user()
+    my_acc_ids = set(get_accounts_for_current(DB_PATH))
+    my_clients_pre = {aid: cl for aid, cl in user_clients.items() if aid in my_acc_ids}
+    for acc_id, client in list(my_clients_pre.items()):
         try:
             groups = await get_account_groups(client)
             total_posts += len(groups) * len(messages)
@@ -4893,10 +4994,12 @@ async def fast_post_to_all_groups(messages):
     if total_posts == 0:
         return 0, 0, 0
 
-    logger.info(f"⚡ بدء النشر السريع: {len(user_clients)} حساب × {len(messages)} رسالة (إجمالي ~{total_posts}) 👻شبحي={'✅' if ghost_enabled else '❌'} 🐝سرب={'✅' if ghost_swarm_on else '❌'} 🎲Spintax={'✅' if spintax_on else '❌'}")
+    # 👥 v5.0: فلترة الحسابات حسب المستخدم الحالي
+    my_clients = {aid: cl for aid, cl in user_clients.items() if aid in my_acc_ids}
+    logger.info(f"⚡ بدء النشر السريع: {len(my_clients)} حساب للمستخدم {current_uid} × {len(messages)} رسالة (إجمالي ~{total_posts}) 👻شبحي={'✅' if ghost_enabled else '❌'} 🐝سرب={'✅' if ghost_swarm_on else '❌'} 🎲Spintax={'✅' if spintax_on else '❌'}")
 
     # كل حساب ينشر في كل مجموعاته + كل الرسائل
-    for acc_id, client in list(user_clients.items()):
+    for acc_id, client in list(my_clients.items()):
         if not is_posting_active:
             break
 
@@ -5057,8 +5160,10 @@ async def post_to_all_groups(message):
     fail_count = 0
     total_posts = 0
 
-    # حساب إجمالي المجموعات عبر كل الحسابات
-    for acc_id, client in list(user_clients.items()):
+    # حساب إجمالي المجموعات عبر حسابات المستخدم الحالي فقط
+    my_acc_ids = set(get_accounts_for_current(DB_PATH))
+    my_clients_pre = {aid: cl for aid, cl in user_clients.items() if aid in my_acc_ids}
+    for acc_id, client in list(my_clients_pre.items()):
         try:
             groups = await get_account_groups(client)
             total_posts += len(groups)
@@ -5068,8 +5173,8 @@ async def post_to_all_groups(message):
     if total_posts == 0:
         return 0, 0, 0
 
-    # كل حساب ينشر في كل مجموعاته الخاصة
-    for acc_id, client in list(user_clients.items()):
+    # كل حساب ينشر في كل مجموعاته الخاصة (المستخدم الحالي)
+    for acc_id, client in list(my_clients_pre.items()):
         if not is_posting_active:
             break
 
@@ -5132,22 +5237,30 @@ async def post_to_all_groups(message):
     return success_count, fail_count, total_posts
 
 def log_posting(account_id, group_id, message_id, status):
+    uid = get_current_user()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''INSERT INTO posting_history (account_id, group_id, message_id, status, posted_at)
-                 VALUES (?, ?, ?, ?, ?)''', (account_id, group_id, message_id, status, datetime.now()))
+    c.execute('''INSERT INTO posting_history (account_id, group_id, message_id, status, posted_at, owner_id)
+                 VALUES (?, ?, ?, ?, ?, ?)''', (account_id, group_id, message_id, status, datetime.now(), uid))
     conn.commit()
     conn.close()
 
 # ═══════════════════════════════════════════════
 #  نظام جدولة النشر (محسن وحقيقي)
 # ═══════════════════════════════════════════════
-async def execute_scheduled_post(sched_id, msg_id, post_mode='fast'):
-    """تنفيذ منشور مجدول"""
+async def execute_scheduled_post(sched_id, msg_id, post_mode='fast', owner_id=None):
+    """تنفيذ منشور مجدول - يضبط سياق المستخدم صاحب الجدولة"""
     global is_posting_active
+    # 👥 v5.0: ضبط سياق المستخدم صاحب الجدولة لاستخدام حساباته فقط
+    if owner_id:
+        set_current_user(owner_id)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages WHERE id=?", (msg_id,))
+    if owner_id:
+        c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages WHERE id=? AND owner_id=?",
+                  (msg_id, owner_id))
+    else:
+        c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages WHERE id=?", (msg_id,))
     msg = c.fetchone()
     conn.close()
     if not msg:
@@ -5180,19 +5293,24 @@ async def execute_scheduled_post(sched_id, msg_id, post_mode='fast'):
 
 
 async def schedule_checker(bot):
-    """مهمة خلفية تفحص المنشورات المجدولة وتنفذها"""
+    """مهمة خلفية تفحص المنشورات المجدولة وتنفذها (لكل المستخدمين)"""
     while True:
         try:
             now = datetime.now()
-            pending = get_pending_scheduled_posts()
-            for sched_id, msg_id, post_time_str, repeat_type, repeat_interval, post_mode, last_run, next_run in pending:
+            pending = get_pending_scheduled_posts_all()
+            for row in pending:
+                # التوافق: الجدول قد يحوي 8 أعمدة (قديم) أو 9 (مع owner_id)
+                if len(row) == 9:
+                    sched_id, msg_id, post_time_str, repeat_type, repeat_interval, post_mode, last_run, next_run, owner_id = row
+                else:
+                    sched_id, msg_id, post_time_str, repeat_type, repeat_interval, post_mode, last_run, next_run = row
+                    owner_id = None
                 try:
                     post_time = datetime.fromisoformat(post_time_str)
                     # تحقق مما إذا حان وقت النشر
                     if now >= post_time:
-                        logger.info(f"📅 تنفيذ منشور مجدول #{sched_id} (رسالة #{msg_id})")
-
-                        executed = await execute_scheduled_post(sched_id, msg_id, post_mode)
+                        logger.info(f"📅 تنفيذ منشور مجدول #{sched_id} (رسالة #{msg_id}, owner={owner_id})")
+                        executed = await execute_scheduled_post(sched_id, msg_id, post_mode, owner_id=owner_id)
                         now_str = datetime.now().isoformat()
 
                         if executed:
@@ -5295,8 +5413,8 @@ def clean_database_keep_accounts():
 # ═══════════════════════════════════════════════
 #  القوائم والأزرار
 # ═══════════════════════════════════════════════
-def get_main_menu():
-    """القائمة الرئيسية المبسطة - 13 زر أساسي"""
+def get_main_menu(user_id=None):
+    """القائمة الرئيسية المبسطة - 13 زر أساسي + زر الأدمن إن وُجد"""
     ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
     ao_profile = get_setting('adaptive_obfuscation_profile', 'medium')
     profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(ao_profile, '🟡')
@@ -5314,7 +5432,11 @@ def get_main_menu():
     mode_btn = f"{mode_info['icon']} {mode_info['name']}"
     # 🛡 درع الروابط
     lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
-    return [
+    # 👥 الأدمن
+    if user_id is None:
+        user_id = get_current_user()
+    is_adm = user_id is not None and multiuser.is_user_admin(DB_PATH, user_id)
+    menu = [
         # ── النشر ──
         [Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
@@ -5342,6 +5464,10 @@ def get_main_menu():
          Button.inline("📊 الإحصائيات", b"stats")],
         [Button.inline("⚙️ الإعدادات", b"settings")],
     ]
+    # 👥 زر لوحة الأدمن (للأدمن فقط)
+    if is_adm:
+        menu.append([Button.inline("🛡️ لوحة الأدمن", b"admin_panel")])
+    return menu
 
 
 def get_send_mode_menu():
@@ -5557,14 +5683,25 @@ async def main():
 
     @bot.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
-        if not is_admin(event.sender_id):
+        # 👥 v5.0: أي مستخدم يمكنه استخدام البوت (تسجيل تلقائي)
+        set_current_user(event.sender_id)
+        sender = await event.get_sender()
+        uname = getattr(sender, 'username', '') or ''
+        fname = getattr(sender, 'first_name', '') or ''
+        lname = getattr(sender, 'last_name', '') or ''
+        multiuser.register_user(DB_PATH, event.sender_id, uname, fname, lname)
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 **تم حظر حسابك من استخدام هذا البوت**\n\nتواصل مع الأدمن لإلغاء الحظر.")
             return
         groups_count = await get_all_groups_count()
         message_interval = get_setting('message_interval', '3')
         fast_delay = get_setting('fast_post_delay', '3')
         pending_sched = len(get_pending_scheduled_posts())
+        admin_badge = "🛡️ **أدمن**\n\n" if is_admin(event.sender_id) else ""
         await event.respond(
-            "🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
+            f"🛡 **بوت النشر الخارق 2026 - النسخة العالمية**\n\n"
+            f"{admin_badge}"
+            f"👤 أهلاً {fname or uname or event.sender_id}!\n\n"
             "🛡 **قاعدة ذهبية:** البوت يرسل رسالتك **كما كتبتها بالضبط**\n"
             "مع تطبيق تشفيرات وتكويدات غير مرئية فقط!\n\n"
             "🎛 **أوضاع الإرسال:**\n"
@@ -5577,15 +5714,15 @@ async def main():
             "• 🛡 درع الروابط: حدد أنت يوزرك/رقمك/رابطك → يتحول لزر (للطلب اضغط هنا)\n"
             "  قابل للضغط يفتح تيليجرام/وتساب - وبدون تحديد لا يضيف البوت شيئاً\n"
             "• ✍️ تقوية العرض (غامق/تحته خط) من قائمة المحرك\n\n"
-            "☁️ **حفظ دائم:** حساباتك وجلساتك تُستعاد تلقائياً بعد كل تحديث\n"
-            "(من الخزنة السحابية المشفرة - زر الحفظ في قائمة الحسابات)\n\n"
+            "👥 **عزل كامل:** حساباتك وقروباتك وإعداداتك خاصة بك فقط\n"
+            "☁️ **حفظ دائم:** حساباتك وجلساتك تُستعاد تلقائياً بعد كل تحديث\n\n"
             "🐝 **أنظمة متقدمة:**\n"
             "• ⏱️ Human Delay | ⚖️ Load Balancer\n\n"
             f"📅 الجدولة: مرة/يومي/أسبوعي/كل X دقيقة\n"
-            f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولات: {pending_sched}\n\n"
-            f"📢 المجموعات: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n\n"
+            f"⚡ النشر السريع ({fast_delay} ثانية) | 📌 مجدولاتك: {pending_sched}\n\n"
+            f"📢 قروباتك: {groups_count} | ⏱ مدة النشر: {message_interval} ثانية\n\n"
             "🧪 جرب: /set_mode | /get_mode",
-            buttons=get_main_menu()
+            buttons=get_main_menu(event.sender_id)
         )
 
     async def auto_posting_loop():
@@ -5595,11 +5732,8 @@ async def main():
             try:
                 if not is_posting_active:
                     break
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages")
-                msgs = c.fetchall()
-                conn.close()
+                # 👥 v5.0: رسائل المستخدم الحالي فقط
+                msgs = get_messages_for_current(DB_PATH)
                 if not msgs:
                     logger.warning("⚠️ لا توجد رسائل")
                     is_posting_active = False
@@ -5635,7 +5769,17 @@ async def main():
         الاستخدام: /set_mode <mode>
         الأوضاع: normal / spintax / stego (كلها تحافظ على نصك كما هو)
         """
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         mode = event.raw_text.replace('/set_mode', '', 1).strip().lower()
         if not mode:
@@ -5663,7 +5807,17 @@ async def main():
     @bot.on(events.NewMessage(pattern='/get_mode'))
     async def get_mode_command(event):
         """عرض وضع الإرسال الحالي"""
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         current = get_setting('send_mode', 'normal')
         info = SEND_MODES.get(current, SEND_MODES['normal'])
@@ -5676,7 +5830,17 @@ async def main():
 
     @bot.on(events.NewMessage(pattern='/encrypt'))
     async def encrypt_preview(event):
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         text = event.raw_text.replace('/encrypt', '').strip()
         if not text:
@@ -5721,7 +5885,17 @@ async def main():
     @bot.on(events.NewMessage(pattern='/encrypt_test'))
     async def encrypt_test_cmd(event):
         """اختبار شامل - يعرض النص مشفر بكل المستويات الأربعة"""
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         text = event.raw_text.replace('/encrypt_test', '').strip()
         if not text:
@@ -5745,7 +5919,17 @@ async def main():
 
     @bot.on(events.NewMessage(pattern='/check'))
     async def check_handler(event):
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         groups = await get_all_groups_count()
         msgs = await get_all_messages_count()
@@ -5779,14 +5963,34 @@ async def main():
 
     @bot.on(events.NewMessage(pattern='/test'))
     async def test_handler(event):
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         await event.respond("✅ بوت النشر الخارق 2026 يعمل!\n🎲 Spintax | 🐝 Ghost Swarm | ⚖️ Load Balancer\n〰️ كشيدة | 🔤 VS | 🏷️ Tags | 🔀 Homoglyphs | ⏱️ Human Delay")
 
     # 🆕 أمر اختبار التشفير
     @bot.on(events.NewMessage(pattern='/test_obfuscate'))
     async def test_obfuscate_handler(event):
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         test_text = "أحد عنده حرمان تبي تشيل الحرمان بدوامك ذي تسوي لكم سكليف معتمد حتى لو عندك غياب قديم الي يبي يكلمها https://wa.me/+966571482466"
         if get_setting('spintax_enabled', 'on') == 'on':
@@ -5826,7 +6030,17 @@ async def main():
     @bot.on(events.NewMessage(pattern='/fast_post'))
     async def fast_post_command(event):
         global is_posting_active
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         if not user_clients:
             await event.respond("⚠️ لا توجد حسابات! أضف حساباً أولاً")
@@ -5858,7 +6072,17 @@ async def main():
 
     @bot.on(events.NewMessage(pattern='/scan_groups'))
     async def scan_groups(event):
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         await event.respond("🔄 جاري المسح...")
         total = 0
@@ -5870,8 +6094,17 @@ async def main():
     @bot.on(events.CallbackQuery)
     async def callback_handler(event):
         global is_posting_active, join_cancelled, hyper_encryption
-        if not is_admin(event.sender_id):
-            await event.answer("⛔ غير مصرح", alert=True)
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.answer("🚫 تم حظر حسابك", alert=True)
             return
         data = event.data.decode('utf-8')
 
@@ -5910,13 +6143,10 @@ async def main():
                 return
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages")
+            uid = get_current_user()
+            c.execute("SELECT id, content, media_path, msg_type, media_data FROM messages WHERE owner_id=?", (uid,))
             msgs = c.fetchall()
             conn.close()
-            if not msgs:
-                await event.edit("⚠️ لا توجد رسائل!", buttons=[[Button.inline("➕ إضافة", b"add_msg")]])
-                return
-            is_posting_active = True
             enc_status = "✅ مفعل" if get_setting('encryption', 'on') == 'on' else "❌ معطل"
             anti_status = "✅ مفعل" if get_setting('anti_detect', 'on') == 'on' else "❌ معطل"
             obf_status = "✅ مفعل" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌ معطل"
@@ -6071,7 +6301,8 @@ async def main():
         elif data == 'list_msg':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, substr(content,1,50), msg_type FROM messages LIMIT 20")
+            uid = get_current_user()
+            c.execute("SELECT id, substr(content,1,50), msg_type FROM messages WHERE owner_id=? LIMIT 20", (uid,))
             msgs = c.fetchall()
             conn.close()
             if not msgs:
@@ -6156,7 +6387,8 @@ async def main():
         elif data == 'list_acc':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT id, phone, status FROM accounts")
+            uid = get_current_user()
+            c.execute("SELECT id, phone, status FROM accounts WHERE owner_id=?", (uid,))
             accs = c.fetchall()
             conn.close()
             if not accs:
@@ -6212,7 +6444,8 @@ async def main():
             # (عين المستخدم 👤 + عين بوتات الحماية 🤖) - لا نصوص تجريبية
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT content FROM messages WHERE content IS NOT NULL AND content != '' ORDER BY id DESC LIMIT 1")
+            uid = get_current_user()
+            c.execute("SELECT content FROM messages WHERE content IS NOT NULL AND content != '' AND owner_id=? ORDER BY id DESC LIMIT 1", (uid,))
             row = c.fetchone()
             conn.close()
             if not row or not (row[0] or '').strip():
@@ -6588,7 +6821,8 @@ async def main():
             # الإعلان الحقيقي: أحدث رسالة محفوظة (نصك أنت وليس نصوص تجريبية)
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT content FROM messages WHERE content IS NOT NULL AND content != '' ORDER BY id DESC LIMIT 1")
+            uid = get_current_user()
+            c.execute("SELECT content FROM messages WHERE content IS NOT NULL AND content != '' AND owner_id=? ORDER BY id DESC LIMIT 1", (uid,))
             row = c.fetchone()
             conn.close()
             if not row or not (row[0] or '').strip():
@@ -6991,21 +7225,22 @@ async def main():
             set_setting('awaiting_del_blacklist', 'true')
 
         elif data == 'stats':
+            uid = get_current_user()
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            c.execute("SELECT COUNT(*) FROM messages")
+            c.execute("SELECT COUNT(*) FROM messages WHERE owner_id=?", (uid,))
             msg_count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM accounts WHERE status='active'")
+            c.execute("SELECT COUNT(*) FROM accounts WHERE status='active' AND owner_id=?", (uid,))
             acc_count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM groups")
+            c.execute("SELECT COUNT(*) FROM groups WHERE owner_id=?", (uid,))
             grp_count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM posting_history WHERE status='success'")
+            c.execute("SELECT COUNT(*) FROM posting_history WHERE status='success' AND owner_id=?", (uid,))
             success_count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%'")
+            c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%' AND owner_id=?", (uid,))
             fail_count = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM blacklist")
             blacklist_count = c.fetchone()[0]
-            c.execute("SELECT COUNT(*) FROM scheduled_posts WHERE status='pending'")
+            c.execute("SELECT COUNT(*) FROM scheduled_posts WHERE status='pending' AND owner_id=?", (uid,))
             sched_count = c.fetchone()[0]
             join_stats = get_join_stats()
             conn.close()
@@ -7020,6 +7255,233 @@ async def main():
                 f"🎭 تشويش النص: {obf_status}\n"
                 f"📅 مجدولة: {sched_count}",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
+            )
+
+        # ═══════════════════════════════════════════════
+        #  👥 لوحة الأدمن - v5.0
+        # ═══════════════════════════════════════════════
+        elif data == 'admin_panel':
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=200)
+            n_users = len(users)
+            n_banned = sum(1 for u in users if u['is_banned'])
+            n_admins = sum(1 for u in users if u['is_admin'])
+            # حسابات كل المستخدمين + قروبات كل المستخدمين
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM accounts")
+            total_acc = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM groups")
+            total_grp = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM messages")
+            total_msg = c.fetchone()[0]
+            conn.close()
+            await event.edit(
+                f"🛡️ **لوحة الأدمن**\n\n"
+                f"👥 المستخدمون: {n_users}\n"
+                f"🚫 محظورون: {n_banned}\n"
+                f"🛡️ أدمنز: {n_admins}\n\n"
+                f"👥 كل الحسابات: {total_acc}\n"
+                f"📢 كل القروبات: {total_grp}\n"
+                f"📝 كل الرسائل: {total_msg}",
+                buttons=[
+                    [Button.inline("📋 قائمة المستخدمين", b"admin_users_list")],
+                    [Button.inline("📊 إحصائيات شاملة", b"admin_global_stats")],
+                    [Button.inline("📥 استيراد قروبات مستخدم (txt)", b"admin_export_groups")],
+                    [Button.inline("🔙 رجوع", b"back")],
+                ]
+            )
+
+        elif data == 'admin_users_list':
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=200)
+            if not users:
+                await event.edit("👥 لا يوجد مستخدمون بعد.", buttons=[[Button.inline("🔙 رجوع", b"admin_panel")]])
+                return
+            text = "📋 **قائمة المستخدمين:**\n\n"
+            # كل مستخدم: زر
+            buttons = []
+            for u in users[:50]:  # أول 50
+                badge = "🛡️ " if u['is_admin'] else ("🚫 " if u['is_banned'] else "")
+                name = u.get('first_name') or u.get('username') or '—'
+                uname = f"@{u['username']}" if u.get('username') else ''
+                label = f"{badge}{name} {uname} [{u['telegram_id']}]"
+                buttons.append([Button.inline(label, f"admin_user_{u['telegram_id']}".encode())])
+            buttons.append([Button.inline("🔙 رجوع", b"admin_panel")])
+            await event.edit(f"📋 **{len(users)} مستخدم** (أول 50)", buttons=buttons)
+
+        elif data.startswith('admin_user_'):
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_user_', ''))
+            except Exception:
+                await event.answer("❌ معرّف غير صالح", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=500)
+            target = next((u for u in users if u['telegram_id'] == target_uid), None)
+            if not target:
+                await event.edit("❌ المستخدم غير موجود", buttons=[[Button.inline("🔙 رجوع", b"admin_users_list")]])
+                return
+            stats = multiuser.get_user_stats(DB_PATH, target_uid)
+            ban_label = "✅ رفع الحظر" if target['is_banned'] else "🚫 حظر"
+            admin_label = "⬇️ تنزيل أدمن" if target['is_admin'] else "⬆️ ترقية أدمن"
+            await event.edit(
+                f"👤 **ملف المستخدم**\n\n"
+                f"🆔: `{target['telegram_id']}`\n"
+                f"👤 {target.get('first_name','')} {target.get('last_name','')}\n"
+                f"🌐 @{target.get('username','') or '—'}\n"
+                f"🛡️ أدمن: {'نعم' if target['is_admin'] else 'لا'}\n"
+                f"🚫 محظور: {'نعم' if target['is_banned'] else 'لا'}\n"
+                f"📅 انضم: {target.get('joined_at','')}\n\n"
+                f"📊 **إحصائيات:**\n"
+                f"👥 حسابات: {stats['accounts']} (نشط: {stats['active_accounts']})\n"
+                f"📢 قروبات: {stats['groups']}\n"
+                f"📝 رسائل: {stats['messages']}\n"
+                f"📅 مجدولة: {stats['scheduled']}\n"
+                f"📤 منشورات: {stats['posts_sent']}\n"
+                f"🔗 انضمامات: {stats['joins']}",
+                buttons=[
+                    [Button.inline("📥 تصدير قروبات (txt)", f"admin_export_{target_uid}".encode()),
+                     Button.inline("👥 عرض حساباته", f"admin_accs_{target_uid}".encode())],
+                    [Button.inline(ban_label, f"admin_ban_{target_uid}".encode()),
+                     Button.inline(admin_label, f"admin_admin_{target_uid}".encode())],
+                    [Button.inline("🔙 رجوع", b"admin_users_list")],
+                ]
+            )
+
+        elif data.startswith('admin_ban_'):
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_ban_', ''))
+            except Exception:
+                return
+            target = next((u for u in multiuser.list_all_users(DB_PATH, limit=500)
+                          if u['telegram_id'] == target_uid), None)
+            new_ban = not (target['is_banned'] if target else False)
+            multiuser.set_banned(DB_PATH, target_uid, new_ban)
+            await event.answer(f"{'تم الحظر' if new_ban else 'تم رفع الحظر'}", alert=True)
+            # إعادة عرض الملف
+            event.data = f"admin_user_{target_uid}".encode()
+            await callback_handler(event)
+
+        elif data.startswith('admin_admin_'):
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_admin_', ''))
+            except Exception:
+                return
+            target = next((u for u in multiuser.list_all_users(DB_PATH, limit=500)
+                          if u['telegram_id'] == target_uid), None)
+            new_admin = not (target['is_admin'] if target else False)
+            multiuser.set_admin(DB_PATH, target_uid, new_admin)
+            await event.answer(f"{'تمت الترقية' if new_admin else 'تم التنزيل'}", alert=True)
+            event.data = f"admin_user_{target_uid}".encode()
+            await callback_handler(event)
+
+        elif data.startswith('admin_export_'):
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_export_', ''))
+            except Exception:
+                await event.answer("❌ معرّف غير صالح", alert=True)
+                return
+            content = multiuser.export_user_groups_txt(DB_PATH, target_uid)
+            # حفظ في ملف مؤقت وإرساله
+            try:
+                import tempfile
+                fname = f"groups_{target_uid}.txt"
+                fpath = f"/tmp/{fname}"
+                with open(fpath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                await event.respond(f"📥 تصدير قروبات المستخدم `{target_uid}` كملف txt:")
+                await event.respond(file=fpath, force_document=True)
+                # الحفاظ على لوحة المستخدم
+                event.data = f"admin_user_{target_uid}".encode()
+                await callback_handler(event)
+            except Exception as e:
+                await event.answer(f"❌ خطأ: {str(e)[:100]}", alert=True)
+
+        elif data.startswith('admin_accs_'):
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_accs_', ''))
+            except Exception:
+                return
+            accs = multiuser.get_user_accounts(DB_PATH, target_uid)
+            text = f"👥 **حسابات المستخدم `{target_uid}`** ({len(accs)}):\n\n"
+            for a in accs[:30]:
+                emoji = "✅" if a['status'] == 'active' else "⏸️"
+                text += f"{emoji} #{a['id']} - {a['phone']}\n"
+            await event.edit(text, buttons=[[Button.inline("🔙 رجوع", f"admin_user_{target_uid}".encode())]])
+
+        elif data == 'admin_export_groups':
+            # قائمة اختيار المستخدم ثم تصدير قروباته
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=200)
+            buttons = []
+            for u in users[:30]:
+                name = u.get('first_name') or u.get('username') or '—'
+                st = multiuser.get_user_stats(DB_PATH, u['telegram_id'])
+                label = f"📥 {name} [{st['groups']} قروب]"
+                buttons.append([Button.inline(label, f"admin_export_{u['telegram_id']}".encode())])
+            buttons.append([Button.inline("🔙 رجوع", b"admin_panel")])
+            await event.edit("📥 اختر مستخدماً لتصدير قروباته كملف txt:", buttons=buttons)
+
+        elif data == 'admin_global_stats':
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=1000)
+            n_users = len(users)
+            n_active = sum(1 for u in users if not u['is_banned'])
+            n_banned = sum(1 for u in users if u['is_banned'])
+            n_admins = sum(1 for u in users if u['is_admin'])
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM accounts")
+            t_acc = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM accounts WHERE status='active'")
+            t_acc_active = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM groups")
+            t_grp = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM messages")
+            t_msg = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM posting_history WHERE status='success'")
+            t_succ = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM posting_history WHERE status LIKE 'failed%'")
+            t_fail = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM scheduled_posts WHERE status='pending'")
+            t_sched = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM join_history")
+            t_joins = c.fetchone()[0]
+            conn.close()
+            await event.edit(
+                f"📊 **الإحصائيات الشاملة**\n\n"
+                f"👥 المستخدمون: {n_users} (نشط: {n_active}, محظور: {n_banned}, أدمن: {n_admins})\n"
+                f"👥 كل الحسابات: {t_acc} (نشط: {t_acc_active})\n"
+                f"📢 كل القروبات: {t_grp}\n"
+                f"📝 كل الرسائل: {t_msg}\n"
+                f"✅ نشر ناجح: {t_succ}\n"
+                f"❌ نشر فاشل: {t_fail}\n"
+                f"📅 مجدولات معلقة: {t_sched}\n"
+                f"🔗 انضمامات: {t_joins}",
+                buttons=[[Button.inline("🔙 رجوع", b"admin_panel")]]
             )
 
         elif data == 'stop_joining':
@@ -7091,7 +7553,17 @@ async def main():
     # معالج الرسائل النصية والوسائط
     @bot.on(events.NewMessage)
     async def message_handler(event):
-        if not is_admin(event.sender_id):
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك من استخدام البوت.")
             return
         if event.raw_text == '/cancel':
             for key in ['awaiting_msg', 'awaiting_phone', 'awaiting_code', 'awaiting_password',
@@ -7155,14 +7627,9 @@ async def main():
             try:
                 await session_data["client"].sign_in(session_data["phone"], code, phone_code_hash=session_data["phone_code_hash"])
                 me = await session_data["client"].get_me()
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                          (session_data["client"].session.save(), me.phone, 'active'))
-                conn.commit()
-                acc_id = c.lastrowid
-                conn.close()
+                acc_id = mu_insert_account(DB_PATH, session_data["client"].session.save(), me.phone, 'active')
                 user_clients[acc_id] = session_data["client"]
+                user_clients_owner[acc_id] = get_current_user()
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
                 vault_mark_dirty()
@@ -7194,14 +7661,9 @@ async def main():
             try:
                 await session_data["client"].sign_in(password=password)
                 me = await session_data["client"].get_me()
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute('INSERT INTO accounts (session_string, phone, status) VALUES (?, ?, ?)',
-                          (session_data["client"].session.save(), me.phone, 'active'))
-                conn.commit()
-                acc_id = c.lastrowid
-                conn.close()
+                acc_id = mu_insert_account(DB_PATH, session_data["client"].session.save(), me.phone, 'active')
                 user_clients[acc_id] = session_data["client"]
+                user_clients_owner[acc_id] = get_current_user()
                 group_count = await fetch_all_groups_for_account(acc_id, session_data["client"])
                 del temp_sessions[event.sender_id]
                 vault_mark_dirty()
@@ -7306,10 +7768,11 @@ async def main():
                     )
                     return
 
-                # تحقق من وجود رسائل
+                # تحقق من وجود رسائل ( للمستخدم الحالي)
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute("SELECT id FROM messages")
+                uid = get_current_user()
+                c.execute("SELECT id FROM messages WHERE owner_id=?", (uid,))
                 msg_ids = [row[0] for row in c.fetchall()]
                 conn.close()
                 if not msg_ids:
@@ -7628,13 +8091,7 @@ async def main():
             else:
                 await event.respond("❌ نوع غير مدعوم!", buttons=get_main_menu())
                 return
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute('INSERT INTO messages (content, media_path, msg_type, media_data) VALUES (?, ?, ?, ?)',
-                      (content, media_path, msg_type, media_data))
-            conn.commit()
-            msg_id = c.lastrowid
-            conn.close()
+            msg_id = mu_insert_message(DB_PATH, content, media_path, msg_type, media_data)
             vault_mark_dirty()  # ☁️ الرسائل الجديدة تدخل النسخة السحابية التالية
             types = {'text':'نص','photo':'صورة','video':'فيديو','audio':'صوت','document':'ملف','contact':'جهة اتصال'}
             # 🛠 v4.4: تنبيه إذا كانت الرسالة تحوي روابط (قد يكون المستخدم أراد الانضمام لا الحفظ)
@@ -7765,9 +8222,10 @@ async def main():
             set_setting('awaiting_del_msg', '')
             try:
                 msg_id = int(event.raw_text.strip())
+                uid = get_current_user()
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute('DELETE FROM messages WHERE id=?', (msg_id,))
+                c.execute('DELETE FROM messages WHERE id=? AND owner_id=?', (msg_id, uid))
                 conn.commit()
                 conn.close()
                 await event.respond("✅ تم الحذف", buttons=get_main_menu())
@@ -7779,12 +8237,24 @@ async def main():
             set_setting('awaiting_del_acc', '')
             try:
                 acc_id = int(event.raw_text.strip())
+                uid = get_current_user()
+                # تحقق من أن الحساب يخص المستخدم الحالي
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('SELECT 1 FROM accounts WHERE id=? AND owner_id=?', (acc_id, uid))
+                if not c.fetchone():
+                    conn.close()
+                    await event.respond("❌ الحساب غير موجود أو لا يخصك", buttons=get_main_menu())
+                    return
+                conn.close()
                 if acc_id in user_clients:
                     await user_clients[acc_id].disconnect()
                     del user_clients[acc_id]
+                if acc_id in user_clients_owner:
+                    del user_clients_owner[acc_id]
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
-                c.execute('DELETE FROM accounts WHERE id=?', (acc_id,))
+                c.execute('DELETE FROM accounts WHERE id=? AND owner_id=?', (acc_id, uid))
                 conn.commit()
                 conn.close()
                 vault_mark_dirty()

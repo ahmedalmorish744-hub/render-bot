@@ -589,3 +589,72 @@ Stage Summary:
 - 🧪 زر "اختبار النشر (قبل/بعد)" يجيب سؤال المستخدم بصرياً: عين المستخدم 👤 vs عين البوتات 🤖 على إعلانه الحقيقي
 - 👤 اليوزر @ppppokl نظيف قابل للنقر (كيان Mention بإزاحة UTF-16 صحيحة) وبلا تكديس خفي بعده
 - 💡 رسالة إرشادية مدمجة: ما يبقى ظاهراً للبوتات (يوزر/رابط) حله الوحيد زر الارتباط بأهداف المستخدم - البوت لا يضيف شيئاً من عنده
+
+---
+Task ID: 5.0-multiuser
+Agent: Main Agent
+Task: 🆕 v5.0 - تحويل البوت من فردي إلى متعدد المستخدمين + لوحة أدمن كاملة + عزل تام
+
+Work Log:
+- إنشاء /home/z/my-project/multiuser.py (358 سطر) - نظام تعدد المستخدمين الكامل:
+  * CURRENT_USER contextvar - سياق المستخدم لكل handler
+  * migrate_to_multiuser() - إضافة owner_id لكل الجداول + backfill للأدمن البيئي
+  * register_user() - تسجيل تلقائي عند أول تفاعل (with username/first_name/last_name)
+  * is_banned/is_user_admin/set_banned/set_admin - إدارة الحظر والترقية
+  * list_all_users/get_user_stats/get_user_accounts/get_user_groups - لوحة الأدمن
+  * export_user_groups_txt() - تصدير قروبات أي مستخدم كملف txt
+  * insert_account/insert_group/insert_message - إدراج مرتبط بـ owner_id الحالي
+  * get_messages_for_current/get_accounts_for_current - فلترة per-user
+  * get_all_active_sessions_grouped() - استرجاع كل الجلسات مجمّعة حسب owner
+
+- تعديل /home/z/my-project/bot.py (~8100 سطر):
+  * استيراد multiuser + ربط set_current_user في بداية كل handler (11 نقطة دخول)
+  * is_admin() الآن يدمج ADMIN_IDS البيئي + جدول users (يدعم ترقية/تنزيل ديناميكي)
+  * is_user_allowed() جديد - يسمح لأي مستخدم مسجّل غير محظور باستخدام البوت
+  * /start الآن عام: يسجّل المستخدم تلقائياً، يعرض اسمه، شارة الأدمن لو وُجدت
+  * get_main_menu(user_id=None) - زر "🛡️ لوحة الأدمن" يظهر للأدمن فقط
+  * get_setting/set_setting أصبحت per-user عبر CURRENT_USER contextvar
+  * init_db() يستدعي multiuser.migrate_to_multiuser() - migration آمن
+  * restore_sessions() يستخدم get_all_active_sessions_grouped - لكل المستخدمين
+  * fast_post_to_all_groups/post_to_all_groups - فلترة حسابات per-user
+  * execute_scheduled_post(sched_id, msg_id, post_mode, owner_id) - يضبط السياق
+  * schedule_checker يقرأ كل المنشورات المجدولة + يمرر owner_id للتنفيذ
+  * log_posting - يربط posting_history بـ owner_id الحالي
+  * add_scheduled_post - يربط scheduled_posts بـ owner_id الحالي
+  * get_pending_scheduled_posts - per-user فقط
+  * add_group_to_db - يربط القروب بـ owner_id الحالي
+  * fetch_all_groups_for_account - يربط القروبات بـ owner_id صاحب الحساب
+  * get_account_groups/get_all_groups_count/get_all_messages_count - per-user
+  * DELETE FROM messages/accounts - مفلتر بـ owner_id (لا يمكن حذف ما يخص غيرك)
+  * INSERT INTO accounts (code+password flow) - عبر mu_insert_account
+  * INSERT INTO messages - عبر mu_insert_message
+  * user_clients_owner dict جديد - ربط acc_id بـ owner_id للفلترة
+
+- لوحة الأدمن (زر 🛡️ لوحة الأدمن في القائمة الرئيسية):
+  * admin_panel - لوحة الأدمن الرئيسية (إحصائيات سريعة)
+  * admin_users_list - قائمة كل المستخدمين (50 لكل صفحة)
+  * admin_user_<id> - ملف مستخدم مفصل + إحصائيات + أزرار تحكم
+  * admin_ban_<id> - حظر/رفع حظر (الأدمن البيئي محمي)
+  * admin_admin_<id> - ترقية/تنزيل أدمن
+  * admin_export_<id> - تصدير قروبات المستخدم كملف txt (يُرسل كـ document)
+  * admin_accs_<id> - عرض حسابات المستخدم
+  * admin_export_groups - قائمة اختيار مستخدم لتصدير قروباته
+  * admin_global_stats - إحصائيات شاملة عبر كل المستخدمين
+
+- اختبار smoke test كامل (scripts/test_multiuser.py):
+  * بناء schema قديم + بيانات اختبار
+  * migration آمن (owner_id + backfill + users table)
+  * تسجيل/حظر/ترقية مستخدم
+  * insert_account مرتبط بالسياق الحالي
+  * تصدير قروبات كـ txt
+  * list_all_users + get_user_stats
+  * ✅ كل الاختبارات نجحت
+
+Stage Summary:
+- البوت الآن متاح لأي مستخدم (عام) - أي شخص يمكنه /start ويُسجّل تلقائياً
+- العزل التام: كل مستخدم يرى حساباته/قروباته/رسائله/إعداداته/جدولاته فقط
+- لوحة أدمن كاملة: قائمة مستخدمين + ملف لكل مستخدم + إحصائيات
+- زر استيراد/تصدير قروبات أي مستخدم كملف txt (للأدمن)
+- حظر/رفع حظر + ترقية/تنزيل أدمن (الأدمن البيئي محمي من الحظر)
+- Migration آمن: البيانات القديمة تُسند للأدمن البيئي الأول
+- متوافق خلفياً: is_admin() يدعم ADMIN_IDS البيئي + جدول users
