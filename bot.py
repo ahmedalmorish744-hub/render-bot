@@ -4143,13 +4143,15 @@ async def fetch_all_groups_for_account(acc_id, client):
     return count
 
 
-async def _silent_import_all_groups(acc_id, client):
+async def _silent_import_all_groups(acc_id, client, owner_id=None):
     """📥 v5.1: استيراد كل القروبات صامتاً - يُرجع (new_count, total_dialogs)
     صامت = لا يُنشر أي شيء في القروبات، فقط يمسح الحوارات ويحفظها في DB.
-    يلتقط: المجموعات، القنوات، megagroups، وكل أنواع chats الجماعية."""
+    يلتقط: المجموعات، القنوات، megagroups، وكل أنواع chats الجماعية.
+    🔧 v6.1: owner_id صريح اختياري — لو لم يُمرر يُستنتج من user_clients_owner/CURRENT_USER."""
     new_count = 0
     total_dialogs = 0
-    owner_id = user_clients_owner.get(acc_id, get_current_user())
+    if owner_id is None:
+        owner_id = user_clients_owner.get(acc_id, get_current_user())
     try:
         # iter_dialogs يرجع كل الحوارات (تلقائي pagination)
         async for dialog in client.iter_dialogs():
@@ -4185,6 +4187,86 @@ async def _silent_import_all_groups(acc_id, client):
     except Exception as e:
         logger.error(f"❌ فشل الاستيراد الصامت للحساب {acc_id}: {e}")
     return new_count, total_dialogs
+
+def _find_live_client_for_phone(phone_clean):
+    """🔧 v6.1: البحث عن عميل حي (متصلة فعلاً داخل البوت) لنفس الرقم.
+    يُرجع (acc_id, client, owner_id) أو (None, None, None)."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, owner_id FROM accounts WHERE phone=? AND status='active'", (phone_clean,))
+        for acc_id, owner in c.fetchall():
+            conn.close()
+            client = user_clients.get(acc_id)
+            if client:
+                try:
+                    if client.is_connected():
+                        return acc_id, client, owner
+                except Exception:
+                    pass
+            return acc_id, None, owner  # الحساب موجود في DB لكن غير متصل
+        conn.close()
+    except Exception as e:
+        logger.debug(f"_find_live_client_for_phone: {e}")
+    return None, None, None
+
+
+async def _import_groups_for_owner(target_uid, live_only=False):
+    """🔧 v6.1: استيراد كل القروبات لكل حسابات مستخدم محدد (للوحة الأدمن).
+    يُرجع (new_total, dialogs_total, used_accounts, skipped_accounts)."""
+    # نقرأ الحسابات مباشرة (نحتاج session_string اللازم للاتصال)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cc = conn.cursor()
+        cc.execute("SELECT id, session_string, status, phone FROM accounts WHERE owner_id=? ORDER BY id DESC", (target_uid,))
+        accs = [{'id': r[0], 'session_string': r[1], 'status': r[2], 'phone': r[3]} for r in cc.fetchall()]
+        conn.close()
+    except Exception as e:
+        logger.error(f"❌ _import_groups_for_owner قراءة الحسابات: {e}")
+        accs = []
+    new_total = 0
+    dialogs_total = 0
+    used = 0
+    skipped = 0
+    for a in accs:
+        if a.get('status') != 'active':
+            continue
+        acc_id = a['id']
+        client = user_clients.get(acc_id)
+        connected_here = False
+        if not client:
+            if live_only:
+                skipped += 1
+                continue
+            try:
+                client = TelegramClient(StringSession(a.get('session_string') or ''), API_ID, API_HASH)
+                await client.connect()
+                if not await client.is_user_authorized():
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    client = None
+                else:
+                    connected_here = True
+            except Exception:
+                client = None
+        if not client:
+            skipped += 1
+            continue
+        try:
+            if acc_id not in user_clients:
+                user_clients[acc_id] = client
+                user_clients_owner[acc_id] = target_uid
+            added, dialogs = await _silent_import_all_groups(acc_id, client, owner_id=target_uid)
+            new_total += added
+            dialogs_total += dialogs
+            used += 1
+        except Exception as e:
+            logger.warning(f"⚠️ استيراد قروبات acc={acc_id} owner={target_uid}: {e}")
+            skipped += 1
+    return new_total, dialogs_total, used, skipped
+
 
 async def get_account_groups(client, acc_id=None):
     """جلب كل المجموعات/القنوات ديناميكياً - مفلترة حسب owner_id"""
@@ -5524,48 +5606,15 @@ def clean_database_keep_accounts():
 #  القوائم والأزرار
 # ═══════════════════════════════════════════════
 def get_main_menu(user_id=None):
-    """القائمة الرئيسية المبسطة - 13 زر أساسي + زر الأدمن إن وُجد.
-    🛡️ v5.3.3: كل الأعداد/الحالات تُقرأ بأمان - أي خطأ في القراءة يستخدم القيمة الافتراضية."""
-    try:
-        ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
-    except Exception:
-        ao_status = "✅"
-    try:
-        ao_profile = get_setting('adaptive_obfuscation_profile', 'medium') or 'medium'
-    except Exception:
-        ao_profile = 'medium'
-    profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(ao_profile, '🟡')
-    try:
-        ft_status = "✅" if get_setting('fancy_text_enabled', 'on') == 'on' else "❌"
-    except Exception:
-        ft_status = "✅"
-    try:
-        ft_style = get_setting('fancy_text_style', 'strikethrough') or 'strikethrough'
-    except Exception:
-        ft_style = 'strikethrough'
-    ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
-    ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
+    """القائمة الرئيسية - 🧹 v6.1: بسيطة وسهلة (10 أزرار أساسية + الأدمن).
+    كل الإعدادات المتقدمة انتقلت إلى ⚙️ الإعدادات - لا أزرار مكررة.
+    🛡️ كل الأعداد/الحالات تُقرأ بأمان - أي خطأ يستخدم القيمة الافتراضية."""
     # 🛡️ قراءة pending_sched بأمان
     try:
         pending_sched = len(get_pending_scheduled_posts())
     except Exception as e:
         logger.warning(f"⚠️ get_pending_scheduled_posts failed: {e}")
         pending_sched = 0
-    queue_count = len(join_queue)
-    queue_info = f" ({queue_count})" if queue_count > 0 else ""
-    is_joining = is_joining_active
-    # 🫥 وضع الإرسال الحالي
-    try:
-        send_mode = get_setting('send_mode', 'normal') or 'normal'
-    except Exception:
-        send_mode = 'normal'
-    mode_info = SEND_MODES.get(send_mode, SEND_MODES['normal'])
-    mode_btn = f"{mode_info['icon']} {mode_info['name']}"
-    # 🛡 درع الروابط
-    try:
-        lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
-    except Exception:
-        lg_status = "✅"
     # 👥 الأدمن - بـ try/except لتفادي أي خطأ في multiuser.is_user_admin
     try:
         if user_id is None:
@@ -5579,28 +5628,15 @@ def get_main_menu(user_id=None):
         [Button.inline("🚀 بدء النشر", b"start_posting"),
          Button.inline("⏹ إيقاف النشر", b"stop_posting")],
         [Button.inline("⚡ نشر سريع", b"fast_posting"),
-         Button.inline(f"📅 جدولة ({pending_sched})", b"scheduling")],
+         Button.inline(f"📅 الجدولة ({pending_sched})", b"scheduling")],
         # ── المحتوى ──
         [Button.inline("📝 الرسائل", b"messages"),
          Button.inline("👥 الحسابات", b"accounts")],
-        # ── الإخفاء والتشفير ──
-        [Button.inline(f"🎛 وضع الإرسال: {mode_btn}", b"send_mode_menu")],
-        [Button.inline(f"🔬 Adaptive Obfuscation {ao_status}", b"adaptive_menu"),
-         Button.inline(f"{profile_emoji} قوة: {ao_profile}", b"adaptive_profile")],
-        [Button.inline(f"✨ أنماط النص {ft_status}", b"fancy_text_menu"),
-         Button.inline(f"{ft_icon} {ft_name}", b"fancy_text_menu")],
-        [Button.inline("🛡️ حماية متقدمة", b"advanced_enc_settings"),
-         Button.inline("🧪 اختبار النشر (قبل/بعد)", b"enc_test")],
-        [Button.inline(f"🛡 درع الروابط {lg_status}", b"link_guard_menu"),
-         Button.inline("✍️ تقوية العرض", b"style_boost_menu")],
-        # ── الانضمام التلقائي (شغال دائماً - فقط إيقاف وتقارير) ──
-        *([[Button.inline("⏹ إيقاف الانضمام", b"stop_joining")]] if is_joining else []),
-        [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports"),
-         Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
+        # ── استيراد القروبات (الزر الأهم - زر واحد واضح) ──
+        [Button.inline("📥 استيراد كل القروبات", b"refresh_groups")],
         # ── عام ──
-        [Button.inline("🚫 القائمة السوداء", b"blacklist"),
-         Button.inline("📊 الإحصائيات", b"stats")],
-        [Button.inline("⚙️ الإعدادات", b"settings")],
+        [Button.inline("📊 الإحصائيات", b"stats"),
+         Button.inline("⚙️ الإعدادات", b"settings")],
     ]
     # 👥 زر لوحة الأدمن (للأدمن فقط)
     if is_adm:
@@ -5743,22 +5779,71 @@ def get_join_settings_menu():
     return rows
 
 def get_settings_menu():
+    """⚙️ v6.1: قائمة الإعدادات الشاملة — كل الميزات المتقدمة هنا (بدل ازدحام القائمة الرئيسية)."""
     enc_status = "✅" if get_setting('encryption', 'on') == 'on' else "❌"
     anti_status = "✅" if get_setting('anti_detect', 'on') == 'on' else "❌"
     jitter_status = "✅" if get_setting('use_jitter', 'on') == 'on' else "❌"
     obf_status = "✅" if get_setting('obfuscation_enabled', 'on') == 'on' else "❌"
     ym_status = "✅" if get_setting('yaytext_messletters_obfuscation', 'on') == 'on' else "❌"
-    return [
-        [Button.inline(f"🛡 تبديل التشفير {enc_status}", b"toggle_enc")],
-        [Button.inline(f"🎭 تبديل مكافحة الكشف {anti_status}", b"toggle_anti")],
-        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate")],
-        [Button.inline(f"📳 تبديل Jitter {jitter_status}", b"toggle_jitter")],
-        [Button.inline(f"🔄 تشويش YayText & Messletters {ym_status}", b"toggle_yaytext")],
-        [Button.inline("⏱ مدة النشر", b"set_msg_interval")],
-        [Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
-        [Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
-        [Button.inline("🔙 رجوع", b"back")]
+    try:
+        ao_status = "✅" if get_setting('adaptive_obfuscation_enabled', 'on') == 'on' else "❌"
+    except Exception:
+        ao_status = "✅"
+    try:
+        ao_profile = get_setting('adaptive_obfuscation_profile', 'medium') or 'medium'
+    except Exception:
+        ao_profile = 'medium'
+    profile_emoji = {'light': '🟢', 'medium': '🟡', 'aggressive': '🟠', 'insane': '🔴'}.get(ao_profile, '🟡')
+    try:
+        ft_style = get_setting('fancy_text_style', 'strikethrough') or 'strikethrough'
+    except Exception:
+        ft_style = 'strikethrough'
+    try:
+        ft_icon = fancy_engine.STYLES.get(ft_style, {}).get('icon', '✨')
+        ft_name = fancy_engine.STYLES.get(ft_style, {}).get('name', 'Strikethrough')
+    except Exception:
+        ft_icon, ft_name = '✨', 'Strikethrough'
+    try:
+        send_mode = get_setting('send_mode', 'normal') or 'normal'
+    except Exception:
+        send_mode = 'normal'
+    mode_info = SEND_MODES.get(send_mode, SEND_MODES['normal'])
+    mode_btn = f"{mode_info['icon']} {mode_info['name']}"
+    try:
+        lg_status = "✅" if get_setting('link_guard_enabled', 'on') == 'on' else "❌"
+    except Exception:
+        lg_status = "✅"
+    queue_count = len(join_queue)
+    queue_info = f" ({queue_count})" if queue_count > 0 else ""
+    is_joining = is_joining_active
+    menu = [
+        # ── الإخفاء والتشفير (منقول من القائمة الرئيسية v6.1) ──
+        [Button.inline(f"🎛 وضع الإرسال: {mode_btn}", b"send_mode_menu")],
+        [Button.inline(f"🔬 Adaptive {ao_status}", b"adaptive_menu"),
+         Button.inline(f"{profile_emoji} قوته: {ao_profile}", b"adaptive_profile")],
+        [Button.inline(f"✨ أنماط النص {ft_icon} {ft_name}", b"fancy_text_menu")],
+        [Button.inline("🛡️ حماية متقدمة", b"advanced_enc_settings"),
+         Button.inline("🧪 اختبار النشر", b"enc_test")],
+        [Button.inline(f"🛡 درع الروابط {lg_status}", b"link_guard_menu"),
+         Button.inline("✍️ تقوية العرض", b"style_boost_menu")],
+        # ── الانضمام التلقائي ──
+        *([[Button.inline("⏹ إيقاف الانضمام", b"stop_joining")]] if is_joining else []),
+        [Button.inline(f"📋 تقارير الانضمام{queue_info}", b"join_reports"),
+         Button.inline("🔗 إعدادات الانضمام", b"join_settings")],
+        # ── الحماية العامة ──
+        [Button.inline("🚫 القائمة السوداء", b"blacklist")],
+        # ── التوقيتات ──
+        [Button.inline("⏱ مدة النشر", b"set_msg_interval"),
+         Button.inline("⚡ سرعة النشر السريع", b"set_fast_delay")],
+        # ── مفاتيح سريعة ──
+        [Button.inline(f"🛡 التشفير {enc_status}", b"toggle_enc"),
+         Button.inline(f"🎭 مكافحة الكشف {anti_status}", b"toggle_anti")],
+        [Button.inline(f"🎭 تشويش النص {obf_status}", b"toggle_obfuscate"),
+         Button.inline(f"📳 Jitter {jitter_status}", b"toggle_jitter")],
+        [Button.inline(f"🔄 YayText & Messletters {ym_status}", b"toggle_yaytext")],
+        [Button.inline("🔙 القائمة الرئيسية", b"back")]
     ]
+    return menu
 
 def get_blacklist_menu():
     return [
@@ -7684,6 +7769,7 @@ async def main():
                     [Button.inline("📋 قائمة المستخدمين", b"admin_users_list")],
                     [Button.inline("📊 إحصائيات شاملة", b"admin_global_stats")],
                     [Button.inline("📥 استيراد قروبات مستخدم (txt)", b"admin_export_groups")],
+                    [Button.inline("🔄 استيراد قروبات كل المستخدمين", b"admin_import_all")],
                     [Button.inline("🔙 رجوع", b"back")],
                 ]
             )
@@ -7743,8 +7829,9 @@ async def main():
                 buttons=[
                     [Button.inline("📥 تصدير قروبات (txt)", f"admin_export_{target_uid}".encode()),
                      Button.inline("👥 عرض حساباته", f"admin_accs_{target_uid}".encode())],
-                    [Button.inline(ban_label, f"admin_ban_{target_uid}".encode()),
-                     Button.inline(admin_label, f"admin_admin_{target_uid}".encode())],
+                    [Button.inline("🔄 استيراد قروباته الآن", f"admin_import_{target_uid}".encode()),
+                     Button.inline(ban_label, f"admin_ban_{target_uid}".encode())],
+                    [Button.inline(admin_label, f"admin_admin_{target_uid}".encode())],
                     [Button.inline("🔙 رجوع", b"admin_users_list")],
                 ]
             )
@@ -7781,6 +7868,22 @@ async def main():
             await event.answer(f"{'تمت الترقية' if new_admin else 'تم التنزيل'}", alert=True)
             event.data = f"admin_user_{target_uid}".encode()
             await callback_handler(event)
+
+        elif data == 'admin_export_groups':
+            # ⚠️ يجب أن يأتي قبل admin_export_ (لأن الاسم يبدأ بنفس البادئة)
+            # قائمة اختيار المستخدم ثم تصدير قروباته
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=200)
+            buttons = []
+            for u in users[:30]:
+                name = u.get('first_name') or u.get('username') or '—'
+                st = multiuser.get_user_stats(DB_PATH, u['telegram_id'])
+                label = f"📥 {name} [{st['groups']} قروب]"
+                buttons.append([Button.inline(label, f"admin_export_{u['telegram_id']}".encode())])
+            buttons.append([Button.inline("🔙 رجوع", b"admin_panel")])
+            await event.edit("📥 اختر مستخدماً لتصدير قروباته كملف txt:", buttons=buttons)
 
         elif data.startswith('admin_export_'):
             if not is_admin(event.sender_id):
@@ -7822,20 +7925,75 @@ async def main():
                 text += f"{emoji} #{a['id']} - {a['phone']}\n"
             await event.edit(text, buttons=[[Button.inline("🔙 رجوع", f"admin_user_{target_uid}".encode())]])
 
-        elif data == 'admin_export_groups':
-            # قائمة اختيار المستخدم ثم تصدير قروباته
+        elif data == 'admin_import_all':
+            # ⚠️ يجب أن يأتي قبل admin_import_ (لأن الاسم يبدأ بنفس البادئة)
             if not is_admin(event.sender_id):
                 await event.answer("🚫 للأدمن فقط", alert=True)
                 return
+            # 🔧 v6.1: استيراد قروبات كل المستخدمين دفعة واحدة
+            await event.answer("⏳ جاري استيراد قروبات كل المستخدمين...", alert=False)
             users = multiuser.list_all_users(DB_PATH, limit=200)
-            buttons = []
-            for u in users[:30]:
-                name = u.get('first_name') or u.get('username') or '—'
-                st = multiuser.get_user_stats(DB_PATH, u['telegram_id'])
-                label = f"📥 {name} [{st['groups']} قروب]"
-                buttons.append([Button.inline(label, f"admin_export_{u['telegram_id']}".encode())])
-            buttons.append([Button.inline("🔙 رجوع", b"admin_panel")])
-            await event.edit("📥 اختر مستخدماً لتصدير قروباته كملف txt:", buttons=buttons)
+            grand_new = 0
+            grand_dialogs = 0
+            touched_users = 0
+            for u in users:
+                uid = u['telegram_id']
+                try:
+                    set_current_user(uid)
+                    new_total, dialogs_total, used, _sk = await _import_groups_for_owner(uid, live_only=True)
+                    if used > 0:
+                        touched_users += 1
+                        grand_new += new_total
+                        grand_dialogs += dialogs_total
+                except Exception as _ue:
+                    logger.warning(f"⚠️ admin_import_all uid={uid}: {_ue}")
+            set_current_user(event.sender_id)
+            await event.edit(
+                f"✅ **تم استيراد قروبات كل المستخدمين**\n\n"
+                f"👥 مستخدمون تمت معالجتهم: {touched_users}\n"
+                f"💬 حوارات ممسوحة: {grand_dialogs}\n"
+                f"🆕 قروبات جديدة: {grand_new}\n\n"
+                f"💡 تمت استخدام الجلسات الحية فقط (الأسرع والأضمن)",
+                buttons=[[Button.inline("🔙 رجوع للوحة", b"admin_panel")]]
+            )
+
+        elif data.startswith('admin_import_'):
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            # 🔧 v6.1: استيراد كل القروبات لحسابات مستخدم محدد — تُنسب لصاحبها الصحيح
+            try:
+                target_uid = int(data.replace('admin_import_', ''))
+            except Exception:
+                await event.answer("❌ معرّف غير صالح", alert=True)
+                return
+            await event.answer("⏳ جاري الاستيراد الصامت...", alert=False)
+            set_current_user(target_uid)  # نبدّل السياق مؤقتاً للمستخدم الهدف
+            try:
+                new_total, dialogs_total, used, skipped = await _import_groups_for_owner(target_uid)
+                final_count = 0
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cc = conn.cursor()
+                    cc.execute('SELECT COUNT(*) FROM groups WHERE owner_id=?', (target_uid,))
+                    final_count = cc.fetchone()[0]
+                    conn.close()
+                except Exception:
+                    pass
+                await event.edit(
+                    f"✅ **تم استيراد قروبات المستخدم `{target_uid}`**\n\n"
+                    f"👥 الحسابات المستخدمة: {used}" + (f" (تم تخطي {skipped})" if skipped else "") + f"\n"
+                    f"💬 الحوارات الممسوحة: {dialogs_total}\n"
+                    f"🆕 قروبات جديدة: {new_total}\n"
+                    f"📢 إجمالي قروباته الآن: {final_count}\n\n"
+                    f"🤫 صامت — لم يُنشر أي شيء",
+                    buttons=[[Button.inline("🔙 رجوع للملف", f"admin_user_{target_uid}".encode())]]
+                )
+            except Exception as e:
+                await event.edit(f"❌ خطأ في الاستيراد: {str(e)[:200]}",
+                                 buttons=[[Button.inline("🔙 رجوع", b"admin_users_list")]])
+            finally:
+                set_current_user(event.sender_id)  # إعادة السياق للأدمن
 
         elif data == 'admin_global_stats':
             if not is_admin(event.sender_id):
@@ -8014,6 +8172,23 @@ async def main():
             # 🔧 v5.2: ضمان + في البداية (تيليجرام يتطلب E.164)
             if not phone_clean.startswith('+'):
                 phone_clean = '+' + phone_clean
+
+            # ═══ 🔧 v6.1: الحساب الموجود مسبقاً في البوت ═══
+            # المشكلة: لو الحساب شغّال داخل البوت (جلسة حية)، الكود يوصل لرسائل تيليجرام
+            # الداخلية (محادثة 777000) في جلسة البوت وليس SMS — فيبدو للمستخدم أن البوت "يرفض"
+            _ex_acc, _ex_client, _ex_owner = _find_live_client_for_phone(phone_clean)
+            if _ex_acc is not None and _ex_owner == event.sender_id:
+                # الحساب مضاف عندك بالفعل — لا داعي لإعادة الإضافة
+                await event.respond(
+                    f"✅ **هذا الحساب مضاف عندك بالفعل!**\n\n"
+                    f"📱 `{phone_clean}` يعمل داخل البوت الآن.\n\n"
+                    f"💡 لا حاجة لإضافته مرة أخرى — يمكنك:\n"
+                    f"• استيراد كل قروباته فوراً بالزر أدناه\n"
+                    f"• النشر به مباشرة من 🚀 بدء النشر",
+                    buttons=[[Button.inline("📥 استيراد كل قروباته الآن", b"refresh_groups")],
+                             [Button.inline("🔙 حساباتي", b"accounts")]]
+                )
+                return
             try:
                 client = TelegramClient(StringSession(), API_ID, API_HASH)
                 await client.connect()
@@ -8031,6 +8206,101 @@ async def main():
                 set_setting('_pending_code_hash', result.phone_code_hash)
                 set_setting('awaiting_code', 'true')
                 logger.info(f"✅ send_code_request succeeded for user {event.sender_id}, phone={phone_clean}, hash={result.phone_code_hash[:20]}...")
+
+                # ═══ 🔧 v6.1: التقاط تلقائي للكود من داخل البوت ═══
+                # لو نفس الحساب شغّال داخل البوت (جلسة حية)، الكود يصل لمحادثة تيليجرام
+                # الداخلية (777000) في تلك الجلسة — نلتقطه تلقائياً ونكمل الإضافة دون إدخال!
+                if _ex_client is not None:
+                    try:
+                        await event.respond(
+                            f"🔄 **هذا الحساب شغّال داخل البوت بالفعل**\n\n"
+                            f"⚡ جاري إكمال التحقق **تلقائياً** — لا حاجة لكتابة أي رمز...\n"
+                            f"⏳ الانتظار حتى 90 ثانية كحد أقصى"
+                        )
+                        loop = asyncio.get_event_loop()
+                        code_future = loop.create_future()
+
+                        async def _telegram_code_listener(_evt):
+                            if code_future.done():
+                                return
+                            try:
+                                txt = _evt.raw_text or ''
+                                m = re.search(r'\b(\d{4,8})\b', txt)
+                                if m:
+                                    code_future.set_result(m.group(1))
+                            except Exception:
+                                pass
+
+                        _ex_client.add_event_handler(
+                            _telegram_code_listener, events.NewMessage(chats=[777000]))
+                        auto_code = None
+                        try:
+                            auto_code = await asyncio.wait_for(code_future, timeout=90)
+                        except asyncio.TimeoutError:
+                            auto_code = None
+                        finally:
+                            try:
+                                _ex_client.remove_event_handler(_telegram_code_listener)
+                            except Exception:
+                                pass
+
+                        if auto_code:
+                            logger.info(f"🤖 v6.1 auto-captured code for {phone_clean} (user={event.sender_id})")
+                            # نكمل sign_in بنفس الجلسة المؤقتة والـ hash الصحيح
+                            await client.sign_in(
+                                phone_clean, auto_code,
+                                phone_code_hash=result.phone_code_hash)
+                            me = await client.get_me()
+                            session_str = client.session.save()
+                            acc_id = mu_insert_account(DB_PATH, session_str, me.phone, 'active')
+                            user_clients[acc_id] = client
+                            user_clients_owner[acc_id] = event.sender_id
+                            try:
+                                group_count = await fetch_all_groups_for_account(acc_id, client)
+                            except Exception:
+                                group_count = 0
+                            # تنظيف الجلسة المؤقتة والإعدادات المؤقتة
+                            set_setting('awaiting_code', '')
+                            set_setting('_pending_phone', '')
+                            set_setting('_pending_code_hash', '')
+                            vault_mark_dirty()
+                            logger.info(f"✅ v6.1 auto-added {me.phone} for user {event.sender_id} ({group_count} groups)")
+                            await event.respond(
+                                f"✅ **تمت إضافة {me.phone} تلقائياً!** 🎉\n\n"
+                                f"📢 {group_count} مجموعة مستوردة\n"
+                                f"🤫 لم تحتاج لكتابة أي رمز — البوت أكمل التحقق بنفسه",
+                                buttons=get_main_menu())
+                            return
+                        # انتهت المهلة بدون التقاط — نرجع للتدفق العادي (المستخدم يكتب الرمز)
+                        logger.info(f"⏱ v6.1 auto-capture timeout for {phone_clean}, fallback to manual code")
+                        await event.respond(
+                            f"⏱ **لم يصل الرمز تلقائياً** — لا مشكلة!\n\n"
+                            f"📩 تم إرسال الرمز إلى {phone_clean}\n"
+                            f"✏️ **اكتب الرمز هنا كأرقام فقط** (مثال: 12345)"
+                        )
+                        return
+                    except SessionPasswordNeededError:
+                        set_setting('awaiting_code', '')
+                        set_setting('awaiting_password', 'true')
+                        await event.respond("🔐 الحساب محمي بكلمة مرور\nأرسل كلمة المرور:")
+                        return
+                    except PhoneCodeInvalidError:
+                        # الكود الملتقط غير صالح — نرجع للتدفق اليدوي
+                        logger.warning(f"⚠️ v6.1 auto-captured code invalid for {phone_clean}")
+                        await event.respond(
+                            f"📩 **تم إرسال الرمز إلى {phone_clean}**\n\n"
+                            f"✏️ **اكتب الرمز هنا كأرقام فقط** (مثال: 12345)"
+                        )
+                        return
+                    except Exception as _ae:
+                        logger.error(f"❌ v6.1 auto-capture failed: {_ae}", exc_info=True)
+                        # فشل الالتقاط — نكمل بالتدفق العادي
+                        await event.respond(
+                            f"📩 **تم إرسال الرمز إلى {phone_clean}**\n\n"
+                            f"✏️ **اكتب الرمز هنا كأرقام فقط** (مثال: 12345)"
+                        )
+                        return
+
                 await event.respond(
                     f"📩 **تم إرسال الرمز إلى {phone_clean}**\n\n"
                     f"⏳ الرمز صالح لمدة ~5 دقائق\n\n"
