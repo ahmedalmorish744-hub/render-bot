@@ -963,3 +963,59 @@ Stage Summary:
 - ✅ v5.4 مستقر كما هو — لا كسر
 - ✅ أوامر جديدة: /super (لوحة شاملة) + /warmup + /health
 - ✅ 53 اختبار شامل محلي — كلها ناجحة
+
+---
+Task ID: 7.1-msg-add-bulletproof
+Agent: Main Agent
+Task: v7.1 — إصلاح مشكلة "البوت ما يقبل اضافه رساله"
+
+Work Log:
+- 🚨 بلاغ المستخدم: "البوت ما يقبل اضافه رساله" — لا تُضاف الرسائل
+
+- 🩺 تشخيص متعدد الأسباب:
+  1. زر "➕ إضافة" في callback يعتمد على `await event.edit`:
+     - لو فشل (مثلاً: "Message can't be edited" لرسائل قديمة)
+       → set_setting('awaiting_msg', 'true') لا يُستدعى
+       → المستخدم يرسل نص لكن البوت لا يضيفه (يقع في auto-join أو يُسكّت)
+  2. bug خفي في get_setting: `conn.close()` قبل `c = conn.cursor()` في fallback
+     - كان يسبب فشل صامت للقراءة لو الإعداد غير موجود للمستخدم
+     - لكن يقع على fallback (owner_id=0)، ليس القراءة المباشرة
+     - الإصلاح: ترتيب إغلاق الاتصال بشكل صحيح
+
+- 🛡️ الإصلاحات (3 طبقات حماية):
+  1. add_msg callback: set_setting يحدث أولاً (قبل event.edit)
+     - event.edit في try/except + fallback لـ event.respond
+     - حتى لو event.edit فشل، awaiting_msg يُضبط دائماً
+  2. أوامر بديلة جديدة (لو الزر فشل تماماً):
+     - `/add` — يدخل وضع إضافة رسالة
+     - `/addmsg` — alias
+     - `/new` — alias
+  3. callback handler لزر الإلغاء: `cancel_add_msg_cmd`
+     - يُلغي وضع إضافة الرسالة من /add
+  4. إصلاح get_setting: ترتيب إغلاق الاتصال + لا conn.close() قبل cursor جديد
+  5. logging محسّن: logger.info عند دخول awaiting_msg handler (يساعد تشخيص المستقبل)
+
+- 🧪 اختبار: scripts/test_v71_msg_fix.py — 14 فحص، كلها ناجحة
+  * get_setting returns default for nonexistent key
+  * get_setting returns the set value
+  * get_setting fallback to owner_id=0 works (the bug we fixed)
+  * get_setting scoped (no fallback when row exists)
+  * get_setting default for nonexistent (no row for any owner)
+  * awaiting_msg round-trip with explicit owner_id
+  * awaiting_msg cleared properly
+  * user isolation: other users see their own value
+  * command /add registered
+  * command /addmsg registered
+  * command /new registered
+  * cancel_add_msg_cmd callback present
+  * add_msg: set_setting before event.edit (bulletproof)
+  * get_setting main path: no cursor-after-close bug
+
+- 🧪 اختبار v7.0 السابق: 34 فحص — لا تزال كلها ناجحة (لا كسر)
+
+Stage Summary:
+- ✅ زر "➕ إضافة" الآن bulletproof — حتى لو فشل event.edit، awaiting_msg يُضبط
+- ✅ أوامر بديلة: /add, /addmsg, /new — المستخدم يقدر يدخل وضع الإضافة دون الاعتماد على الزر
+- ✅ get_setting bug أصلي تم إصلاحه (cursor-after-close)
+- ✅ v5.4/v7.0 السابقة محفوظة بالكامل
+- ✅ 48 اختبار شامل محلي — كلها ناجحة

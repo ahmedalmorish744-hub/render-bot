@@ -477,37 +477,54 @@ def init_db():
 
 def get_setting(key, default=None, owner_id=None):
     """قراءة إعداد - مرتبط بالمستخدم الحالي عبر CURRENT_USER contextvar.
-    إذا مرر owner_id صراحة يقرأ من مستخدم آخر (للأدمن)."""
+    إذا مرر owner_id صراحة يقرأ من مستخدم آخر (للأدمن).
+    🛡 v7.1: أصلح bug conn.close() قبل fallback — كان يسبب فشل صامت للقراءة
+    لو الإعداد غير موجود للمستخدم الحالي وكان فيه إعداد عام (owner_id=0)."""
     oid = owner_id if owner_id is not None else get_current_user()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    # 🔧 v5.2: تحديد مستخدم صراحةً. لو owner_id=0 (سياق افتراضي) نقرأ الإعداد العام (الأدمن)
-    # لو الجدول يحوي owner_id نقرأ دائماً scoped — لا fallback عام لتسريب البيانات
     try:
-        c.execute('PRAGMA table_info(settings)')
-        cols = [r[1] for r in c.fetchall()]
-        if 'owner_id' in cols:
-            c.execute('SELECT value FROM settings WHERE key=? AND owner_id=?', (key, oid))
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        # 🔧 v5.2: تحديد مستخدم صراحةً. لو owner_id=0 (سياق افتراضي) نقرأ الإعداد العام (الأدمن)
+        # لو الجدول يحوي owner_id نقرأ دائماً scoped — لا fallback عام لتسريب البيانات
+        try:
+            c.execute('PRAGMA table_info(settings)')
+            cols = [r[1] for r in c.fetchall()]
+            if 'owner_id' in cols:
+                c.execute('SELECT value FROM settings WHERE key=? AND owner_id=?', (key, oid))
+                row = c.fetchone()
+                if row:
+                    conn.close()
+                    return row[0]
+                # 🔧 v5.2: لو لم نجد إعداداً للمستخدم الحالي، نقرأ من owner_id=0 (إعداد عام)
+                # 🛡 v7.1: لا نغلق conn قبل الفallback — كنا نستخدم cursor بعد الإغلاق
+                if oid != 0:
+                    c.execute('SELECT value FROM settings WHERE key=? AND owner_id=0', (key,))
+                    row = c.fetchone()
+                    conn.close()
+                    if row:
+                        return row[0]
+                    return default
+                conn.close()
+                return default
+        except Exception as _inner_e:
+            logger.debug(f"get_setting inner error for key={key}: {_inner_e}")
+            try:
+                conn.close()
+            except Exception:
+                pass
+        # المسار القديم (قبل migration)
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute('SELECT value FROM settings WHERE key=?', (key,))
             row = c.fetchone()
             conn.close()
-            if row:
-                return row[0]
-            # 🔧 v5.2: لو لم نجد إعداداً للمستخدم الحالي، نقرأ من owner_id=0 (إعداد عام)
-            if oid != 0:
-                c = conn.cursor()
-                c.execute('SELECT value FROM settings WHERE key=? AND owner_id=0', (key,))
-                row = c.fetchone()
-                conn.close()
-                if row:
-                    return row[0]
+            return row[0] if row else default
+        except Exception:
             return default
-    except Exception:
-        pass
-    # المسار القديم (قبل migration)
-    c.execute('SELECT value FROM settings WHERE key=?', (key,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else default
+    except Exception as _outer_e:
+        logger.debug(f"get_setting outer error for key={key}: {_outer_e}")
+        return default
 
 def set_setting(key, value, owner_id=None):
     """كتابة إعداد - مرتبط بالمستخدم الحالي."""
@@ -6220,6 +6237,41 @@ async def main():
             await event.respond(f"❌ خطأ في التشخيص: {str(e)[:200]}")
 
     # ═══════════════════════════════════════════
+    #  🆕 v7.1 — أوامر بديلة لإضافة رسالة (bulletproof)
+    #  لو الزر "➕ إضافة" فشل (event.edit throws) المستخدم يقدر يستخدم:
+    #  /add  أو  /addmsg  أو  /new
+    # ═══════════════════════════════════════════
+    @bot.on(events.NewMessage(pattern='/add'))
+    async def add_msg_command_handler(event):
+        """📝 v7.1 — أمر بديل لإضافة رسالة (بدون الاعتماد على الزر)"""
+        set_current_user(event.sender_id)
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            return
+        set_setting('awaiting_msg', 'true')
+        try:
+            await event.respond(
+                "➕ **وضع إضافة الرسالة مُفعّل الآن**\n\n"
+                "📥 أرسل النص أو الوسائط (صورة/فيديو/ملف/جهة اتصال) مع تعليق\n"
+                "❌ للإلغاء: /cancel",
+                buttons=[[Button.inline("🔙 إلغاء", b"cancel_add_msg_cmd")]]
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ /add respond failed: {e}")
+        return
+
+    @bot.on(events.NewMessage(pattern='/addmsg'))
+    async def addmsg_command_handler(event):
+        """📝 v7.1 — alias لأمر /add"""
+        event._text = '/add'
+        await add_msg_command_handler(event)
+
+    @bot.on(events.NewMessage(pattern='/new'))
+    async def new_msg_command_handler(event):
+        """📝 v7.1 — alias لأمر /add"""
+        event._text = '/add'
+        await add_msg_command_handler(event)
+
+    # ═══════════════════════════════════════════
     #  🔥 v7.0 SUPER — أوامر المحرك السوبر
     #  /super — لوحة تحكم شاملة
     #  /warmup — تسخين حسابات المستخدم الحالي
@@ -6727,8 +6779,16 @@ async def main():
                 [Button.inline("🔙 رجوع", b"back")],
             ])
         elif data == 'add_msg':
-            await event.edit("➕ أرسل النص أو الوسائط (صورة/فيديو/ملف/جهة اتصال) مع تعليق:\n/cancel للإلغاء")
+            # 🛡 v7.1: bulletproof — set_setting دائماً يحدث حتى لو event.edit فشل
             set_setting('awaiting_msg', 'true')
+            try:
+                await event.edit("➕ أرسل النص أو الوسائط (صورة/فيديو/ملف/جهة اتصال) مع تعليق:\n/cancel للإلغاء")
+            except Exception as _edit_e:
+                logger.warning(f"⚠️ add_msg event.edit failed (awaiting_msg set anyway): {_edit_e}")
+                try:
+                    await event.respond("➕ أرسل النص أو الوسائط (صورة/فيديو/ملف/جهة اتصال) مع تعليق:\n/cancel للإلغاء")
+                except Exception:
+                    pass
         elif data == 'list_msg':
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
@@ -7855,6 +7915,14 @@ async def main():
         # ═══════════════════════════════════════════════
         #  🔥 v7.0 SUPER — معالجات أزرار المحرك السوبر
         # ═══════════════════════════════════════════════
+        elif data == 'cancel_add_msg_cmd':
+            # 🛡 v7.1: إلغاء وضع إضافة الرسالة المُفعل عبر /add
+            set_current_user(event.sender_id)
+            set_setting('awaiting_msg', '')
+            await event.answer("تم الإلغاء", alert=False)
+            await event.edit("❌ تم الإلغاء", buttons=[[Button.inline("🔙 رجوع", b"back")]])
+            return
+
         elif data == 'super_panel':
             # لوحة سوبر — تعيد عرضها
             set_current_user(event.sender_id)
@@ -9070,6 +9138,7 @@ async def main():
         # إضافة رسالة
         if get_setting('awaiting_msg') == 'true':
             set_setting('awaiting_msg', '')
+            logger.info(f"📝 awaiting_msg triggered: user={event.sender_id}, msg_type={event.media_type if hasattr(event, 'media_type') else 'text'}")
             msg_type = 'text'
             media_path = None
             content = event.raw_text or ""
