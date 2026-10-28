@@ -67,6 +67,16 @@ from multiuser import (
     get_all_active_sessions_grouped,
 )
 
+# 🔥 v7.0 SUPER: محرك سوبر مستوحى من مستودعات متقدمة
+# (VoxHash Multi-Account Sender) - warmup + health + pace + spintax batch
+try:
+    import super_engine as _super
+    _super_engine_inst = None  # يُهيّأ في init_db بعد DB_PATH
+except Exception as _se_err:
+    logger.warning(f"⚠️ super_engine import failed (non-fatal): {_se_err}")
+    _super = None
+    _super_engine_inst = None
+
 # ═══════════════════════════════════════════════
 #  الإعدادات الأساسية
 # ═══════════════════════════════════════════════
@@ -445,6 +455,24 @@ def init_db():
         verify_conn.close()
     except Exception as e:
         logger.error(f"⚠️ خطأ في migration تعدد المستخدمين: {e}", exc_info=True)
+
+    # 🔥 v7.0 SUPER: تهيئة محرك سوبر بعد قاعدة البيانات + migration
+    global _super_engine_inst
+    try:
+        if _super is not None:
+            _super.migrate_super_engine_schema(DB_PATH)
+            _super_engine_inst = _super.init_super_engine(
+                DB_PATH, get_setting, set_setting,
+                get_accounts_fn=lambda: get_all_accounts(),
+                get_clients_fn=lambda: user_clients,
+            )
+            logger.info("🔥 v7.0 SUPER engine جاهز: warmup + health + pace + spintax-batch + auto-pause")
+        else:
+            logger.warning("⚠️ v7.0 SUPER engine غير متاح (فشل الاستيراد)")
+    except Exception as e:
+        logger.error(f"⚠️ v7.0 SUPER engine init failed (non-fatal): {e}", exc_info=True)
+        _super_engine_inst = None
+
     logger.info("✅ قاعدة البيانات جاهزة")
 
 def get_setting(key, default=None, owner_id=None):
@@ -6191,6 +6219,179 @@ async def main():
         except Exception as e:
             await event.respond(f"❌ خطأ في التشخيص: {str(e)[:200]}")
 
+    # ═══════════════════════════════════════════
+    #  🔥 v7.0 SUPER — أوامر المحرك السوبر
+    #  /super — لوحة تحكم شاملة
+    #  /warmup — تسخين حسابات المستخدم الحالي
+    #  /health — لوحة صحة كل الحسابات
+    # ═══════════════════════════════════════════
+    @bot.on(events.NewMessage(pattern='/super'))
+    async def super_handler(event):
+        """🔥 v7.0 SUPER — لوحة تحكم المحرك السوبر"""
+        set_current_user(event.sender_id)
+        try:
+            _s = await event.get_sender()
+            multiuser.register_user(DB_PATH, event.sender_id,
+                                    getattr(_s, 'username', '') or '',
+                                    getattr(_s, 'first_name', '') or '',
+                                    getattr(_s, 'last_name', '') or '')
+        except Exception:
+            pass
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك.")
+            return
+        if _super_engine_inst is None:
+            await event.respond(
+                "⚠️ **المحرك السوبر غير مُفعّل**\n\n"
+                "ربما فشل في التهيئة عند الإقلاع. راجع السجلات.",
+                buttons=[[Button.inline("🔙 رجوع", b"back")]]
+            )
+            return
+        # الحالة العامة
+        warmup_on = get_setting('warmup_enabled', 'on') == 'on'
+        pace_on = get_setting('pace_scheduler_enabled', 'off') == 'on'
+        spintax_batch_on = get_setting('spintax_batch_enabled', 'on') == 'on'
+        auto_pause_on = get_setting('auto_pause_enabled', 'on') == 'on'
+        # الإحصائيات
+        my_accs = get_accounts_for_current(DB_PATH)
+        warmup_complete = sum(1 for a in my_accs if _super_engine_inst['warmup'].is_complete(a))
+        warmup_pending = len(my_accs) - warmup_complete
+        # إعدادات الـ Pace
+        mpm = get_setting('pace_messages_per_minute', '8')
+        mph = get_setting('pace_messages_per_hour', '40')
+        max_conc = get_setting('pace_max_concurrent', '1')
+        jitter = get_setting('pace_jitter_seconds', '3')
+        # إعدادات التسخين
+        warmup_target = get_setting('warmup_target_messages', '5')
+        warmup_interval = get_setting('warmup_interval_minutes', '30')
+        # إعدادات الإيقاف التلقائي
+        ap_threshold = get_setting('auto_pause_error_threshold', '50')
+        ap_min = get_setting('auto_pause_min_attempts', '10')
+        ap_cooldown = get_setting('auto_pause_cooldown_seconds', '300')
+        await event.respond(
+            f"🔥 **لوحة المحرك السوبر v7.0**\n\n"
+            f"👥 **حساباتك:** {len(my_accs)} (نشط: {sum(1 for a in my_accs if a in user_clients)})\n"
+            f"🌡 **التسخين:** مكتمل {warmup_complete} / {len(my_accs)} (متبقي: {warmup_pending})\n\n"
+            f"⚙️ **الحالة:**\n"
+            f"• 🌡 تسخين الحسابات: {'✅' if warmup_on else '❌'} (الهدف: {warmup_target} رسائل، فاصل: {warmup_interval} دقيقة)\n"
+            f"• ⏱ جدولة الإرسال (Pace): {'✅' if pace_on else '❌'} ({mpm}/دقيقة، {mph}/ساعة، تزامن: {max_conc})\n"
+            f"• 🎲 Spintax Batch: {'✅' if spintax_batch_on else '❌'}\n"
+            f"• 🛑 الإيقاف التلقائي: {'✅' if auto_pause_on else '❌'} (حد: {ap_threshold}٪ بعد {ap_min} محاولة)\n\n"
+            f"💡 **أوامر سريعة:**\n"
+            f"• `/warmup` — تسخين حساباتك الآن\n"
+            f"• `/health` — لوحة صحة حساباتك",
+            buttons=[
+                [Button.inline("🌡 تسخين حساباتي الآن", b"super_warmup"),
+                 Button.inline("📊 صحة الحسابات", b"super_health")],
+                [Button.inline("⚙️ إعدادات التسخين", b"super_warmup_settings"),
+                 Button.inline("⚙️ إعدادات الـ Pace", b"super_pace_settings")],
+                [Button.inline("🔁 تبديل التسخين", b"super_toggle_warmup"),
+                 Button.inline("🔁 تبديل Pace", b"super_toggle_pace")],
+                [Button.inline("🔙 رجوع", b"back")]
+            ]
+        )
+
+    @bot.on(events.NewMessage(pattern='/warmup'))
+    async def warmup_handler(event):
+        """🌡 v7.0 — تسخين حسابات المستخدم الحالي"""
+        set_current_user(event.sender_id)
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك.")
+            return
+        if _super_engine_inst is None:
+            await event.respond("⚠️ المحرك السوبر غير مُفعّل")
+            return
+        my_accs = get_accounts_for_current(DB_PATH)
+        if not my_accs:
+            await event.respond(
+                "❌ لا توجد حسابات. أضف حساباً أولاً ثم اضغط /warmup",
+                buttons=[[Button.inline("👥 الحسابات", b"accounts")]]
+            )
+            return
+        # قائمة الحسابات مع حالة التسخين
+        buttons = []
+        for acc_id in my_accs:
+            st = _super_engine_inst['warmup'].status(acc_id)
+            status_emoji = '✅' if st['complete'] else ('⏳' if st['in_progress'] else '⏸')
+            label = f"{status_emoji} حساب #{acc_id} ({st['sent']}/{st['target']})"
+            buttons.append([Button.inline(label, f"suwarm_{acc_id}".encode())])
+        buttons.append([Button.inline("🔥 تسخين الكل", b"super_warmup_all")])
+        buttons.append([Button.inline("🔙 رجوع", b"back")])
+        await event.respond(
+            f"🌡 **تسخين الحسابات**\n\n"
+            f"التسخين يرسل رسائل اختبار لـ Saved Messages لكل حساب\n"
+            f"يبني ثقة تيليجرام في الحساب قبل الحملات الكبيرة\n\n"
+            f"👥 لديك: {len(my_accs)} حساب",
+            buttons=buttons
+        )
+
+    @bot.on(events.NewMessage(pattern='/health'))
+    async def health_handler(event):
+        """📊 v7.0 — لوحة صحة الحسابات"""
+        set_current_user(event.sender_id)
+        if multiuser.is_banned(DB_PATH, event.sender_id):
+            await event.respond("🚫 تم حظر حسابك.")
+            return
+        if _super_engine_inst is None:
+            await event.respond("⚠️ المحرك السوبر غير مُفعّل")
+            return
+        my_accs = get_accounts_for_current(DB_PATH)
+        if not my_accs:
+            await event.respond(
+                "❌ لا توجد حسابات لعرض صحتها",
+                buttons=[[Button.inline("👥 الحسابات", b"accounts")]]
+            )
+            return
+        text = "📊 **صحة حساباتك**\n\n"
+        for acc_id in my_accs:
+            # قراءة معلومات الحساب
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT phone, status, warmup_messages_sent FROM accounts WHERE id=?", (acc_id,))
+                row = c.fetchone()
+                # قراءة success/failure 24h
+                c.execute("""SELECT 
+                    SUM(CASE WHEN status LIKE 'success%' THEN 1 ELSE 0 END) as s,
+                    SUM(CASE WHEN status LIKE 'fail%' THEN 1 ELSE 0 END) as f,
+                    COUNT(*) as t
+                    FROM posting_history WHERE account_id=? AND posted_at >= datetime('now','-1 day')
+                """, (acc_id,))
+                stats = c.fetchone() or (0, 0, 0)
+                conn.close()
+                phone = row[0] if row else '?'
+                status = row[1] if row else '?'
+                warmup_sent = row[2] if row and len(row) > 2 else 0
+                success_24h, fail_24h, total_24h = stats
+                success_rate = (success_24h / total_24h * 100) if total_24h > 0 else 100.0
+                warmup_target = int(get_setting('warmup_target_messages', '5') or '5')
+                info = {
+                    'status': status,
+                    'success_rate': success_rate,
+                    'last_activity': None,  # لو توجد
+                    'warmup_complete': warmup_sent >= warmup_target,
+                    'error_message': None,
+                }
+                r = _super_engine_inst['health'].score_account(acc_id, info)
+                # رمز الحالة
+                emoji = {'EXCELLENT': '🟢', 'GOOD': '🟡', 'WARNING': '🟠', 'CRITICAL': '🔴', 'OFFLINE': '⚫'}
+                e = emoji.get(r['health_status'], '⚪')
+                text += f"{e} **حساب #{acc_id}** ({phone})\n"
+                text += f"   النقاط: {r['score']}/100 ({r['health_status']})\n"
+                text += f"   24h: {success_24h}✅ / {fail_24h}❌ من {total_24h}\n"
+                text += f"   التسخين: {warmup_sent}/{warmup_target}\n"
+                if r['warnings']:
+                    text += f"   ⚠️ {r['warnings'][0][:60]}\n"
+                text += '\n'
+            except Exception as e:
+                text += f"⚪ حساب #{acc_id}: خطأ في القراءة ({str(e)[:40]})\n\n"
+        text += "💡 أزرار التحكم السريع:"
+        await event.respond(text, buttons=[
+            [Button.inline("🔥 تسخين الكل", b"super_warmup_all"),
+             Button.inline("🔁 لوحة سوبر", b"super_panel")],
+            [Button.inline("🔙 رجوع", b"back")]
+        ])
+
     @bot.on(events.NewMessage(pattern='/test'))
     async def test_handler(event):
         set_current_user(event.sender_id)
@@ -7650,6 +7851,179 @@ async def main():
                 f"📅 مجدولة: {sched_count}",
                 buttons=[[Button.inline("🔙 رجوع", b"back")]]
             )
+
+        # ═══════════════════════════════════════════════
+        #  🔥 v7.0 SUPER — معالجات أزرار المحرك السوبر
+        # ═══════════════════════════════════════════════
+        elif data == 'super_panel':
+            # لوحة سوبر — تعيد عرضها
+            set_current_user(event.sender_id)
+            if _super_engine_inst is None:
+                await event.answer("⚠️ المحرك السوبر غير مُفعّل", alert=True)
+                return
+            await event.answer()
+            # نعيد عرض لوحة سوبر بمحاكاة أمر /super
+            event._text = '/super'
+            await super_handler(event)
+            return
+
+        elif data == 'super_warmup':
+            # زر "تسخين حساباتي الآن" — يفتح قائمة الحسابات
+            set_current_user(event.sender_id)
+            if _super_engine_inst is None:
+                await event.answer("⚠️ المحرك غير مُفعّل", alert=True)
+                return
+            await event.answer()
+            event._text = '/warmup'
+            await warmup_handler(event)
+            return
+
+        elif data == 'super_health':
+            # زر "صحة الحسابات"
+            set_current_user(event.sender_id)
+            if _super_engine_inst is None:
+                await event.answer("⚠️ المحرك غير مُفعّل", alert=True)
+                return
+            await event.answer()
+            event._text = '/health'
+            await health_handler(event)
+            return
+
+        elif data == 'super_warmup_all':
+            # 🔥 تسخين كل حسابات المستخدم الحالي بالتوازي
+            set_current_user(event.sender_id)
+            if _super_engine_inst is None:
+                await event.answer("⚠️ المحرك غير مُفعّل", alert=True)
+                return
+            my_accs = get_accounts_for_current(DB_PATH)
+            if not my_accs:
+                await event.answer("❌ لا توجد حسابات", alert=True)
+                return
+            await event.edit(
+                f"🔥 **جاري تسخين {len(my_accs)} حساب بالتوازي...**\n"
+                f"⏳ قد يستغرق عدة دقائق — راجع /health لاحقاً"
+            )
+            # تشغيل التسخين في الخلفية
+            async def _warm_all():
+                for acc_id in my_accs:
+                    try:
+                        client = user_clients.get(acc_id)
+                        if not client:
+                            continue
+                        await _super_engine_inst['warmup'].warmup_account(acc_id, client)
+                    except Exception as e:
+                        logger.warning(f"warmup acc={acc_id} failed: {e}")
+            asyncio.create_task(_warm_all())
+            return
+
+        elif data and data.startswith('suwarm_'):
+            # تسخين حساب محدد
+            set_current_user(event.sender_id)
+            if _super_engine_inst is None:
+                await event.answer("⚠️ المحرك غير مُفعّل", alert=True)
+                return
+            try:
+                acc_id = int(data.replace('suwarm_', ''))
+            except Exception:
+                await event.answer("❌ معرّف غير صالح", alert=True)
+                return
+            # تحقق أن الحساب للمستخدم الحالي
+            my_accs = set(get_accounts_for_current(DB_PATH))
+            if acc_id not in my_accs:
+                await event.answer("🚫 هذا الحساب ليس لك", alert=True)
+                return
+            client = user_clients.get(acc_id)
+            if not client:
+                await event.answer("❌ الحساب غير متصل", alert=True)
+                return
+            await event.answer("⏳ جاري التسخين...", alert=False)
+            await event.edit(f"🌡 **جاري تسخين حساب #{acc_id}...**\n⏳ قد يستغرق عدة دقائق")
+            try:
+                result = await _super_engine_inst['warmup'].warmup_account(acc_id, client)
+                msg = (
+                    f"🌡 **نتيجة التسخين لحساب #{acc_id}**\n\n"
+                    f"✅ نجح: {result['success']}\n"
+                    f"📊 أُرسل: {result['sent']}/{result['target']}\n"
+                )
+                if result['errors']:
+                    msg += f"⚠️ أخطاء: {len(result['errors'])}\n"
+                    for e in result['errors'][:3]:
+                        msg += f"  • {e[:80]}\n"
+                await event.edit(msg, buttons=[
+                    [Button.inline("🔄 تسخين آخر", b"super_warmup"),
+                     Button.inline("📊 الصحة", b"super_health")],
+                    [Button.inline("🔙 لوحة سوبر", b"super_panel")]
+                ])
+            except Exception as e:
+                await event.edit(
+                    f"❌ فشل التسخين: {str(e)[:200]}",
+                    buttons=[[Button.inline("🔙 رجوع", b"super_panel")]]
+                )
+            return
+
+        elif data == 'super_toggle_warmup':
+            # 🔁 تبديل تفعيل التسخين
+            set_current_user(event.sender_id)
+            cur = get_setting('warmup_enabled', 'on')
+            new_val = 'off' if cur == 'on' else 'on'
+            set_setting('warmup_enabled', new_val)
+            await event.answer(f"تم التبديل: التسخين {new_val}", alert=True)
+            # نعيد عرض لوحة سوبر
+            event._text = '/super'
+            await super_handler(event)
+            return
+
+        elif data == 'super_toggle_pace':
+            # 🔁 تبديل تفعيل جدولة الإرسال
+            set_current_user(event.sender_id)
+            cur = get_setting('pace_scheduler_enabled', 'off')
+            new_val = 'on' if cur == 'off' else 'off'
+            set_setting('pace_scheduler_enabled', new_val)
+            await event.answer(f"تم التبديل: Pace {new_val}", alert=True)
+            event._text = '/super'
+            await super_handler(event)
+            return
+
+        elif data == 'super_warmup_settings':
+            # ⚙️ إعدادات التسخين
+            set_current_user(event.sender_id)
+            target = get_setting('warmup_target_messages', '5')
+            interval = get_setting('warmup_interval_minutes', '30')
+            ui_interval = get_setting('warmup_ui_interval_seconds', '60')
+            await event.edit(
+                f"⚙️ **إعدادات التسخين**\n\n"
+                f"• الهدف: {target} رسالة لكل حساب\n"
+                f"• الفاصل: {interval} دقيقة\n"
+                f"• فاصل الاختبار: {ui_interval} ثانية\n\n"
+                f"💡 للتغيير أرسل أحد الأوامر:\n"
+                f"`/set warmup_target_messages 5`\n"
+                f"`/set warmup_interval_minutes 30`\n"
+                f"`/set warmup_ui_interval_seconds 60`",
+                buttons=[[Button.inline("🔙 لوحة سوبر", b"super_panel")]]
+            )
+            return
+
+        elif data == 'super_pace_settings':
+            # ⚙️ إعدادات الـ Pace
+            set_current_user(event.sender_id)
+            mpm = get_setting('pace_messages_per_minute', '8')
+            mph = get_setting('pace_messages_per_hour', '40')
+            max_conc = get_setting('pace_max_concurrent', '1')
+            jitter = get_setting('pace_jitter_seconds', '3')
+            await event.edit(
+                f"⚙️ **إعدادات جدولة الإرسال (Pace)**\n\n"
+                f"• رسائل/دقيقة (لكل حساب): {mpm}\n"
+                f"• رسائل/ساعة (لكل حساب): {mph}\n"
+                f"• تزامن الحسابات: {max_conc}\n"
+                f"• تشويش زمني: {jitter} ثانية\n\n"
+                f"💡 للتغيير أرسل:\n"
+                f"`/set pace_messages_per_minute 8`\n"
+                f"`/set pace_messages_per_hour 40`\n"
+                f"`/set pace_max_concurrent 1`\n"
+                f"`/set pace_jitter_seconds 3`",
+                buttons=[[Button.inline("🔙 لوحة سوبر", b"super_panel")]]
+            )
+            return
 
         # ═══════════════════════════════════════════════
         #  👥 لوحة الأدمن - v5.0

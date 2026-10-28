@@ -913,3 +913,53 @@ Stage Summary:
   * التقاط الكود التلقائي من محادثة 777000 (v6.1)
   * لوحة الأدمن: زر "استيراد قروبات مستخدم (txt)" (v6.1)
   * التبسيط الشديد للقائمة (v6.1) — لكن v5.4 فيه كل الأزرار
+
+---
+Task ID: 7.0-super-engine
+Agent: Main Agent
+Task: v7.0 SUPER — استخراج تقنيات من مستودعات متقدمة وجعل البوت سوبر
+
+Work Log:
+- 🔍 بحث GitHub عن مستودعات متقدمة لبوتات تيليجرام مماثلة:
+  * VoxHash/Telegram-Multi-Account-Message-Sender (الأبرز) — PyQt5 + SQLModel + Telethon
+    - استخرجنا: AccountWarmup، AccountHealthMonitor، PaceScheduler، SpintaxBatchExpander
+  * tgMember/tdAds — bulk sender + auto-joiner (أقل اكتمالاً)
+  * ArianWatch/RobotCat — admin bot مع broadcast
+
+- 🔧 إنشاء ملف جديد super_engine.py (465 سطر) — مستقل تماماً، لا يلمس v5.4
+  * AccountWarmup: يرسل رسائل تدريجية لـ Saved Messages لبناء ثقة تيليجرام
+  * AccountHealthMonitor: نقاط 0-100 لكل حساب (EXCELLENT/GOOD/WARNING/CRITICAL/OFFLINE)
+    - معاملات: success_rate, last_activity, 24h error rate, warmup status, error_message
+  * PaceScheduler: جدولة إرسال ذكية (mpm/mph/jitter/max_concurrent + round-robin)
+  * SpintaxBatchExpander: توسيع كل المتغيرات دفعة واحدة (يكسر hash matching)
+  * RecipientTracker: تتبع المجموعات المُنشر لها (resume بدون إعادة)
+  * AutoPauseManager: إيقاف تلقائي عند 50% أخطاء (حد قابل للتكوين)
+  * SmartAccountSelector: اختيار ذكي بناءً على الصحة + التحميل + التسخين
+  * migrate_super_engine_schema: يضيف 6 أعمدة لـ accounts بأمان
+
+- 🔧 تكامل بسيط في bot.py (إضافي، لا كسر):
+  * import super_engine بعد multiuser
+  * init_db يهيّئ المحرك السوبر بعد migration (آمن: try/except يحمي الفشل)
+  * أوامر جديدة: /super, /warmup, /health (كلها بعد /debug)
+  * معالجات أزرار callback: super_panel, super_warmup, super_health,
+    super_warmup_all, suwarm_<acc_id>, super_toggle_warmup, super_toggle_pace,
+    super_warmup_settings, super_pace_settings
+  * لا يلمس fast_post_to_all_groups أو post_to_all_groups — كل الميزات opt-in
+
+- 🧪 اختبار شامل (53 فحص):
+  * scripts/test_super_engine.py: 19 فحص (Spintax + Health + Warmup + Pace + AutoPause + Migration)
+  * scripts/test_v70_super.py: 34 فحص (AST + استيراد + init_db + عدم كسر v5.4)
+  * جميع الأوامر v5.4 (/start, /debug, /test, /set_mode, /encrypt, /check, /fast_post) لا تزال موجودة
+  * migration يضيف الأعمدة الجديدة بأمان دون كسر الصفوف القديمة
+
+- 🛡️ تصميم آمن:
+  * كل الميزات opt-in عبر الإعدادات (warmup_enabled, pace_scheduler_enabled, ...)
+  * فشل المحرك السوبر لا يكسر البوت (try/except + fallback)
+  * migration آمن: ALTER TABLE ADD COLUMN IF NOT EXISTS (لا يحذف بيانات)
+  * لا حذف أي كود v5.4 — فقط إضافة
+
+Stage Summary:
+- ✅ البوت الآن "سوبر" مع 7 ميزات احترافية من مستودعات متقدمة
+- ✅ v5.4 مستقر كما هو — لا كسر
+- ✅ أوامر جديدة: /super (لوحة شاملة) + /warmup + /health
+- ✅ 53 اختبار شامل محلي — كلها ناجحة
