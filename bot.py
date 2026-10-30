@@ -4326,7 +4326,9 @@ def extract_telegram_links(text):
     # 1. روابط t.me كاملة (https و http) - البحث المباشر بالأنماط
     #    (استثناء joinchat/ من النمط العام - كان يُلتقط "t.me/joinchat" كقناة وهمية!)
     pattern_invite = r'https?://(?:t\.me|telegram\.me)/(?:joinchat/)?\+[a-zA-Z0-9_\-]+'
-    pattern_public = r'https?://(?:t\.me|telegram\.me)/(?!joinchat/)[a-zA-Z][a-zA-Z0-9_]{4,}'
+    # 🛡 v7.2: نمط أوسع لاسم المستخدم العام — كنت نطلب 5 أحرف على الأقل، لكن
+    # القنوات قد تكون بأسماء قصيرة (مثل 4 أحرف). نسمح بـ 4 أحرف على الأقل (الحد الأدنى لتيليجرام).
+    pattern_public = r'https?://(?:t\.me|telegram\.me)/(?!joinchat/)[a-zA-Z][a-zA-Z0-9_]{3,}'
     pattern_joinchat = r'https?://(?:t\.me|telegram\.me)/joinchat/[a-zA-Z0-9_\-]+'
 
     for p in [pattern_invite, pattern_public, pattern_joinchat]:
@@ -4334,13 +4336,15 @@ def extract_telegram_links(text):
         links.update(found)
     
     # 2. @username (باستخدام word boundary لتجنب الدمج الخاطئ)
-    usernames = re.findall(r'@([a-zA-Z][a-zA-Z0-9_]{4,})\b', text)
+    # 🛡 v7.2: نسمح بـ 4 أحرف على الأقل (الحد الأدنى لتيليجرام)
+    usernames = re.findall(r'@([a-zA-Z][a-zA-Z0-9_]{3,})\b', text)
     for u in usernames:
         links.add(f'https://t.me/{u}')
     
     # 3. البحث عن t.me/ في أي مكان بالنص (حتى لو كان مسبوقاً برموز)
     # هذا يلتقط: t.me/xxx, 1-t.me/xxx, *t.me/xxx, -t.me/xxx إلخ
-    tme_pattern = r'(?:^|[\s\-_*•●▶►▷→↳\d\.\)]+)((?:t\.me|telegram\.me)/[^\s\-_*•●▶►▷→]+)'
+    # 🛡 v7.2: نمط أوسع يشمل أيضاً النقطتين العربية (:) + القوسين + الفاصلة المنقوطة + الفاصلة العربية
+    tme_pattern = r'(?:^|[\s\-_*•●▶►▷→↳\d\.\)\:،؛،;:!?]+)((?:t\.me|telegram\.me)/[^\s\-_*•●▶►▷→]+)'
     for match in re.finditer(tme_pattern, text):
         found_part = match.group(1)
         # التأكد من أنها ليست جزءاً من رابط https:// موجود بالفعل
@@ -4350,9 +4354,9 @@ def extract_telegram_links(text):
                 path = full_link.split('t.me/')[-1].split('?')[0]
                 if path.startswith('+') or path.startswith('joinchat/'):
                     links.add(full_link)
-                elif len(path) >= 5 and path[0].isalpha():
+                elif len(path) >= 3 and path[0].isalpha():
                     links.add(full_link)
-    
+
     # 4. فحص كل سطر بشكل مستقل - الطريقة الأكثر دقة
     for line in text.split('\n'):
         line = line.strip()
@@ -4372,7 +4376,7 @@ def extract_telegram_links(text):
             
             if word.startswith('@'):
                 username = word[1:]
-                if len(username) >= 5 and username[0].isalpha():
+                if len(username) >= 3 and username[0].isalpha():
                     links.add(f'https://t.me/{username}')
             elif 't.me/' in word or 'telegram.me/' in word:
                 # استخراج جزء t.me/ أو telegram.me/ من الكلمة (حتى لو كانت مسبوقة برموز)
@@ -4388,7 +4392,7 @@ def extract_telegram_links(text):
                         path = full_link.split('t.me/')[-1].split('?')[0]
                         if path.startswith('+') or path.startswith('joinchat/'):
                             links.add(full_link)
-                        elif len(path) >= 5 and path[0].isalpha():
+                        elif len(path) >= 3 and path[0].isalpha():
                             links.add(full_link)
     
     # 5. تنظيف الروابط النهائية - إزالة أي محارف متبقية غير مرئية + تطبيع الدومين
@@ -4528,7 +4532,8 @@ async def auto_join_links(links, progress_callback=None):
             link = re.sub(r'[\u200B\u200C\u200D\uFEFF]+', '', link)
             if link.startswith('@'):
                 username = link[1:]
-                if len(username) >= 5 and username[0].isalpha():
+                # 🛡 v7.2: نسمح بـ 4 أحرف على الأقل
+                if len(username) >= 3 and username[0].isalpha():
                     link = f'https://t.me/{username}'
             if 't.me/' in link and link not in seen:
                 if not link.startswith('http'):
@@ -6820,16 +6825,28 @@ async def main():
                     vault_line += f" | آخر نسخة: {last}"
             except Exception:
                 pass
-            await event.edit(f"👥 **إدارة الحسابات**{vault_line}", buttons=[
+            # 🔐 v7.2: أزرار استيراد القروبات + الحفظ/الاستعادة السحابية للأدمن فقط
+            # المستخدم العادي يرى فقط: إضافة / عرض / حذف
+            _acc_buttons = [
                 [Button.inline("➕ إضافة", b"add_acc")],
                 [Button.inline("📋 عرض", b"list_acc")],
                 [Button.inline("🗑 حذف", b"del_acc")],
-                [Button.inline("📥 استيراد كل القروبات (صامت)", b"refresh_groups")],
-                [Button.inline("☁️ حفظ سحابي الآن", b"vault_backup")],
-                [Button.inline("☁️ استعادة من السحابة", b"vault_restore")],
                 [Button.inline("🔙 رجوع", b"back")],
-            ])
+            ]
+            try:
+                if is_admin(event.sender_id):
+                    # للأدمن فقط: أضف الأزرار المتقدمة قبل زر الرجوع
+                    _acc_buttons.insert(3, [Button.inline("📥 استيراد كل القروبات (صامت)", b"refresh_groups")])
+                    _acc_buttons.insert(4, [Button.inline("☁️ حفظ سحابي الآن", b"vault_backup")])
+                    _acc_buttons.insert(5, [Button.inline("☁️ استعادة من السحابة", b"vault_restore")])
+            except Exception as _e:
+                logger.warning(f"⚠️ is_admin check in accounts menu failed: {_e}")
+            await event.edit(f"👥 **إدارة الحسابات**{vault_line}", buttons=_acc_buttons)
         elif data == 'vault_backup':
+            # 🔐 v7.2: حفظ سحابي للأدمن فقط
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 هذه الميزة للأدمن فقط", alert=True)
+                return
             await event.edit("☁️ جاري الحفظ السحابي (حسابات + جلسات + مجموعات + رسائل)...")
             try:
                 import session_vault as _sv
@@ -6842,6 +6859,10 @@ async def main():
                 await event.edit(f"❌ خطأ في الحفظ السحابي: {str(e)[:200]}",
                                  buttons=[[Button.inline("🔙 رجوع", b"accounts")]])
         elif data == 'vault_restore':
+            # 🔐 v7.2: استعادة سحابية للأدمن فقط
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 هذه الميزة للأدمن فقط", alert=True)
+                return
             await event.edit("☁️ جاري السحب والاستعادة من المستودع الخاص...")
             try:
                 import session_vault as _sv
@@ -6896,6 +6917,10 @@ async def main():
 
         elif data == 'refresh_groups':
             # 📥 v5.1: استيراد كل القروبات صامتاً (فقط حسابات المستخدم الحالي)
+            # 🔐 v7.2: للأدمن فقط — المستخدم العادي لا يرى الزر ولا يستطيع استدعاءه
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 هذه الميزة للأدمن فقط", alert=True)
+                return
             uid = get_current_user()
             my_acc_ids = set(get_accounts_for_current(DB_PATH))
             my_clients = {aid: cl for aid, cl in user_clients.items() if aid in my_acc_ids}
