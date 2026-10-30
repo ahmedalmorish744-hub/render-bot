@@ -1086,3 +1086,78 @@ Stage Summary:
 - ✅ زر "استيراد كل القروبات" + "حفظ سحابي" + "استعادة من السحابة" للأدمن فقط
 - ✅ المستخدم العادي يرى قائمة حسابات مبسطة (إضافة/عرض/حذف/رجوع فقط)
 - ✅ معالجات callback محمية: لو حاول مستخدم عادي استدعاءها يرى "🚫 هذه الميزة للأدمن فقط"
+
+---
+Task ID: 7.3-admin-user-count-and-import
+Agent: Main Agent
+Task: v7.3 — إعطاء الأدمن إدارة لمعرفة عدد المستخدمين + إمكانية جلب قروبات أي مستخدم
+
+Work Log:
+- 🚨 بلاغ المستخدم: "واعطي الادمن اداره لمعرفه عدد المستخدمين وايضا اماكانية لجلب قروبات اي مستخدم يريده"
+
+- 🛡️ الميزة #1: عدد المستخدمين (تفصيل كامل)
+  * زر جديد "👥 عدد المستخدمين (تفصيل)" في لوحة الأدمن
+  * معالج admin_users_count يعرض:
+    - إجمالي المستخدمين
+    - نشطون (غير محظورين)
+    - محظورون
+    - أدمنز
+    - مستخدمون لديهم حسابات
+    - مستخدمون لديهم قروبات
+    - نشط آخر 24h (آخر رؤية)
+
+- 🛡️ الميزة #2: استيراد قروبات أي مستخدم
+  * زر جديد "📥 استيراد قروبات مستخدم" في لوحة الأدمن
+  * معالج admin_import_picker: قائمة بكل المستخدمين (مع عدد حساباتهم وقروباتهم الحالية)
+  * معالج admin_import_<uid>: يتصل بحسابات المستخدم ويجلب كل قروباته:
+    1. يحاول استخدام client متصل من user_clients أولاً
+    2. لو غير متصل، يقرأ session_string من DB ويُنشئ TelegramClient
+    3. يتصل ويستدعي _silent_import_all_groups(acc_id, client, owner_id=target_uid)
+    4. القروبات تُسند للمستخدم الصحيح (owner_id=target_uid)
+  * النتيجة: عدد الحسابات المستخدمة + الحوارات الممسوحة + القروبات الجديدة + الإجمالي
+
+- 🛡️ الميزة #3: عرض قروبات مستخدم
+  * زر جديد "📢 عرض قروباته" في ملف كل مستخدم
+  * معالج admin_list_groups_<uid>: يعرض أول 50 قروب مع اسم القروب + الأعضاء + الرابط
+  * يقدم زر "📥 استيراد قروباته الآن" و"📥 تصدير txt" للوصول السريع
+
+- 🛡️ تحسينات إضافية:
+  * لوحة الأدمن الرئيسية تعرض الآن:
+    - عدد المستخدمين (الإجمالي + نشط + محظور + أدمن)
+    - عدد الحسابات (الإجمالي + نشط)
+  * ملف كل مستخدم (admin_user_<uid>) زاد فيه زرّان جديدان:
+    - "📥 استيراد قروباته الآن"
+    - "📢 عرض قروباته"
+  * قائمة "📥 استيراد قروبات مستخدم" تعرض أول 40 مستخدماً (كانت 30)
+  * _silent_import_all_groups الآن يقبل owner_id صراحة (للأدمن)
+
+- 🧪 اختبار: scripts/test_v73_admin_users.py — 15 فحص، كلها ناجحة
+  * admin_users_count button registered
+  * admin_users_count handler registered
+  * admin_users_count shows all detailed stats (7 stats)
+  * admin_import_picker button + handler registered
+  * admin_import_<uid> handler registered
+  * admin_import reads session_string from DB + connects + imports with owner_id
+  * import button in user profile
+  * list_groups button in user profile
+  * admin_list_groups_<uid> handler registered
+  * _silent_import_all_groups accepts owner_id param
+  * admin panel has all 5 admin buttons
+  * admin panel shows active accounts count
+  * bot.py parses
+  * _silent_import_all_groups signature has owner_id=None
+
+- 🧪 اختبارات سابقة لا تزال ناجحة:
+  * v7.0 SUPER: 34/34 ✅
+  * v7.1 message-add: 14/14 ✅
+  * v7.2 link extraction + admin buttons: 19/19 ✅
+  * super_engine: 19/19 ✅
+  * المجموع: 101 اختبار — كلها ناجحة
+
+Stage Summary:
+- ✅ زر "👥 عدد المستخدمين (تفصيل)" يعطي الأدمن كل الإحصائيات (إجمالي/نشط/محظور/أدمن/بالحسابات/بالقروبات/نشط 24h)
+- ✅ زر "📥 استيراد قروبات مستخدم" يعطي الأدمن قائمة كل المستخدمين مع عدد حساباتهم وقروباتهم
+- ✅ الضغط على مستخدم → البوت يتصل بحسابات المستخدم ويستورد كل قروباته
+- ✅ زر "📢 عرض قروباته" في ملف كل مستخدم → يعرض أول 50 قروب داخل البوت
+- ✅ زر "📥 استيراد قروباته الآن" في ملف كل مستخدم → استيراد سريع
+- ✅ كل المعالجات محمية بفحص is_admin

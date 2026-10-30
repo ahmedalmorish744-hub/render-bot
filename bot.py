@@ -4188,13 +4188,15 @@ async def fetch_all_groups_for_account(acc_id, client):
     return count
 
 
-async def _silent_import_all_groups(acc_id, client):
+async def _silent_import_all_groups(acc_id, client, owner_id=None):
     """📥 v5.1: استيراد كل القروبات صامتاً - يُرجع (new_count, total_dialogs)
     صامت = لا يُنشر أي شيء في القروبات، فقط يمسح الحوارات ويحفظها في DB.
-    يلتقط: المجموعات، القنوات، megagroups، وكل أنواع chats الجماعية."""
+    يلتقط: المجموعات، القنوات، megagroups، وكل أنواع chats الجماعية.
+    🔥 v7.3: يقبل owner_id صراحة (للأدمن يستيراد قروبات مستخدم محدد)."""
     new_count = 0
     total_dialogs = 0
-    owner_id = user_clients_owner.get(acc_id, get_current_user())
+    if owner_id is None:
+        owner_id = user_clients_owner.get(acc_id, get_current_user())
     try:
         # iter_dialogs يرجع كل الحوارات (تلقائي pagination)
         async for dialog in client.iter_dialogs():
@@ -8129,11 +8131,14 @@ async def main():
             n_users = len(users)
             n_banned = sum(1 for u in users if u['is_banned'])
             n_admins = sum(1 for u in users if u['is_admin'])
+            n_active_users = n_users - n_banned
             # حسابات كل المستخدمين + قروبات كل المستخدمين
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("SELECT COUNT(*) FROM accounts")
             total_acc = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM accounts WHERE status='active'")
+            total_acc_active = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM groups")
             total_grp = c.fetchone()[0]
             c.execute("SELECT COUNT(*) FROM messages")
@@ -8141,19 +8146,178 @@ async def main():
             conn.close()
             await event.edit(
                 f"🛡️ **لوحة الأدمن**\n\n"
-                f"👥 المستخدمون: {n_users}\n"
-                f"🚫 محظورون: {n_banned}\n"
-                f"🛡️ أدمنز: {n_admins}\n\n"
-                f"👥 كل الحسابات: {total_acc}\n"
-                f"📢 كل القروبات: {total_grp}\n"
-                f"📝 كل الرسائل: {total_msg}",
+                f"👥 **المستخدمون:**\n"
+                f"  • الإجمالي: **{n_users}**\n"
+                f"  • نشطون: {n_active_users}\n"
+                f"  • محظورون: {n_banned}\n"
+                f"  • أدمنز: {n_admins}\n\n"
+                f"👥 **الحسابات:** {total_acc} (نشط: {total_acc_active})\n"
+                f"📢 **القروبات:** {total_grp}\n"
+                f"📝 **الرسائل:** {total_msg}",
                 buttons=[
-                    [Button.inline("📋 قائمة المستخدمين", b"admin_users_list")],
-                    [Button.inline("📊 إحصائيات شاملة", b"admin_global_stats")],
-                    [Button.inline("📥 استيراد قروبات مستخدم (txt)", b"admin_export_groups")],
+                    [Button.inline("👥 عدد المستخدمين (تفصيل)", b"admin_users_count"),
+                     Button.inline("📋 قائمة المستخدمين", b"admin_users_list")],
+                    [Button.inline("📊 إحصائيات شاملة", b"admin_global_stats"),
+                     Button.inline("📥 استيراد قروبات مستخدم", b"admin_import_picker")],
+                    [Button.inline("📥 تصدير قروبات مستخدم (txt)", b"admin_export_groups")],
                     [Button.inline("🔙 رجوع", b"back")],
                 ]
             )
+
+        elif data == 'admin_users_count':
+            # 🔥 v7.3: عدد المستخدمين مع تفاصيل كاملة (بحث + قائمة)
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=1000)
+            n_total = len(users)
+            n_banned = sum(1 for u in users if u['is_banned'])
+            n_admins = sum(1 for u in users if u['is_admin'])
+            n_active = n_total - n_banned
+            # إحصائيات إضافية: مستخدمون لديهم حسابات، مستخدمون لديهم قروبات
+            users_with_accounts = sum(1 for u in users if multiuser.get_user_stats(DB_PATH, u['telegram_id'])['accounts'] > 0)
+            users_with_groups = sum(1 for u in users if multiuser.get_user_stats(DB_PATH, u['telegram_id'])['groups'] > 0)
+            users_active_24h = 0
+            from datetime import datetime as _dt, timedelta as _td
+            cutoff = (_dt.utcnow() - _td(hours=24)).isoformat()
+            for u in users:
+                la = u.get('last_seen', '') or ''
+                if la and la >= cutoff:
+                    users_active_24h += 1
+            await event.edit(
+                f"👥 **عدد المستخدمين - تفصيل كامل**\n\n"
+                f"📊 **الإجمالي:** {n_total} مستخدم\n"
+                f"✅ **نشطون:** {n_active}\n"
+                f"🚫 **محظورون:** {n_banned}\n"
+                f"🛡️ **أدمنز:** {n_admins}\n\n"
+                f"👥 **بالحسابات:** {users_with_accounts} مستخدم\n"
+                f"📢 **بالقروبات:** {users_with_groups} مستخدم\n"
+                f"🕒 **نشط آخر 24h:** {users_active_24h} مستخدم",
+                buttons=[
+                    [Button.inline("📋 قائمة كل المستخدمين", b"admin_users_list"),
+                     Button.inline("📊 إحصائيات شاملة", b"admin_global_stats")],
+                    [Button.inline("🔙 لوحة الأدمن", b"admin_panel")]
+                ]
+            )
+
+        elif data == 'admin_import_picker':
+            # 🔥 v7.3: قائمة لاختيار مستخدم ثم استيراد قروباته (من حساباته المتصلة)
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            users = multiuser.list_all_users(DB_PATH, limit=500)
+            if not users:
+                await event.edit("👥 لا يوجد مستخدمون بعد.", buttons=[[Button.inline("🔙 رجوع", b"admin_panel")]])
+                return
+            buttons = []
+            for u in users[:40]:  # أول 40
+                st = multiuser.get_user_stats(DB_PATH, u['telegram_id'])
+                badge = "🛡️ " if u['is_admin'] else ("🚫 " if u['is_banned'] else "")
+                name = u.get('first_name') or u.get('username') or '—'
+                # نعرض عدد القروبات + الحسابات النشطة
+                label = f"{badge}{name} | 👥{st['accounts']} 📢{st['groups']}"
+                buttons.append([Button.inline(label, f"admin_import_{u['telegram_id']}".encode())])
+            buttons.append([Button.inline("🔙 رجوع", b"admin_panel")])
+            await event.edit(
+                f"📥 **استيراد قروبات مستخدم**\n\n"
+                f"اختر مستخدماً لإعادة جلب كل قروباته من حساباته المتصلة:\n"
+                f"(👥 = عدد حساباته | 📢 = قروباته الحالية في DB)",
+                buttons=buttons
+            )
+
+        elif data.startswith('admin_import_'):
+            # 🔥 v7.3: استيراد قروبات مستخدم محدد (يقرأ من session_string في DB ويتصل ثم يجلب الحوارات)
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_import_', ''))
+            except Exception:
+                await event.answer("❌ معرّف غير صالح", alert=True)
+                return
+            target_user = next((u for u in multiuser.list_all_users(DB_PATH, limit=1000)
+                              if u['telegram_id'] == target_uid), None)
+            if not target_user:
+                await event.answer("❌ المستخدم غير موجود", alert=True)
+                return
+            # عرض رسالة بدء العملية
+            target_name = target_user.get('first_name') or target_user.get('username') or str(target_uid)
+            await event.edit(
+                f"📥 **جاري استيراد قروبات المستخدم:**\n\n"
+                f"👤 {target_name} `{target_uid}`\n\n"
+                f"⏳ يتصل بحسابات المستخدم ويجلب كل القروبات...\n"
+                f"🤫 العملية صامتة - لن يُنشر أي شيء"
+            )
+            # تنفيذ الاستيراد في الخلفية
+            try:
+                # جلب حسابات المستخدم من DB
+                accs = multiuser.get_user_accounts(DB_PATH, target_uid)
+                if not accs:
+                    await event.edit(
+                        f"❌ **المستخدم {target_name} لا يملك أي حسابات**",
+                        buttons=[[Button.inline("🔙 رجوع", b"admin_import_picker")]]
+                    )
+                    return
+                total_added = 0
+                total_dialogs = 0
+                used = 0
+                skipped = 0
+                for acc in accs:
+                    # نحاول استخدام client متصل من user_clients أولاً
+                    client = user_clients.get(acc['id'])
+                    if client is None:
+                        # نحاول إنشاء اتصال من session_string
+                        try:
+                            # نقرأ session_string مباشرة من DB
+                            conn = sqlite3.connect(DB_PATH)
+                            c = conn.cursor()
+                            c.execute('SELECT session_string FROM accounts WHERE id=?', (acc['id'],))
+                            row = c.fetchone()
+                            conn.close()
+                            if not row or not row[0]:
+                                skipped += 1
+                                continue
+                            from telethon import TelegramClient
+                            from telethon.sessions import StringSession
+                            client = TelegramClient(StringSession(row[0]), API_ID, API_HASH)
+                            await client.connect()
+                            if not await client.is_user_authorized():
+                                try:
+                                    await client.disconnect()
+                                except Exception:
+                                    pass
+                                skipped += 1
+                                continue
+                        except Exception as _ce:
+                            logger.warning(f"⚠️ فشل الاتصال بحساب {acc['id']}: {_ce}")
+                            skipped += 1
+                            continue
+                    # استيراد قروبات هذا الحساب للمستخدم المحدد
+                    try:
+                        added, dialogs = await _silent_import_all_groups(acc['id'], client, owner_id=target_uid)
+                        total_added += added
+                        total_dialogs += dialogs
+                        used += 1
+                    except Exception as _ie:
+                        logger.error(f"❌ استيراد حساب {acc['id']} للمستخدم {target_uid}: {_ie}")
+                # نعرض النتيجة
+                final_count = len(multiuser.get_user_groups(DB_PATH, target_uid))
+                await event.edit(
+                    f"✅ **تم استيراد قروبات المستخدم**\n\n"
+                    f"👤 {target_name} `{target_uid}`\n\n"
+                    f"👥 الحسابات: {len(accs)} (استُخدم: {used}, تُخطي: {skipped})\n"
+                    f"💬 الحوارات الممسوحة: {total_dialogs}\n"
+                    f"🆕 قروبات جديدة: {total_added}\n"
+                    f"📢 إجمالي قروباته الآن: {final_count}\n\n"
+                    f"🤫 العملية صامتة - لم يُنشر أي شيء",
+                    buttons=[[Button.inline("🔙 رجوع", b"admin_import_picker")]]
+                )
+            except Exception as e:
+                logger.error(f"❌ admin_import failed: {e}", exc_info=True)
+                await event.edit(
+                    f"❌ خطأ في الاستيراد: {str(e)[:200]}",
+                    buttons=[[Button.inline("🔙 رجوع", b"admin_import_picker")]]
+                )
 
         elif data == 'admin_users_list':
             if not is_admin(event.sender_id):
@@ -8208,13 +8372,47 @@ async def main():
                 f"📤 منشورات: {stats['posts_sent']}\n"
                 f"🔗 انضمامات: {stats['joins']}",
                 buttons=[
-                    [Button.inline("📥 تصدير قروبات (txt)", f"admin_export_{target_uid}".encode()),
-                     Button.inline("👥 عرض حساباته", f"admin_accs_{target_uid}".encode())],
+                    [Button.inline("📥 استيراد قروباته الآن", f"admin_import_{target_uid}".encode()),
+                     Button.inline("📥 تصدير قروبات (txt)", f"admin_export_{target_uid}".encode())],
+                    [Button.inline("👥 عرض حساباته", f"admin_accs_{target_uid}".encode()),
+                     Button.inline("📢 عرض قروباته", f"admin_list_groups_{target_uid}".encode())],
                     [Button.inline(ban_label, f"admin_ban_{target_uid}".encode()),
                      Button.inline(admin_label, f"admin_admin_{target_uid}".encode())],
                     [Button.inline("🔙 رجوع", b"admin_users_list")],
                 ]
             )
+
+        elif data.startswith('admin_list_groups_'):
+            # 🔥 v7.3: عرض قائمة قروبات مستخدم محدد (في رسالة نصية داخل البوت)
+            if not is_admin(event.sender_id):
+                await event.answer("🚫 للأدمن فقط", alert=True)
+                return
+            try:
+                target_uid = int(data.replace('admin_list_groups_', ''))
+            except Exception:
+                await event.answer("❌ معرّف غير صالح", alert=True)
+                return
+            groups = multiuser.get_user_groups(DB_PATH, target_uid, limit=200)
+            target = next((u for u in multiuser.list_all_users(DB_PATH, limit=500)
+                          if u['telegram_id'] == target_uid), None)
+            target_name = (target.get('first_name') or target.get('username') or str(target_uid)) if target else str(target_uid)
+            if not groups:
+                text = f"📢 **لا يوجد قروبات للمستخدم {target_name}**\n\n💡 اضغط زر 'استيراد قروباته الآن' لجلب قروباته"
+            else:
+                text = f"📢 **قروبات {target_name}** ({len(groups)} قروب):\n\n"
+                for i, g in enumerate(groups[:50], 1):  # أول 50
+                    gname = g.get('group_name') or 'بدون اسم'
+                    uname = g.get('username') or ''
+                    members = g.get('member_count') or 0
+                    link = f"https://t.me/{uname}" if uname else f"(id:{g['group_id']})"
+                    text += f"{i:02d}. {gname[:30]} | 👥{members} | {link}\n"
+                if len(groups) > 50:
+                    text += f"\n... و{len(groups) - 50} قروب آخر (للقائمة الكاملة استخدم تصدير txt)"
+            await event.edit(text, buttons=[
+                [Button.inline("📥 استيراد قروباته الآن", f"admin_import_{target_uid}".encode()),
+                 Button.inline("📥 تصدير txt", f"admin_export_{target_uid}".encode())],
+                [Button.inline("🔙 ملف المستخدم", f"admin_user_{target_uid}".encode())]
+            ])
 
         elif data.startswith('admin_ban_'):
             if not is_admin(event.sender_id):
@@ -8294,9 +8492,9 @@ async def main():
             if not is_admin(event.sender_id):
                 await event.answer("🚫 للأدمن فقط", alert=True)
                 return
-            users = multiuser.list_all_users(DB_PATH, limit=200)
+            users = multiuser.list_all_users(DB_PATH, limit=500)
             buttons = []
-            for u in users[:30]:
+            for u in users[:40]:
                 name = u.get('first_name') or u.get('username') or '—'
                 st = multiuser.get_user_stats(DB_PATH, u['telegram_id'])
                 label = f"📥 {name} [{st['groups']} قروب]"
